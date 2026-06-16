@@ -1,0 +1,19 @@
+{
+  "// note": "Types-only build: emit .d.ts from JSDoc-annotated source. No JS is compiled (esbuild builds the runtime bundles); this exists purely for the published type surface.",
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "rootDir": "src",
+    "outDir": "types",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "target": "ES2020",
+    "lib": ["ES2020", "DOM"],
+    "skipLibCheck": true,
+    "strict": false
+  },
+  "include": ["src/**/*.js"],
+  "exclude": ["src/browser.js"]
+}
