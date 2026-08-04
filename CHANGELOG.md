@@ -38,6 +38,9 @@ those stay with the integrator, supplied via options / read off the model.
   (no reply nesting/indent); each row carries its actor color + label so who-said-what stays legible.
 - **Commit button disables** (greys out) while the Pane input is empty — no body text and no reaction —
   and re-enables the instant either is present. Cmd/Ctrl+Enter obeys the same rule.
+- **A conversation shows what you just sent.** With an `interactive` transport the popup stays open; the
+  sent utterance is now echoed into the timeline as its own row (followed by its pending marker) instead
+  of only appearing the next time the thread is opened.
 - An anchor's attention flag now flips as a **targeted class toggle** instead of a full mark re-render,
   so raising a notice can no longer interrupt an in-progress region move/resize.
 - `attachPanel` **copies** the reaction set it is given, so `panel.setReactions()` can no longer rewrite

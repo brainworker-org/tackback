@@ -80,6 +80,9 @@ const PANEL_CSS = `
 .tb-existing .tb-del { color: var(--tb-danger); cursor: pointer; float: right; font-weight: 700; margin-left: 8px; }
 /* a region's move/resize history rendered inline in the thread, alongside comments but NOT deletable (REQ-704/009). */
 .tb-existing .tb-ev { padding: 3px 0; border-bottom: 1px dotted var(--tb-border); color: var(--tb-muted); font-size: 11px; }
+/* the marker under a sent-but-unresolved utterance in a conversation (interactive transport, REQ-702):
+   the integrator resolves it via its own UI/events — the library never invents an ack. */
+.tb-existing .tb-pending-note { padding: 2px 0 5px; color: var(--tb-muted); font-size: 11px; font-style: italic; }
 .tb-acts { display: flex; gap: 6px; justify-content: flex-end; margin-top: 7px; }
 .tb-acts button { cursor: pointer; border: none; border-radius: 6px; padding: 6px 14px; }
 .tb-save { background: var(--tb-accent); color: #fff; } .tb-cancel { background: #bbb; color: #111; }
@@ -534,7 +537,7 @@ export function attachPanel(core, options = {}) {
     save.onclick = () => {
       const body = ta.value.trim();
       if (!canCommit(body, reactionId)) { clearDraft(); return closePopup(); }
-      onSave(body, reactionId); clearDraft();
+      const created = onSave(body, reactionId); clearDraft();
       // the saved region is now a committed overlay (rendered via `change`); drop the pending draft rect.
       if (pendingRegionEl) { pendingRegionEl.remove(); pendingRegionEl = null; }
       // local/fire-and-forget → close; interactive transport → stay open as a conversation with a
@@ -548,7 +551,14 @@ export function attachPanel(core, options = {}) {
       ta.value = ''; reactionId = '';
       [...rwrap.children].forEach((x) => x.classList.remove('on'));
       updateSaveState();
-      const p = el(doc, 'div', 'tb-pending-note'); p.textContent = lbl('popup.pending', 'sent — awaiting reply…'); exwrap.appendChild(p); ta.focus();
+      // echo the just-sent utterance into the timeline. The popup renders its rows once, on open, so
+      // without this the message you just sent is the ONE utterance the conversation does not show —
+      // it sits in the model until the popup is reopened. It is the same row the next render would
+      // produce (deletable, actor-colored), followed by its own pending marker.
+      if (created && created.id) renderCommentRow(created);
+      const p = el(doc, 'div', 'tb-pending-note'); p.textContent = lbl('popup.pending', 'sent — awaiting reply…'); exwrap.appendChild(p);
+      exwrap.scrollTop = exwrap.scrollHeight;   // the newest rows are at the bottom of a scrolling thread
+      ta.focus();
     };
     acts.append(cancel, save);
     popup.append(anchorEl, ta, rwrap, exwrap, acts);
