@@ -40,6 +40,13 @@ test('buildThemeCSS: emits --tb-* on the panel root; every token covered', () =>
 });
 
 // ---- reactions ----
+test('DEFAULT_REACTIONS is a small, focused set (👍/👎/❓) with no baked-in domain meaning', () => {
+  assert.equal(DEFAULT_REACTIONS.length, 3, 'reduced to three plain sentiments');
+  assert.deepEqual(DEFAULT_REACTIONS.map((r) => r.icon), ['👍', '👎', '❓']);
+  assert.deepEqual(DEFAULT_REACTIONS.map((r) => r.id), ['agree', 'disagree', 'question'],
+    'ids are generic sentiments — not "approve"/"reject" (that meaning is the integrator\'s)');
+});
+
 test('resolveReaction: known id → icon + localized label', () => {
   assert.deepEqual(resolveReaction(DEFAULT_REACTIONS, 'question', 'ja'), { icon: '❓', label: '疑問' });
   assert.deepEqual(resolveReaction(DEFAULT_REACTIONS, 'question', 'en'), { icon: '❓', label: 'Question' });

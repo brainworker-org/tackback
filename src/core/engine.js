@@ -14,7 +14,7 @@ import { TackbackError } from './errors.js';
 
 // MUST equal package.json "version" (export envelope's generator.version comes from here);
 // export.test.js asserts they match so they can't drift.
-const LIB_VERSION = '0.9.0';
+const LIB_VERSION = '0.9.1';
 const nowIso = () => new Date().toISOString();
 
 /**
@@ -40,6 +40,9 @@ class TackbackInstance {
     this._adapterTeardowns = [];
     this._destroyed = false;
     this._transport = options.transport || null;   // descriptor only; core never transports (REQ-205)
+    this._attention = new Set();   // comment ids currently flagged for ATTENTION — a generic, live UI
+                                   // state driven by the integrator; NOT persisted, NOT exported, and
+                                   // WITHOUT any built-in meaning (see setAnchorAttention).
 
     const key = options.storageKey || `tackback::${this._doc.id}`;
     this._store = new CommentStore(options.storage || localStorageAdapter(key), this._doc.id);
@@ -116,6 +119,7 @@ class TackbackInstance {
     this._assertWritable();
     if (!this._store.has(id)) throw new TackbackError('COMMENT_NOT_FOUND', `no comment ${id}`);
     const { diff, previous } = this._store.delete(id);
+    this._attention.delete(id);   // a deleted comment carries no live attention flag
     this._commit(diff, 'local');
     this._emitter.emit('comment:delete', { id, previous });
   }
@@ -281,6 +285,31 @@ class TackbackInstance {
     return next;
   }
 
+  /**
+   * Flag (or clear) an ATTENTION state on an anchor, keyed by one of its comment ids. This is a
+   * generic, live signal the integrator drives — Tackback attaches NO meaning to it (it is not
+   * "unread", not "needs-review"; those are the integrator's concepts). The panel paints a flagged
+   * anchor with the `--tb-attention` tint and clears it when the flag is removed. It is deliberately
+   * SESSION-only: never persisted to storage and never written into the export envelope, so it can
+   * never leak a per-viewer UI state into a shared file. A panel groups comments by anchor, so a
+   * thread's badge shows attention when ANY of its comment ids is flagged — pass the id you track.
+   * Idempotent: no event when the state does not actually change (a panel can call it freely).
+   * @param {string} id      a comment id belonging to the anchor
+   * @param {boolean} [on]    true to flag (default), false to clear
+   * @returns {boolean}       the resulting attention state for that id
+   */
+  setAnchorAttention(id, on = true) {
+    const want = !!on;
+    const had = this._attention.has(id);
+    if (want === had) return want;   // idempotent — no redundant event / re-render
+    if (want) this._attention.add(id); else this._attention.delete(id);
+    this._emitter.emit('attention:change', { id, on: want });
+    return want;
+  }
+
+  /** @param {string} id @returns {boolean} whether the attention flag is set on this comment id */
+  hasAttention(id) { return this._attention.has(id); }
+
   setAuthor(name) { this._opts.author = name; }
 
   /** @returns {ReadonlyMap<string, any>} registered annotation surfaces (for the panel/renderer) */
@@ -291,6 +320,7 @@ class TackbackInstance {
     this._destroyed = true;
     for (const t of this._adapterTeardowns.splice(0)) { try { t(); } catch { /* ignore */ } }
     this._surfaces.clear();
+    this._attention.clear();
     this._emitter.clear();
   }
 

@@ -221,7 +221,7 @@
 
   const tb = Tackback.mount({
     document: { id: 'tackback-demo', title: 'Tackback demo' },
-    author: 'Reviewer',
+    author: { id: 'Reviewer', kind: 'human' },   // an author CATEGORY (kind) — Tackback treats it as opaque
     mediaAdapters: pdf ? [pdf] : [],
   });
 
@@ -239,6 +239,9 @@
       locale,
       controls: { theme: showTheme },
       reactions: useCustomReactions ? REVIEW_REACTIONS.slice() : undefined,
+      // colors are INJECTED by the integrator, keyed by author.kind — Tackback bakes in no categories.
+      // An anchor is tinted by its last speaker's category (here the human Reviewer → pink).
+      actorColors: { human: '#db2777', ai: '#2563eb' },
     });
   }
   attach();
