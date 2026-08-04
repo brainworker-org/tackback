@@ -31,6 +31,19 @@ export function popupCommit(transport) {
   return { action: 'send', closeOnCommit: !conversation, conversation };
 }
 
+/**
+ * Whether the popup's commit button is enabled: a commit needs SOMETHING — body text or a reaction —
+ * so an empty commit is never offered. Whitespace-only text does not count. Pure UX, no domain
+ * meaning. The same rule re-runs after an interactive (stay-open) commit clears the inputs, so the
+ * button cannot stay enabled over an empty conversation box.
+ * @param {string|null|undefined} body
+ * @param {string|null|undefined} reactionId
+ * @returns {boolean}
+ */
+export function canCommit(body, reactionId) {
+  return !!((body && String(body).trim()) || reactionId);
+}
+
 /** The next state of a sent comment in an interactive conversation (REQ-702): pending → ok | failed. */
 export function nextSendState(current, signal) {
   if (signal === 'ack' || signal === 'reply') return 'ok';

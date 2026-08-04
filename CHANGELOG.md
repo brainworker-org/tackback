@@ -22,20 +22,47 @@ those stay with the integrator, supplied via options / read off the model.
   the injected map; with no map it falls back to a generic per-identity hue. No categories or colors
   are hard-coded in the library.
 - Theme token **`--tb-attention`** (default orange, light/dark), overridable like any other token.
+- **`core.getAuthor()`** — read back the author new comments are attributed to, so a UI can edit the
+  name without replacing (and thereby flattening) a `{ id, kind }` provenance object.
 
 ### Changed
-- **Reduced `DEFAULT_REACTIONS`** to a focused three (👍 `agree` / 👎 `disagree` / ❓ `question`) —
-  fewer icons read faster. Ids/labels stay generic sentiments; a review workflow assigns its own meaning
-  by reading `comment.reaction`, or replaces the set via the `reactions` option. Unknown ids still render
-  literally, so stored comments referencing removed ids are unaffected.
+- **Reduced `DEFAULT_REACTIONS`** from eight to a focused three (👍 `agree` / 👎 `disagree` /
+  ❓ `question`) — fewer icons read faster. Ids/labels stay generic sentiments; a review workflow assigns
+  its own meaning by reading `comment.reaction`, or replaces the set via the `reactions` option.
+  **Upgrade note:** `concern` / `cut` / `good` / `rethink` / `add` are gone from the default set. A stored
+  comment that references one is never lost or altered — but the panel has only the id to render, so it
+  shows as the bare id text (`concern note…`) instead of its old icon. An export carries a reaction legend
+  only when the integrator mounted with a `reactions` option, so a default-mount envelope cannot restore
+  its own icons. To keep them, pass the previous set explicitly: `attachPanel(core, { reactions: [...] })`.
 - **Flat Pane timeline** — comments and replies now render as individual, chronologically-ordered rows
   (no reply nesting/indent); each row carries its actor color + label so who-said-what stays legible.
 - **Commit button disables** (greys out) while the Pane input is empty — no body text and no reaction —
-  and re-enables the instant either is present.
+  and re-enables the instant either is present. Cmd/Ctrl+Enter obeys the same rule.
+- An anchor's attention flag now flips as a **targeted class toggle** instead of a full mark re-render,
+  so raising a notice can no longer interrupt an in-progress region move/resize.
+- `attachPanel` **copies** the reaction set it is given, so `panel.setReactions()` can no longer rewrite
+  the exported `DEFAULT_REACTIONS` for every other consumer on the page.
+
+### Fixed
+- **Deleting a comment now removes its replies from the open thread.** In the flat timeline a reply is a
+  sibling row, not a child, so deleting its comment left the reply rows on screen until the popup closed.
+- **Commit button state after an interactive send.** With an `interactive` transport the popup stays open;
+  clearing the text box fires no `input` event, so the button stayed enabled over an empty box and the
+  next click dismissed the conversation. The text, the reaction and the button state now all reset.
+- **Attention flags no longer outlive their comment.** A wipe (clear-all / `replace` import) drops the
+  flags of comments that went away, so re-importing the same comment id starts unflagged instead of
+  resurrecting a stale notice. `setAnchorAttention` also refuses to run on a destroyed instance.
+- **The panel's name field no longer destroys `author.kind`.** It patches the author's `id` and keeps the
+  rest of the provenance object, so typing a name cannot silently disable `actorColors`.
+- **Fallback author hues are disjoint from `actorColors`.** The generic per-identity palette excludes any
+  color the injected category map claimed, so an unmapped author can never be painted as a mapped one.
+- `panel.setActorColors()` re-tints an open thread popup, not just the anchors.
 
 ### Compatibility
 - No breaking API changes. `attachPanel` / `deriveBlockId` / resolution / `setTransport` /
   export-import are unchanged. Existing stored comments and exports round-trip as before.
+- The one behavioral trim is the shorter default reaction set (see the upgrade note above); pass your own
+  `reactions` to keep any of the removed ids rendering as icons.
 
 ## [0.9.0] — 2026-06-16
 Initial public-prep release (staging). Standalone extraction of the Tackback library.

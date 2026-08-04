@@ -18,7 +18,9 @@ const entry = resolve(root, 'src/browser.js');
 const out = (f) => resolve(root, 'dist', f);
 
 const version = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')).version;
-const banner = { js: `/*! Tackback v${version} — anchored comments. PolyForm Noncommercial 1.0.0; commercial license separate. See LICENSE. */` };
+// Keep this in step with LICENSE / package.json "license": the banner is the license statement that
+// travels with the bundle, so a stale name here misstates the terms to every drop-in consumer.
+const banner = { js: `/*! Tackback v${version} — anchored comments. PolyForm Shield 1.0.0 — free for any use including commercial, except to compete with Tackback. See LICENSE. */` };
 
 const common = { entryPoints: [entry], bundle: true, banner, logLevel: 'info', target: ['es2020'] };
 

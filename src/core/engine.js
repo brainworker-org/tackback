@@ -294,11 +294,18 @@ class TackbackInstance {
    * never leak a per-viewer UI state into a shared file. A panel groups comments by anchor, so a
    * thread's badge shows attention when ANY of its comment ids is flagged — pass the id you track.
    * Idempotent: no event when the state does not actually change (a panel can call it freely).
+   * A flag lives exactly as long as its comment: deleting or wiping the comment drops it, so a later
+   * import that re-creates the same id starts UNflagged (a stale flag never resurrects).
+   * Throws on a destroyed instance.
    * @param {string} id      a comment id belonging to the anchor
    * @param {boolean} [on]    true to flag (default), false to clear
    * @returns {boolean}       the resulting attention state for that id
    */
   setAnchorAttention(id, on = true) {
+    // a destroyed instance has no live UI state to flag — fail loudly rather than mutating a set no
+    // listener will ever see (readOnly is deliberately NOT blocked: attention is view state, not a
+    // document mutation, so a read-only viewer can still track its own notices).
+    if (this._destroyed) throw new TackbackError('ADAPTER_FAILED', 'instance destroyed');
     const want = !!on;
     const had = this._attention.has(id);
     if (want === had) return want;   // idempotent — no redundant event / re-render
@@ -311,6 +318,15 @@ class TackbackInstance {
   hasAttention(id) { return this._attention.has(id); }
 
   setAuthor(name) { this._opts.author = name; }
+
+  /**
+   * The author new comments are attributed to — the `author` mount option as last set by setAuthor.
+   * Exposed so a UI can EDIT the identity without destroying it: an Author may be a provenance object
+   * (`{ id, kind }`), and a name-entry field must patch `.id` rather than replace the whole object
+   * (dropping `kind` would silently disable any category-based rendering).
+   * @returns {import('./model.js').Author | null}
+   */
+  getAuthor() { return this._opts.author ?? null; }
 
   /** @returns {ReadonlyMap<string, any>} registered annotation surfaces (for the panel/renderer) */
   get surfaces() { return this._surfaces; }
@@ -332,10 +348,25 @@ class TackbackInstance {
 
   /** Persist (async, decoupled) + emit the unified `change` with a diff payload. */
   _commit(diff, source) {
-    const payload = { comments: this._store.list(), changes: diff, source };
+    const comments = this._store.list();
+    this._pruneAttention(comments);   // BEFORE the emit, so listeners never render a ghost flag
+    const payload = { comments, changes: diff, source };
     this._emitter.emit('change', payload);
     Promise.resolve(this._store.persist()).catch((err) =>
       this._fail(err instanceof TackbackError ? err.code : 'STORAGE_SAVE_FAILED', 'persist failed', err));
+  }
+
+  /**
+   * Drop attention flags whose comment no longer exists. A flag is keyed by a comment id, so a wipe
+   * (clear-all / `replace` import) must not leave it dangling — otherwise a later import that
+   * re-creates the SAME id would resurrect a stale flag the integrator never re-set. Cheap: the flag
+   * set is a live UI signal, normally near-empty, and this is a no-op when it is.
+   * @param {import('./model.js').Comment[]} comments
+   */
+  _pruneAttention(comments) {
+    if (this._attention.size === 0) return;
+    const alive = new Set(comments.map((c) => c.id));
+    for (const id of this._attention) if (!alive.has(id)) this._attention.delete(id);
   }
 
   _fail(code, message, cause) {

@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { classifyGesture, popupCommit, nextSendState, handleAt, applyHandleDrag } from '../src/panel/interaction.js';
+import { classifyGesture, popupCommit, canCommit, nextSendState, handleAt, applyHandleDrag } from '../src/panel/interaction.js';
 
 // ---- REQ-006: gesture = right-drag>threshold → region; below → selection→range / none→block --------
 
@@ -32,6 +32,23 @@ test('popupCommit: no transport → save + close; fire-and-forget → send + clo
   assert.deepEqual(popupCommit(null), { action: 'save', closeOnCommit: true, conversation: false });
   assert.deepEqual(popupCommit({ interactive: false }), { action: 'send', closeOnCommit: true, conversation: false });
   assert.deepEqual(popupCommit({ interactive: true }), { action: 'send', closeOnCommit: false, conversation: true });
+});
+
+test('canCommit: body OR reaction enables the commit button; empty/whitespace-only does not', () => {
+  assert.equal(canCommit('', ''), false, 'nothing to commit');
+  assert.equal(canCommit('   \n\t ', ''), false, 'whitespace-only text is still empty');
+  assert.equal(canCommit('a note', ''), true);
+  assert.equal(canCommit('', 'agree'), true, 'a reaction alone is a valid commit');
+  assert.equal(canCommit('   ', 'agree'), true);
+  assert.equal(canCommit(null, null), false, 'absent inputs behave as empty, never throw');
+  assert.equal(canCommit(undefined, undefined), false);
+});
+
+test('canCommit: the state AFTER an interactive send is disabled again (the stay-open reset)', () => {
+  // an interactive (stay-open) commit clears BOTH inputs; re-running the rule must disable the
+  // button — otherwise the next click hits the empty-commit path and dismisses the conversation.
+  assert.equal(popupCommit({ interactive: true }).closeOnCommit, false, 'the popup stays open');
+  assert.equal(canCommit('', ''), false, 'cleared text + cleared reaction → disabled');
 });
 
 test('nextSendState: pending → ok on ack/reply, → failed on error/timeout (never an indefinite hang)', () => {

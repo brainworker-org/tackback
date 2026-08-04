@@ -115,6 +115,49 @@ test('deleting a flagged comment clears its attention flag', () => {
   assert.equal(tb.hasAttention(c.id), false, 'a deleted comment carries no live flag');
 });
 
+test('a wiped comment drops its attention flag — a re-import of the same id does NOT resurrect it', () => {
+  const tb = mountFresh();
+  const c = tb.addComment(blockInput());
+  const envelope = tb.exportEnvelope();          // captured while the comment exists
+  tb.setAnchorAttention(c.id, true);
+  assert.equal(tb.hasAttention(c.id), true);
+  tb.importEnvelope({ ...envelope, comments: [] }, { mode: 'replace' });   // wipe
+  assert.equal(tb.hasAttention(c.id), false, 'the flag does not outlive its comment');
+  tb.importEnvelope(envelope, { mode: 'merge' });                          // the SAME id comes back
+  assert.equal(tb.hasAttention(c.id), false, 're-imported comments start unflagged');
+});
+
+test('attention flags survive unrelated commits (pruning only drops the dead ones)', () => {
+  const tb = mountFresh();
+  const a = tb.addComment(blockInput());
+  const b = tb.addComment(blockInput());
+  tb.setAnchorAttention(a.id, true);
+  tb.setAnchorAttention(b.id, true);
+  tb.deleteComment(b.id);
+  tb.addComment(blockInput());
+  assert.equal(tb.hasAttention(a.id), true, 'a live comment keeps its flag across other mutations');
+  assert.equal(tb.hasAttention(b.id), false);
+});
+
+test('setAnchorAttention on a destroyed instance throws (no state nobody can observe)', () => {
+  const tb = mountFresh();
+  const c = tb.addComment(blockInput());
+  tb.destroy();
+  assert.throws(() => tb.setAnchorAttention(c.id, true), /destroyed/);
+  assert.equal(tb.hasAttention(c.id), false);
+});
+
+test('getAuthor exposes the current author so a UI can patch it without dropping its category', () => {
+  const tb = mountFresh();
+  assert.equal(tb.getAuthor(), null, 'no author configured → null');
+  tb.setAuthor({ id: 'kei', kind: 'human' });
+  assert.deepEqual(tb.getAuthor(), { id: 'kei', kind: 'human' });
+  // the panel's name field patches `.id` and keeps the rest — the category survives a rename
+  tb.setAuthor({ ...tb.getAuthor(), id: 'keisuke' });
+  const c = tb.addComment(blockInput());
+  assert.deepEqual(c.author, { id: 'keisuke', kind: 'human' }, 'kind is not destroyed by a rename');
+});
+
 test('destroy: subsequent mutation throws, no events delivered', () => {
   const tb = mountFresh();
   let changes = 0;

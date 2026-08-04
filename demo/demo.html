@@ -291,6 +291,38 @@
     b.classList.toggle('on', useCustomReactions);
     attach();
   });
+  // A SIMULATED second participant — the demo plays the integrator's part, so the multi-party
+  // rendering is visible with no backend and no network. Everything domain-specific lives here in
+  // the demo, never in the library: the 'assistant' category, its color, and the decision that a new
+  // reply is worth flagging are all the integrator's. Tackback only renders what it is told.
+  let simSeq = 0;
+  const SIM_LINES = [
+    'Looks resolvable — the anchor survives a reflow because it stores the quote, not an offset.',
+    'One more thought: the region is normalized, so this holds at any zoom.',
+    'Agreed. Nothing here depends on a backend.',
+  ];
+  mkBtn('Simulate a reply', (b) => {
+    const target = tb.listComments()[0];
+    if (!target) {   // nudge in place — never a modal dialog, which would block the page
+      b.textContent = 'Comment on something first ↑';
+      setTimeout(() => { b.textContent = 'Simulate a reply'; }, 2200);
+      return;
+    }
+    tb.addReply(target.id, {
+      body: SIM_LINES[simSeq++ % SIM_LINES.length],
+      author: { id: 'Assistant', kind: 'ai' },   // a category the DEMO defines, mapped to blue above
+    });
+    // the reply arrived while the reader may be elsewhere → raise the generic attention flag. What it
+    // MEANS (here: "unread") is the demo's call; Tackback just paints --tb-attention on the anchor.
+    tb.setAnchorAttention(target.id, true);
+  });
+  // …and clear that flag when the thread is actually opened. Again: the library has no notion of
+  // "read" — the integrator decides when the notice has served its purpose.
+  document.addEventListener('click', (e) => {
+    const anchorEl = e.target.closest?.('.tb-badge,.tb-pin');
+    if (!anchorEl || !anchorEl.__tbComments) return;
+    for (const c of anchorEl.__tbComments) tb.setAnchorAttention(c.id, false);
+  }, true);
   document.body.appendChild(bar);
 
   // ── expose for verification drivers (folds in the old umd-harness smoke role) ────────────────────
