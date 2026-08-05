@@ -22,8 +22,10 @@
   ⚠️ The PDF block is a DEMO of Tackback annotating a page that *contains* a PDF — it is a
   post-v1 / optional-sample surface, NOT a v1 focus. v1 ships region annotation over the
   DOM-rendered document; the PDF/raster path ships only as this optional adapter sample.
-  Everything except the PDF block runs fully offline; the PDF block needs network (pdf.js CDN)
-  and degrades to a note if offline.
+  Dependency boundary of THIS hosted page: the Tackback bundle and pdf.js both come from a CDN, so
+  this page is not an offline demo. The bundle is essential (a visible notice replaces the demo if it
+  fails); pdf.js is optional and loaded without blocking, degrading to a note. The LIBRARY itself
+  needs no network — demo/demo.html, which ships its own copy of the bundle, runs fully offline.
 -->
 <style>
   :root { color-scheme: light dark; }
@@ -97,8 +99,11 @@
     comment remembers <em>where</em> it was placed — a block, a selected phrase, or a region drawn over
     an image, diagram or other non-text content — and re-finds that spot when the page is re-rendered.</p>
   <p>It ships as a headless core plus an optional default panel. The core holds no opinion about the
-    DOM; the panel is one way to drive it. Everything in this page (except the PDF preview at the bottom)
-    runs from a single bundled script with no network calls and no external packages.</p>
+    DOM; the panel is one way to drive it. Everything here runs from a single bundled script with no
+    external packages and no calls of its own to any backend.</p>
+  <p class="pdf-note">A note on this page specifically: it is hosted, so it fetches that bundle (and
+    the optional pdf.js sample) from a CDN — it is a showcase, not an offline demo. The library has no
+    such dependency: drop the bundle next to your page and it runs with no network at all.</p>
 
   <h2>The three anchor kinds (v1)</h2>
   <h3>Block</h3>
@@ -219,22 +224,22 @@
   const pdfBox = document.getElementById('pdf-box');
   const pdfStatus = document.getElementById('pdf-status');
 
-  // ── try the optional PDF (raster) adapter — degrades gracefully when offline / blocked ──────────
-  let pdf = null;
-  try {
-    const pdfjsLib = await import(`${CDN}/build/pdf.min.mjs`);
-    pdf = Tackback.createPdfAdapter({
-      pdfjs: pdfjsLib,
-      data: bytes,
-      workerSrc: `${CDN}/build/pdf.worker.min.mjs`,
-      standardFontDataUrl: `${CDN}/standard_fonts/`,
-      container: pdfBox,
-      scale: 1.0,
-    });
-    pdfStatus.remove();
-  } catch (err) {
-    pdfStatus.textContent = 'PDF preview unavailable (pdf.js could not load from the CDN — you may be ' +
-      'offline). This is an optional post-v1 sample; the rest of the demo works without it.';
+  // ── the ESSENTIAL dependency: the library itself ───────────────────────────────────────────────
+  // This hosted page loads the published bundle from a CDN, so that request is the one thing the
+  // page cannot do without. Say so, visibly, instead of leaving a dead page behind a console error.
+  // (The library itself needs no network — a page that ships its own copy of the bundle runs fully
+  // offline. It is this DEMO's hosting that depends on the CDN.)
+  if (typeof Tackback === 'undefined') {
+    const box = document.createElement('aside');
+    box.className = 'callout warn';
+    box.id = 'fatal-notice';   // distinguishable from the page's own warn callouts
+    box.textContent = 'The Tackback bundle could not be loaded from the CDN, so this demo cannot run — '
+      + 'you may be offline or behind a proxy that blocks it. Nothing on this page is broken: reload '
+      + 'when you have a connection, or serve the package yourself (npm install @brainworker/tackback) '
+      + 'and open demo/demo.html, which needs no network at all.';
+    document.querySelector('.wrap').prepend(box);
+    pdfStatus.textContent = 'the optional PDF sample needs the library too — see the notice above.';
+    throw new Error('tackback bundle unavailable');
   }
 
   // ── one Tackback instance + one panel for the whole page ────────────────────────────────────────
@@ -244,7 +249,6 @@
   const tb = Tackback.mount({
     document: { id: 'tackback-demo', title: 'Tackback demo' },
     author: { id: 'Reviewer', kind: 'human' },   // an author CATEGORY (kind) — Tackback treats it as opaque
-    mediaAdapters: pdf ? [pdf] : [],
   });
 
   // A REPLACEMENT reaction set — deliberately nothing like the built-in one (👍 / 👎 / ❓). The set is
@@ -324,8 +328,33 @@
     for (const c of anchorEl.__tbComments) tb.setAnchorAttention(c.id, false);
   }, true);
 
-  // PDF zoom controls + status (only meaningful when the adapter loaded)
-  if (pdf) {
+  // ── the OPTIONAL PDF (raster) adapter, loaded AFTER the demo is already usable ─────────────────
+  // pdf.js is fetched without blocking anything above: awaiting it here would hold the whole page
+  // hostage to a slow or unreachable CDN, which is the opposite of what "optional" means. It joins
+  // the running instance through registerMediaAdapter when (and if) it arrives.
+  let pdf = null;
+  (async () => {
+    try {
+      const pdfjsLib = await import(`${CDN}/build/pdf.min.mjs`);
+      pdf = Tackback.createPdfAdapter({
+        pdfjs: pdfjsLib,
+        data: bytes,
+        workerSrc: `${CDN}/build/pdf.worker.min.mjs`,
+        standardFontDataUrl: `${CDN}/standard_fonts/`,
+        container: pdfBox,
+        scale: 1.0,
+      });
+      tb.registerMediaAdapter(pdf);
+      pdfStatus.remove();
+      wirePdfTools();
+    } catch (err) {
+      pdfStatus.textContent = 'PDF preview unavailable (pdf.js could not load from the CDN — you may be '
+        + 'offline). This is an optional post-v1 sample; the rest of this page works without it.';
+    }
+  })();
+
+  // PDF zoom controls (only meaningful once the adapter has loaded)
+  function wirePdfTools() {
     const tools = document.getElementById('pdf-tools');
     const zoomLabel = document.getElementById('zoom-label');
     const refreshZoom = () => { zoomLabel.textContent = Math.round(pdf.scale * 100) + '%'; };
