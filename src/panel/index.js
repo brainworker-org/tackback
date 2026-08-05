@@ -8,8 +8,9 @@ import { DEFAULT_REACTIONS, resolveReaction } from './reactions.js';
 import { LocaleRegistry } from './i18n.js';
 import { indexAnnotatable, resolveAnchorDom, clampToViewport } from './dom.js';
 import { computeCapture, resolveRegionRect } from '../core/resolution.js';
-import { classifyGesture, popupCommit, canCommit, applyHandleDrag } from './interaction.js';
+import { classifyGesture, popupCommit, canCommit, nextSendState, answersSend, applyHandleDrag } from './interaction.js';
 import { actorColorOf as resolveActorColor, claimedColors, authorKey as tbAuthorKey, lastSpeaker } from './actors.js';
+import { threadKeyOf, timelineItems, utteranceCount, planInsertions } from './thread.js';
 import { documentSurface, DOCUMENT_SURFACE_ID } from '../core/media.js';
 import { normalizeRegion, buildQuoteSelector, resolveQuoteSelector } from '../core/anchor.js';
 import { selectionOffsetsWithin, offsetsToRange, paintHighlights, clearHighlights } from './range.js';
@@ -77,7 +78,6 @@ const PANEL_CSS = `
    actor color + label so who-said-what stays legible without an indent tree. */
 .tb-existing .tb-c-reply { padding: 4px 0; border-bottom: 1px dotted var(--tb-border); font-size: 12px; }
 .tb-existing .tb-who { font-weight: 700; margin-right: 2px; }
-.tb-existing .tb-del { color: var(--tb-danger); cursor: pointer; float: right; font-weight: 700; margin-left: 8px; }
 /* a region's move/resize history rendered inline in the thread, alongside comments but NOT deletable (REQ-704/009). */
 .tb-existing .tb-ev { padding: 3px 0; border-bottom: 1px dotted var(--tb-border); color: var(--tb-muted); font-size: 11px; }
 /* the marker under a sent-but-unresolved utterance in a conversation (interactive transport, REQ-702):
@@ -295,22 +295,22 @@ export function attachPanel(core, options = {}) {
     const byQuote = new Map();     // elementId\0exact\0start -> {anchor, comments[]}  (range)
     const regions = new Map();     // threadId|id -> {anchor, comments[]}
     for (const c of core.listComments()) {
+      // group by the SINGLE thread identity an open Pane also matches against (thread.js), so a
+      // badge and the conversation it opens can never disagree about what belongs together.
+      const key = threadKeyOf(c);
       if (c.anchor.type === 'region') {
-        const key = c.threadId || c.id;
         (regions.get(key) || regions.set(key, { anchor: c.anchor, comments: [] }).get(key)).comments.push(c);
       } else if (c.anchor.type === 'range') {
-        const s = c.anchor.selector;
-        const key = `${c.anchor.elementId}\0${s.exact}\0${s.start ?? ''}`;
         (byQuote.get(key) || byQuote.set(key, { anchor: c.anchor, comments: [] }).get(key)).comments.push(c);
       } else {
-        (byElement.get(c.anchor.elementId) || byElement.set(c.anchor.elementId, []).get(c.anchor.elementId)).push(c);
+        (byElement.get(key) || byElement.set(key, []).get(key)).push(c);
       }
     }
     // block — badge floats at the element's top-right on the overlay (no DOM insertion → no layout shift)
     for (const comments of byElement.values()) {
       const r = resolveAnchorDom(comments[0].anchor, doc, core.surfaces);
       const badge = el(doc, 'span', 'tb-badge');
-      badge.textContent = '💬' + comments.length;
+      badge.textContent = '💬' + utteranceCount(comments);
       paintAnchor(badge, comments);
       badge.__tbComments = comments;   // for the right-click delete-anchor menu
       badge.onclick = (ev) => { ev.stopPropagation(); openThread(comments, ev); };
@@ -332,7 +332,7 @@ export function attachPanel(core, options = {}) {
       const hit = element ? resolveQuoteSelector(element.textContent, anchor.selector) : null;
       const range = hit ? offsetsToRange(element, hit.start, hit.end) : null;
       const badge = el(doc, 'span', 'tb-badge');
-      badge.textContent = '💬' + comments.length;
+      badge.textContent = '💬' + utteranceCount(comments);
       paintAnchor(badge, comments);
       badge.__tbComments = comments;   // for the right-click delete-anchor menu
       badge.onclick = (ev) => { ev.stopPropagation(); openThread(comments, ev); };
@@ -354,7 +354,7 @@ export function attachPanel(core, options = {}) {
       if (!r || !r.rect) {   // unresolvable region (surface gone / rect uncomputable) → orphaned (REQ-004), not silently hidden
         markOrphan(group.comments);
         const obadge = el(doc, 'span', 'tb-badge tb-orphan');
-        obadge.textContent = '💬' + group.comments.length;
+        obadge.textContent = '💬' + utteranceCount(group.comments);
         paintAnchor(obadge, group.comments);
         obadge.__tbComments = group.comments;
         obadge.title = group.anchor.surfaceId || 'region';
@@ -379,7 +379,7 @@ export function attachPanel(core, options = {}) {
       box.appendChild(grip);
       const pin = el(doc, 'span', 'tb-pin');   // the anchor icon — left-CLICK opens the thread, left-DRAG moves the region (REQ-008). The pin look is COMMON across surfaces (Keisuke 2026-06-16: distinguish by the region border only — the pin is too small to read); the binding is conveyed by the box border + this tooltip.
       if (boundToSurface) pin.title = `bound to surface "${group.anchor.surfaceId}" — moves & scales with it`;
-      pin.textContent = '💬' + group.comments.length;
+      pin.textContent = '💬' + utteranceCount(group.comments);
       paintAnchor(pin, group.comments);
       pin.__tbComments = group.comments;   // for the right-click delete-anchor menu
       Object.assign(pin.style, { left: (px.x + px.width) + 'px', top: (px.y + px.height) + 'px' });
@@ -390,7 +390,7 @@ export function attachPanel(core, options = {}) {
       r.element.append(box, pin);
       regionOverlays.push({ box, pin, surfaceEl: r.element, comments: group.comments });
     }
-    countEl.textContent = t('panel.count', { n: core.listComments().length });
+    countEl.textContent = t('panel.count', { n: utteranceCount(core.listComments()) });   // utterances, so the panel total agrees with the badges
     orphanedIds.clear(); for (const id of currentOrphans) orphanedIds.add(id);   // transition set for the next render (all kinds)
     // apply the collected orphan/resolve mutations AFTER the render pass (no mid-iteration re-entry).
     // reportOrphaned is idempotent + transition-guarded; markResolved is a no-op on a non-orphan — so the
@@ -404,6 +404,7 @@ export function attachPanel(core, options = {}) {
   let popupCleanup = null;
   let popupRelabel = null;    // re-labels the open popup in place when the locale changes (preserves input)
   let popupRetint = null;     // re-tints the open popup's rows when the actor color map changes
+  let popupSync = null;       // appends utterances that arrive while the thread is open
   const drafts = new Map();   // anchor key -> { body, reaction } — unsaved input preserved across dismiss
   function anchorKey(a) {
     if (!a) return null;
@@ -414,14 +415,17 @@ export function attachPanel(core, options = {}) {
   // The pending region's lifetime IS the popup's: closing the popup (outside-click, Escape, Cancel,
   // empty save) removes the dashed rect, so no orphaned region ever lingers (Keisuke 2026-06-15).
   function closePopup() {
-    popupCleanup?.(); popupCleanup = null; popupRelabel = null; popupRetint = null; popup?.remove(); popup = null;
+    popupCleanup?.(); popupCleanup = null; popupRelabel = null; popupRetint = null; popupSync = null; popup?.remove(); popup = null;
     if (pendingRegionEl) { pendingRegionEl.remove(); pendingRegionEl = null; }
     doc.documentElement.classList.remove('tb-popup-open');   // region affordances (resize grip / move cursor) re-enabled
   }
-  function openPopup({ anchorLabel, existing, onSave, draftKey, ephemeralDraft }, ev) {
+  function openPopup({ anchorLabel, existing, onSave, draftKey, threadKey: initialThreadKey = null, ephemeralDraft }, ev) {
     closePopup();
     popup = el(doc, 'div', 'tb-popup');
     doc.documentElement.classList.add('tb-popup-open');   // lock region affordances while editing (REQ-008): no resize grip on hover, no move cursor
+    // the thread this Pane belongs to (thread.js). A brand-new region has none until its first
+    // comment exists — it is adopted below, on commit.
+    let threadKey = initialThreadKey;
     const draft = (draftKey != null && drafts.get(draftKey)) || null;
     let reactionId = draft?.reaction || '';
     const anchorEl = el(doc, 'div', 'tb-anchor'); anchorEl.textContent = '📍 ' + anchorLabel;
@@ -441,17 +445,13 @@ export function attachPanel(core, options = {}) {
     const exwrap = el(doc, 'div', 'tb-existing');
     // Render the thread inline as ONE flat, TIME-ORDERED timeline (REQ-704): every utterance —
     // comment or reply — is its own row carrying its actor color + label, interleaved with the
-    // region's move/resize history (REQ-009). A comment is deletable; a reply is not (replies arrive
-    // through the addReply seam), and move/resize rows never are — they are an immutable record of how
-    // the anchor was repositioned (Keisuke 2026-06-15).
-    // Because the rows are FLAT SIBLINGS, a comment's replies are no longer carried by its DOM
-    // subtree: each row registers under the id of the comment it belongs to, so deleting that comment
-    // removes the whole group. Without this a delete would leave its replies on screen as orphan rows.
-    const rowsByComment = new Map();   // comment id -> [row, ...its reply rows]
-    const trackRow = (ownerId, row) => {
-      const rows = rowsByComment.get(ownerId) || rowsByComment.set(ownerId, []).get(ownerId);
-      rows.push(row);
-    };
+    // region's move/resize history (REQ-009), which is an immutable record of how the anchor was
+    // repositioned (Keisuke 2026-06-15).
+    // NOTHING in the timeline is deletable from here (Keisuke 2026-08-05, hands-on): a per-row ✕ made
+    // "delete one utterance" look like the granularity of the model, when a reply belongs to its
+    // comment and goes with it — so removing a comment silently took a whole side of the conversation
+    // away. Deletion is an ANCHOR-level act: right-click the anchor → Delete anchor. The core
+    // deleteComment API is untouched; it is simply not an affordance the Pane offers.
     // rows re-tint live when the injected category map changes (setActorColors), so an open popup
     // never keeps showing colors from the previous map.
     const tinted = [];
@@ -468,51 +468,87 @@ export function attachPanel(core, options = {}) {
       const wl = el(doc, 'span', 'tb-who'); wl.textContent = `${key}: `;
       return wl;
     };
-    const renderCommentRow = (c) => {
+    const commentRow = (c) => {
       const row = el(doc, 'div', 'tb-c');
-      const del = el(doc, 'span', 'tb-del'); del.textContent = '✕';
-      // deleting a comment takes ITS REPLY ROWS with it (they are siblings in the flat timeline, not
-      // children), then closes only when the last COMMENT is gone (reply/event rows are not comments).
-      del.onclick = () => {
-        core.deleteComment(c.id);
-        for (const r of (rowsByComment.get(c.id) || [])) r.remove();
-        rowsByComment.delete(c.id);
-        if (!exwrap.querySelector('.tb-c')) closePopup();
-      };
-      row.appendChild(del);
       const { icon } = c.reaction ? resolveReaction(reactions, c.reaction, i18n.active) : { icon: '' };
       const wl = whoLabel(c.author);
       if (wl) row.appendChild(wl);
       row.append(doc.createTextNode(`${icon ? icon + ' ' : ''}${c.body || t('popup.emojiOnly')}`));
       tintRow(row, wl, c.author);
-      trackRow(c.id, row);
-      exwrap.appendChild(row);
+      return row;
     };
-    const renderReplyRow = (rep, ownerId) => {
+    const replyRow = (rep) => {
       const row = el(doc, 'div', 'tb-c-reply');
       const wl = whoLabel(rep.author);
       if (wl) row.appendChild(wl);
       row.append(doc.createTextNode(rep.body || ''));
       tintRow(row, wl, rep.author);
-      trackRow(ownerId, row);
-      exwrap.appendChild(row);
+      return row;
     };
+    const eventRow = (evt) => { const er = el(doc, 'div', 'tb-ev'); er.textContent = t('event.' + evt.type); return er; };
     const events = (existing && existing[0] && existing[0].anchor && existing[0].anchor.events) || [];
     // ONE flat, time-ordered timeline (REQ-704): every comment AND every reply is its own row, appended
     // in chronological order and interleaved with the region's move/resize history — replies are NO
     // longer nested/indented under their comment; each row stands alone, attributed by actor color+label.
-    const timeline = [];
-    for (const c of existing || []) {
-      timeline.push({ t: String(c.createdAt || ''), kind: 'comment', c });
-      for (const rep of (c.replies || [])) timeline.push({ t: String(rep.createdAt || ''), kind: 'reply', rep, ownerId: c.id });
-    }
-    for (const evt of events) if (evt.type === 'move' || evt.type === 'resize') timeline.push({ t: String(evt.ts || ''), kind: 'event', evt });
-    timeline.sort((a, b) => a.t.localeCompare(b.t));
-    for (const item of timeline) {
-      if (item.kind === 'event') { const er = el(doc, 'div', 'tb-ev'); er.textContent = t('event.' + item.evt.type); exwrap.appendChild(er); }
-      else if (item.kind === 'reply') renderReplyRow(item.rep, item.ownerId);
-      else renderCommentRow(item.c);
-    }
+    // The rows on screen, in display order — the state a re-render reconciles against (thread.js
+    // decides WHAT goes WHERE; this only performs the DOM insertion it asks for).
+    const rows = [];              // [{ key, t, el }] in display order
+    const rowByKey = new Map();
+    const buildRow = (item) => (item.kind === 'event' ? eventRow(item.evt)
+      : item.kind === 'reply' ? replyRow(item.rep) : commentRow(item.c));
+    // REQ-702: a sent utterance is PENDING until the conversation answers it. Exactly one marker
+    // exists at a time — it belongs to the latest send — and it is settled by the only resolution
+    // signal the panel can observe on its own: another utterance landing in this thread (the
+    // integrator can still drive its own, richer resolution through the seam).
+    //
+    // Timing is the whole difficulty. `addComment` delivers `change` and `comment:add` SYNCHRONOUSLY,
+    // so an integrator that answers inside its `comment:add` handler has already replied by the time
+    // the commit call returns — before the marker is raised. Rows drawn during a commit are therefore
+    // recorded and judged once the marker exists, instead of being missed for good.
+    let sendState = null;      // null | 'pending' | 'failed'
+    let pendingNote = null;
+    let inFlight = null;       // rows drawn while a commit is in progress
+    const markSent = () => {
+      pendingNote?.remove();
+      pendingNote = el(doc, 'div', 'tb-pending-note');
+      pendingNote.textContent = lbl('popup.pending', 'sent — awaiting reply…');
+      exwrap.appendChild(pendingNote);
+      sendState = 'pending';
+    };
+    const settleSend = (signal) => {
+      if (sendState !== 'pending') return;
+      sendState = nextSendState(sendState, signal);
+      if (sendState === 'ok') { pendingNote?.remove(); pendingNote = null; sendState = null; }
+    };
+    const draw = (items) => {
+      const plan = planInsertions(rows, items);
+      const drawn = plan.map((p) => p.item);
+      if (inFlight) inFlight.push(...drawn);            // judged after the marker is raised
+      else if (answersSend(drawn)) settleSend('reply');  // an utterance — not an anchor move — answers
+      for (const { item, beforeKey } of plan) {
+        const node = buildRow(item);
+        const beforeEl = beforeKey ? rowByKey.get(beforeKey) : null;
+        if (beforeEl) exwrap.insertBefore(node, beforeEl); else exwrap.appendChild(node);
+        rowByKey.set(item.key, node);
+        const at = rows.findIndex((r) => r.t.localeCompare(item.t) > 0);
+        const rec = { key: item.key, t: item.t, el: node };
+        if (at === -1) rows.push(rec); else rows.splice(at, 0, rec);
+      }
+      return plan.length;
+    };
+    draw(timelineItems(existing, events));
+    // An OPEN thread keeps up with the conversation. Utterances arriving while the Pane is showing —
+    // an answer from another participant through the addReply seam, a comment committed elsewhere in
+    // the same thread — are drawn in place, at their chronological position. Rows already on screen
+    // are matched by key, so this is safe to run on every change; the input box, its draft and the
+    // reaction selection are never touched.
+    popupSync = () => {
+      if (threadKey == null) return;   // nothing to group by yet (an uncommitted region)
+      const group = core.listComments().filter((c) => threadKeyOf(c) === threadKey);
+      if (!group.length) return;
+      const evts = (group[0].anchor && group[0].anchor.events) || [];
+      if (draw(timelineItems(group, evts))) exwrap.scrollTop = exwrap.scrollHeight;
+    };
     // NOTE: there is still no inline reply BOX (Keisuke 2026-06-15: "Reply はちょっと Too Much") — a
     // reply enters through the seam (core.addReply), driven by the integrator. What changed in 0.9.1
     // is the DISPLAY: replies now render as flat, actor-labeled rows in this timeline (REQ-704), for
@@ -537,7 +573,12 @@ export function attachPanel(core, options = {}) {
     save.onclick = () => {
       const body = ta.value.trim();
       if (!canCommit(body, reactionId)) { clearDraft(); return closePopup(); }
-      const created = onSave(body, reactionId); clearDraft();
+      // watch what gets drawn while the commit runs: `addComment` delivers its events synchronously,
+      // so an answer can arrive before this call even returns.
+      inFlight = [];
+      let created, drawnDuringCommit;
+      try { created = onSave(body, reactionId); } finally { drawnDuringCommit = inFlight; inFlight = null; }
+      clearDraft();
       // the saved region is now a committed overlay (rendered via `change`); drop the pending draft rect.
       if (pendingRegionEl) { pendingRegionEl.remove(); pendingRegionEl = null; }
       // local/fire-and-forget → close; interactive transport → stay open as a conversation with a
@@ -551,12 +592,20 @@ export function attachPanel(core, options = {}) {
       ta.value = ''; reactionId = '';
       [...rwrap.children].forEach((x) => x.classList.remove('on'));
       updateSaveState();
-      // echo the just-sent utterance into the timeline. The popup renders its rows once, on open, so
-      // without this the message you just sent is the ONE utterance the conversation does not show —
-      // it sits in the model until the popup is reopened. It is the same row the next render would
-      // produce (deletable, actor-colored), followed by its own pending marker.
-      if (created && created.id) renderCommentRow(created);
-      const p = el(doc, 'div', 'tb-pending-note'); p.textContent = lbl('popup.pending', 'sent — awaiting reply…'); exwrap.appendChild(p);
+      // A brand-new region's thread identity only exists once its first comment does — adopt it now,
+      // then sync. Until this point the thread had no identity to match against, so NOTHING committed
+      // during it was drawn: not the utterance itself, and not an answer an integrator sent
+      // synchronously. Syncing here catches both, into the same batch, so the settlement below judges
+      // them as if they had arrived like any other. draw() is keyed, so nothing is drawn twice.
+      if (created && threadKey == null) threadKey = threadKeyOf(created);
+      inFlight = drawnDuringCommit;
+      try { popupSync(); } finally { inFlight = null; }
+      markSent();
+      // …and only now judge what landed during the commit. The utterance we just committed does not
+      // answer itself; anything else said in this thread does — including a reply an integrator sent
+      // synchronously from its `comment:add` handler, which would otherwise leave the marker waiting
+      // for an answer that had already arrived.
+      if (answersSend(drawnDuringCommit, created && created.id ? `c:${created.id}` : null)) settleSend('reply');
       exwrap.scrollTop = exwrap.scrollHeight;   // the newest rows are at the bottom of a scrolling thread
       ta.focus();
     };
@@ -595,7 +644,7 @@ export function attachPanel(core, options = {}) {
   }
   function openThread(comments, ev) {
     const a = comments[0].anchor;
-    openPopup({ anchorLabel: anchorLabelOf(a), existing: comments, draftKey: anchorKey(a), onSave: (body, reaction) => core.addComment({ anchor: a, body, reaction, threadId: comments[0].threadId || (a.type === 'region' || a.type === 'range' ? comments[0].id : undefined) }) }, ev);
+    openPopup({ anchorLabel: anchorLabelOf(a), existing: comments, draftKey: anchorKey(a), threadKey: threadKeyOf(comments[0]), onSave: (body, reaction) => core.addComment({ anchor: a, body, reaction, threadId: comments[0].threadId || (a.type === 'region' || a.type === 'range' ? comments[0].id : undefined) }) }, ev);
   }
   function anchorLabelOf(a) {
     if (a.type === 'region') return a.pageIndex != null ? `p.${a.pageIndex} region` : 'region';
@@ -626,7 +675,7 @@ export function attachPanel(core, options = {}) {
     } else {
       anchor = { type: 'block', elementId: elx.id };
     }
-    openPopup({ anchorLabel: anchorLabelOf(anchor), existing: [], draftKey: anchorKey(anchor), onSave: (body, reaction) => core.addComment({ anchor, body, reaction, snapshot }) }, e);
+    openPopup({ anchorLabel: anchorLabelOf(anchor), existing: [], draftKey: anchorKey(anchor), threadKey: threadKeyOf({ anchor }), onSave: (body, reaction) => core.addComment({ anchor, body, reaction, snapshot }) }, e);
   };
   const onContext = (e) => {
     if (e.target.closest('.tb-popup,.tb-panel')) return;
@@ -911,7 +960,9 @@ export function attachPanel(core, options = {}) {
   win.addEventListener?.('resize', queueRecalc);
 
   // ---- wire to core + initial render -----------------------------------------------------------
-  const offChange = core.on('change', renderMarks);
+  // one change → re-place the anchors, then let an open thread catch up with what was just said
+  const onChange = () => { renderMarks(); popupSync?.(); };
+  const offChange = core.on('change', onChange);
   const offRecalc = core.on('recalculate', renderMarks);
   // Flipping an attention flag changes exactly ONE class on the affected anchors. A full renderMarks
   // would rebuild every overlay — throwing away the elements an in-flight region move/resize drag is

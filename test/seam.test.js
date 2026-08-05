@@ -41,6 +41,31 @@ test('addReply to an unknown id throws COMMENT_NOT_FOUND', () => {
 
 // ---- submission modes (REQ-701) --------------------------------------------------------------
 
+// The panel's "sent — awaiting reply…" marker is settled by what arrives after a send, and it rests
+// on these two facts about how a commit delivers its events. If either changed, the marker would go
+// back to waiting forever for an answer that had already come — so they are pinned here, beside the
+// seam they belong to, rather than left as an assumption buried in the panel.
+test('a commit delivers change then comment:add, both BEFORE addComment returns', () => {
+  const tb = Tackback.mount({ document: { id: 'order' }, storage: memoryAdapter() });
+  const order = [];
+  tb.on('change', () => order.push('change'));
+  tb.on('comment:add', () => order.push('comment:add'));
+  const c = tb.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'hi' });
+  assert.deepEqual(order, ['change', 'comment:add'], 'both fired synchronously, in this order');
+  assert.ok(c && c.id, 'and only then did the call return');
+});
+
+test('an integrator replying from its comment:add handler has ALREADY replied when the commit returns', () => {
+  const tb = Tackback.mount({ document: { id: 'sync-reply' }, storage: memoryAdapter() });
+  tb.on('comment:add', (c) => tb.addReply(c.id, { body: 'instant answer', author: { id: 'helper', kind: 'assistant' } }));
+  const created = tb.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'a question' });
+  // the answer is already in the store — a UI that waits for a LATER event to notice it waits forever
+  assert.equal(tb.getComment(created.id).replies.length, 1, 'the answer landed during the commit');
+  // …and the object the commit RETURNED is a snapshot from before it, so reading `replies` off the
+  // return value is not a way to find that answer: the thread has to be re-read from the store.
+  assert.equal((created.replies || []).length, 0, 'the returned comment predates the reply');
+});
+
 test('mode 2 "send all": submitBatch emits submit:batch with the whole set; empty set = no-op', () => {
   const tb = mount();
   let batches = 0, lastPayload = null;

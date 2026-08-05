@@ -44,6 +44,21 @@ export function canCommit(body, reactionId) {
   return !!((body && String(body).trim()) || reactionId);
 }
 
+/**
+ * Whether a batch of newly drawn timeline rows answers a send that is waiting (REQ-702).
+ *
+ * Two things do NOT answer a send. An anchor move/resize is a record of the anchor being dragged
+ * about, not something anyone said — a region nudged while a send is outstanding must not clear the
+ * marker. And the send's own committed utterance cannot answer itself: it is drawn as soon as the
+ * commit lands, before the marker even exists.
+ * @param {Array<{kind?: string, key?: string}>} items   rows drawn in this batch
+ * @param {string|null} [ownKey]                         the key of the utterance just committed
+ * @returns {boolean}
+ */
+export function answersSend(items, ownKey = null) {
+  return (items || []).some((i) => (i.kind === 'comment' || i.kind === 'reply') && i.key !== ownKey);
+}
+
 /** The next state of a sent comment in an interactive conversation (REQ-702): pending → ok | failed. */
 export function nextSendState(current, signal) {
   if (signal === 'ack' || signal === 'reply') return 'ok';

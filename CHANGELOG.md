@@ -6,6 +6,43 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
 
 ## [Unreleased]
 
+## [0.9.2] — 2026-08-05
+Corrections from hands-on use of 0.9.1. Same rule as before: mechanism only — what a participant *is*,
+what a reaction *means*, and which colors stand for what all stay with the integrator.
+
+### Changed
+- **An anchor badge counts every utterance under it**, replies included. It counted root comments only,
+  so a thread that had drawn three answers still read as "1" from the page — the conversation was
+  invisible until you opened it. The panel's total now counts the same way, so the two agree.
+- **The thread Pane no longer offers a per-utterance delete.** A reply belongs to its comment and is
+  removed with it, so a per-row ✕ presented a granularity the model does not have: deleting one comment
+  could take a whole side of the conversation away with no warning. Deletion is an **anchor-level** act
+  — right-click an anchor → *Delete anchor*. `core.deleteComment` is unchanged for integrators with
+  their own rules.
+
+- **A sent utterance stops saying "awaiting reply" once it is answered.** The pending marker is
+  settled by another utterance landing in the thread, and only the latest send carries one — they used
+  to outlive the answer they were waiting for and stack up, one per send. Two things deliberately do
+  not settle it: an anchor being moved or resized (nobody said anything), and the send's own utterance.
+  An answer sent synchronously from a `comment:add` handler settles it too — that arrives before the
+  commit call has even returned.
+- **An open thread keeps up with the conversation.** Utterances that arrive while the Pane is showing —
+  an answer through the `addReply` seam, a comment committed elsewhere on the same anchor — are appended
+  in place instead of waiting for the next open. Rows already on screen are skipped by key, and the
+  input box, its draft and the reaction selection are untouched.
+
+### Docs / demo
+- README: the customization section now shows, in one snippet, how to replace the reaction set, the
+  theme tokens and the participant colors — the axes an integrator is expected to drive. New *Deleting*
+  section states the anchor-level model.
+- The demo gained a **Scenario** toggle: *local (Save)* — no transport, the popup closes on commit, the
+  backend-free shape — versus *conversation (Send)* — an interactive transport descriptor, so the popup
+  stays open and the simulated participant answers a beat after each Send. Simulating a reply against a
+  Save button was telling the wrong story about what the mode is.
+- The demo's alternative reaction set is now genuinely distinct (🚀🔁✂️💡🛑, five ids of its own) instead
+  of the default three plus one, and a new **Colors** toggle swaps the participant colors and the panel
+  theme tokens together — so both replaceability axes are visible in one page.
+
 ## [0.9.1] — 2026-08-05
 Multi-party rendering polish (a patch on the 0.9 Pane-thread work). All changes are generic library
 mechanism — no domain meaning (who is "AI", what "approval" or "unread" mean) is baked into Tackback;

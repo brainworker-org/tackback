@@ -8,7 +8,12 @@ any HTML, including Markdown rendered to HTML.
 
 **▶ Try the live demo: https://brainworker-org.github.io/tackback/** — right-click text to comment, right-drag over an image/diagram to comment a region, switch language/theme from the bottom-left bar.
 
-> **Version 0.9.1 (staging).** Pre-1.0: the API is functional and tested but may still change before
+> The hosted demo runs the **last published release** (it loads the package from a CDN), so it lags
+> this branch during pre-1.0 staging. To exercise what is in the source right now — the flat
+> multi-participant timeline, actor colors, attention, and the Save/Send scenarios — run
+> `demo/demo.html`: `npm run build`, serve the package root over http, and open it.
+
+> **Version 0.9.2 (staging).** Pre-1.0: the API is functional and tested but may still change before
 > the 1.0 stable release. The public API is the **JavaScript** API called in the browser (not an HTTP API).
 
 ## Install
@@ -75,18 +80,60 @@ attachPanel(tb, {
   a PDF page, or its own `id`; an unmarked, id-less surface is annotatable in-session only.
 
 ## Customization
-Three independent axes, all on the default panel:
-- **Theming** — `--tb-*` CSS variables; `theme: 'auto'` follows the OS light/dark preference live.
-- **Reactions** — a fully replaceable set of `{ id, icon, label }` (per-locale labels). The default set is
-  three plain sentiments (👍 `agree` / 👎 `disagree` / ❓ `question`) with no domain meaning attached.
+Four independent axes, all on the default panel — every one of them a plain option, so an integrator
+re-skins and re-labels Tackback without forking it or overriding its CSS:
+
+- **Reactions** — replace the whole set. The built-in default is three plain sentiments (👍 `agree` /
+  👎 `disagree` / ❓ `question`) with no domain meaning; yours can be any size, with your own ids,
+  icons and per-locale labels. Comments store the **id**, so swapping icons never touches stored data.
+- **Colors** — `--tb-*` theme tokens (a partial map layers over the OS light/dark base), plus
+  `actorColors` for the participant tints.
 - **Language** — `setLocale()` at runtime; English and Japanese ship, bring your own bundle.
-- **Panel controls** — `controls: { author, export, theme, marks, clear }` chooses which buttons
-  render. The theme switch is hidden by default (`auto` already follows the OS).
+- **Panel controls** — `controls: { author, export, import, theme, marks, clear }` chooses which
+  buttons render. The theme switch is hidden by default (`auto` already follows the OS).
+
+```js
+const panel = attachPanel(tb, {
+  reactions: [                                    // your set, not a variation of the default one
+    { id: 'ship',    icon: '🚀', label: { en: 'Ship it', ja: '出そう' } },
+    { id: 'rework',  icon: '🔁', label: { en: 'Rework',  ja: '要再考' } },
+    { id: 'blocker', icon: '🛑', label: { en: 'Blocker', ja: '障害'  } },
+  ],
+  theme: { '--tb-accent': '#0f766e', '--tb-pin-bg': '#0f766e', '--tb-attention': '#b45309' },
+  actorColors: { reviewer: '#0f766e', assistant: '#b45309' },
+});
+panel.setReactions(otherSet);      // …or swap any of them at runtime
+panel.setTheme('auto');
+panel.setActorColors(otherMap);
+```
+
+`demo/demo.html` flips all of these live from its bottom-left bar.
+
+## Deleting
+Deletion is an **anchor-level** act: right-click an anchor → *Delete anchor* removes that whole
+conversation. The thread Pane offers no per-utterance delete — a reply belongs to its comment and goes
+with it, so removing one row would silently take a whole side of the conversation away. The
+programmatic seam (`deleteComment`) is unchanged for integrators that want their own rules.
 
 ## Many participants in one thread
 A thread can hold utterances from several participants — people, and whatever else you wire into the
 `addReply` seam. The panel renders them as **one flat, time-ordered timeline** (no reply indent tree):
-every comment and reply is its own row, labelled and colored by who wrote it.
+every comment and reply is its own row, labelled and colored by who wrote it. An anchor badge counts
+**every utterance** under it — comments and replies alike — so a thread that drew three answers reads
+as busy from the page, without opening it. A thread that is **open** keeps up: an answer arriving
+through `addReply` is appended to the Pane in place, without disturbing what you are typing.
+
+Attach a transport descriptor and the Pane becomes a conversation rather than a note-taking box:
+
+```js
+tb.setTransport({ interactive: true });   // a DESCRIPTOR — Tackback never transports anything itself
+// the commit button now reads "Send", the Pane stays open after a send with a pending marker, and
+// your sent utterance appears in the timeline immediately. Answer it whenever your backend replies:
+tb.on('comment:add', (c) => myBackend.send(c).then((answer) =>
+  tb.addReply(c.id, { body: answer, author: { id: 'helper', kind: 'assistant' } })));
+```
+
+With no transport the button reads "Save" and the Pane closes on commit — the offline shape.
 
 Tackback assigns **no meaning** to who a participant is. It reads an opaque `kind` off the author and
 looks it up in a map *you* supply — it ships no categories and no colors of its own:
@@ -130,7 +177,7 @@ Type declarations (`.d.ts`, generated from JSDoc) ship with the package.
 
 ## Tests
 ```sh
-npm test     # node --test — 164 tests, zero external deps
+npm test     # node --test — the full suite, zero external deps
 ```
 `node:test` + `node:assert` are built into Node ≥ 18 — no install needed, matching the library's
 runtime zero-dependency ethos. DOM/PDF rendering is verified in the browser via the single bundled

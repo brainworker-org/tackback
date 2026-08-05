@@ -225,23 +225,39 @@
     mediaAdapters: pdf ? [pdf] : [],
   });
 
+  // A REPLACEMENT reaction set — deliberately nothing like the built-in one (👍 / 👎 / ❓). The set is
+  // yours: its size, its ids, its icons and its per-locale labels. Comments store the `id`, so an
+  // integrator can swap icons freely without touching stored data.
   const REVIEW_REACTIONS = [
-    { id: 'up',       icon: '👍', label: { en: 'Agree',    ja: '賛成' } },
-    { id: 'down',     icon: '👎', label: { en: 'Disagree', ja: '反対' } },
-    { id: 'question', icon: '❓', label: { en: 'Question', ja: '疑問' } },
-    { id: 'nit',      icon: '🔧', label: { en: 'Nit',      ja: 'nit' } },
+    { id: 'ship',   icon: '🚀', label: { en: 'Ship it',   ja: '出そう' } },
+    { id: 'rework',  icon: '🔁', label: { en: 'Rework',    ja: '要再考' } },
+    { id: 'cut',     icon: '✂️', label: { en: 'Cut',       ja: '削る' } },
+    { id: 'idea',    icon: '💡', label: { en: 'Idea',      ja: '案' } },
+    { id: 'blocker', icon: '🛑', label: { en: 'Blocker',   ja: '障害' } },
   ];
+
+  // …and a replacement COLOR scheme: the participant colors (by author.kind) plus the panel's own
+  // `--tb-*` theme tokens. Both are plain options — no fork, no CSS override file.
+  const ACTOR_COLORS = {
+    default: { human: '#db2777', ai: '#2563eb' },
+    alt:     { human: '#0f766e', ai: '#b45309' },
+  };
+  const ALT_THEME = {
+    '--tb-accent': '#0f766e', '--tb-mark-bg': 'rgba(15,118,110,.18)', '--tb-mark-outline': '#0f766e',
+    '--tb-pin-bg': '#0f766e', '--tb-pin-fg': '#ffffff', '--tb-attention': '#b45309',
+  };
+  let altColors = false;
 
   function attach() {
     panel?.destroy();
     panel = Tackback.attachPanel(tb, {
-      theme: 'auto',
+      theme: altColors ? ALT_THEME : 'auto',   // a token map layers over the OS light/dark base
       locale,
       controls: { theme: showTheme },
       reactions: useCustomReactions ? REVIEW_REACTIONS.slice() : undefined,
       // colors are INJECTED by the integrator, keyed by author.kind — Tackback bakes in no categories.
       // An anchor is tinted by its last speaker's category (here the human Reviewer → pink).
-      actorColors: { human: '#db2777', ai: '#2563eb' },
+      actorColors: ACTOR_COLORS[altColors ? 'alt' : 'default'],
     });
   }
   attach();
@@ -285,22 +301,48 @@
     b.classList.toggle('on', showTheme);
     attach();
   });
-  mkBtn('Reactions: default', (b) => {
+  mkBtn('Reactions: default 👍👎❓', (b) => {
     useCustomReactions = !useCustomReactions;
-    b.textContent = 'Reactions: ' + (useCustomReactions ? 'review set' : 'default');
+    b.textContent = 'Reactions: ' + (useCustomReactions ? 'custom 🚀🔁✂️💡🛑' : 'default 👍👎❓');
     b.classList.toggle('on', useCustomReactions);
+    attach();
+  });
+  // the whole color scheme — participant colors AND the panel's own tokens — is just options.
+  mkBtn('Colors: default', (b) => {
+    altColors = !altColors;
+    b.textContent = 'Colors: ' + (altColors ? 'custom' : 'default');
+    b.classList.toggle('on', altColors);
     attach();
   });
   // A SIMULATED second participant — the demo plays the integrator's part, so the multi-party
   // rendering is visible with no backend and no network. Everything domain-specific lives here in
   // the demo, never in the library: the 'assistant' category, its color, and the decision that a new
   // reply is worth flagging are all the integrator's. Tackback only renders what it is told.
+  //
+  // Two scenarios, because Tackback supports two shapes and they read differently:
+  //   local        — no transport: the button says Save, the popup closes on commit. The
+  //                  backend-free shape (comment, then Export JSON).
+  //   conversation — an INTERACTIVE transport descriptor: the button says Send, the popup stays open
+  //                  as a conversation, and the simulated participant answers a beat later. The
+  //                  descriptor is all Tackback knows — it never transports anything itself; the
+  //                  "answer" below is this page playing the integrator's part, with no network.
+  let scenario = 'local';
+  function applyScenario() {
+    tb.setTransport(scenario === 'conversation' ? { interactive: true } : null);
+  }
+  applyScenario();
   let simSeq = 0;
   const SIM_LINES = [
     'Looks resolvable — the anchor survives a reflow because it stores the quote, not an offset.',
     'One more thought: the region is normalized, so this holds at any zoom.',
     'Agreed. Nothing here depends on a backend.',
   ];
+  mkBtn('Scenario: local (Save)', (b) => {
+    scenario = scenario === 'local' ? 'conversation' : 'local';
+    b.textContent = 'Scenario: ' + (scenario === 'conversation' ? 'conversation (Send)' : 'local (Save)');
+    b.classList.toggle('on', scenario === 'conversation');
+    applyScenario();
+  });
   mkBtn('Simulate a reply', (b) => {
     const target = tb.listComments()[0];
     if (!target) {   // nudge in place — never a modal dialog, which would block the page
@@ -308,13 +350,24 @@
       setTimeout(() => { b.textContent = 'Simulate a reply'; }, 2200);
       return;
     }
-    tb.addReply(target.id, {
+    answerOn(target.id);
+  });
+  // The simulated participant's answer. In `conversation` scenario this also fires ~1.2s after every
+  // Send, which is the whole point of an interactive transport: you send, the Pane keeps the thread
+  // open with a pending marker, and the answer lands in it without a reopen.
+  function answerOn(commentId) {
+    if (!tb.getComment(commentId)) return;   // the thread was deleted while we waited
+    tb.addReply(commentId, {
       body: SIM_LINES[simSeq++ % SIM_LINES.length],
       author: { id: 'Assistant', kind: 'ai' },   // a category the DEMO defines, mapped to blue above
     });
     // the reply arrived while the reader may be elsewhere → raise the generic attention flag. What it
     // MEANS (here: "unread") is the demo's call; Tackback just paints --tb-attention on the anchor.
-    tb.setAnchorAttention(target.id, true);
+    tb.setAnchorAttention(commentId, true);
+  }
+  tb.on('comment:add', (c) => {
+    if (scenario !== 'conversation') return;
+    setTimeout(() => { if (scenario === 'conversation') answerOn(c.id); }, 1200);
   });
   // …and clear that flag when the thread is actually opened. Again: the library has no notion of
   // "read" — the integrator decides when the notice has served its purpose.
