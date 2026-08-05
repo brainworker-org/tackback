@@ -99,3 +99,18 @@ test('isValidAnchor: region rect bounds still enforced with optional fields pres
   const bad = { type: 'region', surfaceId: 'document', rect: { x: 0.9, y: 0, width: 0.5, height: 0.1 }, fallback: { elementId: 'p', dx: 0, dy: 0 } };
   assert.equal(isValidAnchor(bad), false);   // x+width > 1 — additive fields don't bypass validation
 });
+
+// --- 0.9.3: the document anchor — a conversation about the whole document, not a place in it ---
+
+test('isValidAnchor: a document anchor needs nothing beyond its type', () => {
+  assert.equal(isValidAnchor({ type: 'document' }), true);
+  // it carries no coordinates on purpose: its place is the document surface, which the instance
+  // already knows. Extra properties are tolerated, as they are for the other kinds.
+  assert.equal(isValidAnchor({ type: 'document', stray: 'ignored' }), true);
+});
+
+test('isValidAnchor: an unknown anchor kind is still rejected', () => {
+  assert.equal(isValidAnchor({ type: 'documnet' }), false, 'a typo must not slip through');
+  assert.equal(isValidAnchor({ type: 'workspace' }), false);
+  assert.equal(isValidAnchor({}), false);
+});

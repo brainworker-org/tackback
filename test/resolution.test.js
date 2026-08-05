@@ -194,3 +194,26 @@ test('resolveAnchorDom resolves a block by id, null when missing', () => {
   assert.ok(res && res.element.id === h2.id && res.rect === undefined);
   assert.equal(resolveAnchorDom({ type: 'block', elementId: 'gone' }, d, new Map()), null);
 });
+
+// --- 0.9.3: a document anchor's place IS the document surface ---
+
+test('resolveAnchorDom: a document anchor resolves to the document surface, with no rect', () => {
+  const el = { id: 'content-root' };
+  const surfaces = new Map([['document', { id: 'document', element: el }]]);
+  const r = resolveAnchorDom({ type: 'document' }, {}, surfaces);
+  assert.equal(r.element, el, 'it resolves to the registered document surface');
+  assert.equal(r.rect, undefined, 'the anchor is the surface, not a rectangle on it');
+});
+
+test('resolveAnchorDom: a document anchor with no surface registered resolves to null (headless core)', () => {
+  // a core-only mount with no root has no document surface — the anchor then behaves like any other
+  // unresolvable anchor rather than throwing.
+  assert.equal(resolveAnchorDom({ type: 'document' }, {}, new Map()), null);
+});
+
+test('resolveAnchorDom: an unknown anchor kind resolves to null instead of borrowing another kind', () => {
+  // before 0.9.3 an unknown type fell through into the region path and resolved against
+  // surfaces.get(undefined) — silently taking a different kind's resolution.
+  const surfaces = new Map([['document', { id: 'document', element: { id: 'x' } }]]);
+  assert.equal(resolveAnchorDom({ type: 'workspace' }, {}, surfaces), null);
+});
