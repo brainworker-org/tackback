@@ -84,6 +84,80 @@ test('importEnvelope migrates a LEGACY v1 export (ts/flat/emoji)', () => {
   assert.equal(c.reaction, '⚠️');
 });
 
+test('setAnchorAttention: flags/clears a generic attention state, idempotent, emits on change only', () => {
+  const tb = mountFresh();
+  const c = tb.addComment(blockInput());
+  const events = [];
+  tb.on('attention:change', (e) => events.push(e));
+  assert.equal(tb.hasAttention(c.id), false, 'no flag by default');
+  assert.equal(tb.setAnchorAttention(c.id), true, 'returns the new state');
+  assert.equal(tb.hasAttention(c.id), true);
+  assert.equal(tb.setAnchorAttention(c.id, true), true);   // idempotent — no second event
+  assert.equal(tb.setAnchorAttention(c.id, false), false);
+  assert.equal(tb.hasAttention(c.id), false);
+  assert.deepEqual(events, [{ id: c.id, on: true }, { id: c.id, on: false }], 'one event per real transition');
+});
+
+test('attention is session-only: never persisted or written into the export envelope', () => {
+  const tb = mountFresh();
+  const c = tb.addComment(blockInput());
+  tb.setAnchorAttention(c.id, true);
+  const env = tb.exportEnvelope();
+  assert.ok(!('attention' in env.comments[0]), 'export carries no attention field');
+  assert.equal(JSON.stringify(env).includes('attention'), false, 'envelope has no attention state at all');
+});
+
+test('deleting a flagged comment clears its attention flag', () => {
+  const tb = mountFresh();
+  const c = tb.addComment(blockInput());
+  tb.setAnchorAttention(c.id, true);
+  tb.deleteComment(c.id);
+  assert.equal(tb.hasAttention(c.id), false, 'a deleted comment carries no live flag');
+});
+
+test('a wiped comment drops its attention flag — a re-import of the same id does NOT resurrect it', () => {
+  const tb = mountFresh();
+  const c = tb.addComment(blockInput());
+  const envelope = tb.exportEnvelope();          // captured while the comment exists
+  tb.setAnchorAttention(c.id, true);
+  assert.equal(tb.hasAttention(c.id), true);
+  tb.importEnvelope({ ...envelope, comments: [] }, { mode: 'replace' });   // wipe
+  assert.equal(tb.hasAttention(c.id), false, 'the flag does not outlive its comment');
+  tb.importEnvelope(envelope, { mode: 'merge' });                          // the SAME id comes back
+  assert.equal(tb.hasAttention(c.id), false, 're-imported comments start unflagged');
+});
+
+test('attention flags survive unrelated commits (pruning only drops the dead ones)', () => {
+  const tb = mountFresh();
+  const a = tb.addComment(blockInput());
+  const b = tb.addComment(blockInput());
+  tb.setAnchorAttention(a.id, true);
+  tb.setAnchorAttention(b.id, true);
+  tb.deleteComment(b.id);
+  tb.addComment(blockInput());
+  assert.equal(tb.hasAttention(a.id), true, 'a live comment keeps its flag across other mutations');
+  assert.equal(tb.hasAttention(b.id), false);
+});
+
+test('setAnchorAttention on a destroyed instance throws (no state nobody can observe)', () => {
+  const tb = mountFresh();
+  const c = tb.addComment(blockInput());
+  tb.destroy();
+  assert.throws(() => tb.setAnchorAttention(c.id, true), /destroyed/);
+  assert.equal(tb.hasAttention(c.id), false);
+});
+
+test('getAuthor exposes the current author so a UI can patch it without dropping its category', () => {
+  const tb = mountFresh();
+  assert.equal(tb.getAuthor(), null, 'no author configured → null');
+  tb.setAuthor({ id: 'kei', kind: 'human' });
+  assert.deepEqual(tb.getAuthor(), { id: 'kei', kind: 'human' });
+  // the panel's name field patches `.id` and keeps the rest — the category survives a rename
+  tb.setAuthor({ ...tb.getAuthor(), id: 'keisuke' });
+  const c = tb.addComment(blockInput());
+  assert.deepEqual(c.author, { id: 'keisuke', kind: 'human' }, 'kind is not destroyed by a rename');
+});
+
 test('destroy: subsequent mutation throws, no events delivered', () => {
   const tb = mountFresh();
   let changes = 0;

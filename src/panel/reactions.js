@@ -10,18 +10,20 @@
  */
 
 /**
- * The built-in set — a broad palette that works out of the box. Replace it via the `reactions`
- * option for a purpose-built, focused set (e.g. a 4-button review set: 👍 / 👎 / ❓ / 🔧).
+ * The built-in set — a small, focused DEFAULT of three plain sentiments (👍 up / 👎 down / ❓ query).
+ * It is deliberately minimal: fewer icons read faster and cover the common "yes / no / unsure" verdict
+ * shape without Tackback assigning any DOMAIN meaning to them. The *meaning* of a reaction (e.g.
+ * treating 👍 as "approve" and 👎 as "send back" in a review workflow) belongs to the integrator, which
+ * reads `comment.reaction` (a stable id) — Tackback only records which reaction was applied.
+ *
+ * Replace the whole set via the `reactions` option for a purpose-built set with your own ids/labels
+ * (e.g. a review set: 👍 / 👎 / ❓ / 🔧). Changing an icon never breaks stored comments — they
+ * reference the id, and an unknown id renders literally (see resolveReaction).
  */
 export const DEFAULT_REACTIONS = [
   { id: 'agree', icon: '👍', label: { en: 'Agree', ja: '賛成' } },
   { id: 'disagree', icon: '👎', label: { en: 'Disagree', ja: '反対' } },
   { id: 'question', icon: '❓', label: { en: 'Question', ja: '疑問' } },
-  { id: 'concern', icon: '⚠️', label: { en: 'Concern', ja: '懸念' } },
-  { id: 'cut', icon: '✂️', label: { en: 'Cut', ja: '削る' } },
-  { id: 'good', icon: '✨', label: { en: 'Nice', ja: '良い' } },
-  { id: 'rethink', icon: '🔁', label: { en: 'Rethink', ja: '要再考' } },
-  { id: 'add', icon: '➕', label: { en: 'Add', ja: '追記希望' } },
 ];
 
 /**

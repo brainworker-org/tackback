@@ -92,7 +92,7 @@ const MATRIX = [
   ['REQ-701', 'TEST-611', 'L2', 'covered', 'seam.test three submission modes (export / submitBatch / comment:add)'],
   ['REQ-702', 'TEST-612', 'L3', 'covered', 'interaction.test popupCommit (save↔send by transport) + nextSendState (pending→ok/failed); browser-verified Send label'],
   ['REQ-703', 'TEST-613', 'L3', 'covered', 'interaction.test popupCommit (close vs stay-open when interactive); panel wires it (browser-verified)'],
-  ['REQ-704', 'TEST-614', 'L3', 'covered', 'panel renders thread inline: comment + non-deletable move/resize timeline + right-click delete-anchor (browser-verified). v1 has NO reply input (dropped — post-v1/Interplay); addReply core API + reply rendering stay dormant, covered by seam.test (core, post-v1)'],
+  ['REQ-704', 'TEST-614', 'L3', 'covered', 'panel renders thread inline as ONE flat, time-ordered timeline (0.9.1): every comment AND reply is its own actor-labeled row, interleaved with the non-deletable move/resize history; right-click delete-anchor (browser-verified). Still NO reply INPUT (post-v1/Interplay) — replies arrive via the addReply seam, covered by seam.test (core); the row logic behind the rendering (lastSpeaker / actorColorOf) is covered by actors.test, the commit-enable rule by interaction.test canCommit'],
   // NFRs (NFR-001..010 → TEST-701..710)
   ['NFR-001', 'TEST-701', 'L2', 'covered', 'conformance.test zero-dependency audit (below)'],
   ['NFR-002', 'TEST-702', 'L2', 'covered', 'conformance.test core no-network scan (below)'],

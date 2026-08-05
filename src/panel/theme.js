@@ -9,6 +9,10 @@ export const TOKENS = [
   '--tb-bg', '--tb-fg', '--tb-accent', '--tb-border',
   '--tb-mark-bg', '--tb-mark-outline', '--tb-pin-bg', '--tb-pin-fg',
   '--tb-popup-bg', '--tb-popup-fg', '--tb-muted', '--tb-danger',
+  // `--tb-attention` is the highlight an anchor wears while it carries an ATTENTION flag
+  // (setAnchorAttention). It is a generic "needs-notice" tint — the *meaning* of the flag (e.g.
+  // "unread") is the integrator's, never Tackback's. Override it like any other token.
+  '--tb-attention',
 ];
 
 export const LIGHT = {
@@ -16,6 +20,7 @@ export const LIGHT = {
   '--tb-mark-bg': 'rgba(255,210,0,.20)', '--tb-mark-outline': '#d9a400',
   '--tb-pin-bg': '#d9a400', '--tb-pin-fg': '#000000',
   '--tb-popup-bg': '#ffffff', '--tb-popup-fg': '#111111', '--tb-muted': '#777777', '--tb-danger': '#cc3333',
+  '--tb-attention': '#ef7f0e',
 };
 
 export const DARK = {
@@ -23,6 +28,7 @@ export const DARK = {
   '--tb-mark-bg': 'rgba(255,210,0,.16)', '--tb-mark-outline': '#d9a400',
   '--tb-pin-bg': '#d9a400', '--tb-pin-fg': '#000000',
   '--tb-popup-bg': '#2a2c2e', '--tb-popup-fg': '#eeeeee', '--tb-muted': '#aaaaaa', '--tb-danger': '#e06666',
+  '--tb-attention': '#f59331',
 };
 
 /**

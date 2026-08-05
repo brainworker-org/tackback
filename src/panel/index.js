@@ -8,7 +8,8 @@ import { DEFAULT_REACTIONS, resolveReaction } from './reactions.js';
 import { LocaleRegistry } from './i18n.js';
 import { indexAnnotatable, resolveAnchorDom, clampToViewport } from './dom.js';
 import { computeCapture, resolveRegionRect } from '../core/resolution.js';
-import { classifyGesture, popupCommit, applyHandleDrag } from './interaction.js';
+import { classifyGesture, popupCommit, canCommit, applyHandleDrag } from './interaction.js';
+import { actorColorOf as resolveActorColor, claimedColors, authorKey as tbAuthorKey, lastSpeaker } from './actors.js';
 import { documentSurface, DOCUMENT_SURFACE_ID } from '../core/media.js';
 import { normalizeRegion, buildQuoteSelector, resolveQuoteSelector } from '../core/anchor.js';
 import { selectionOffsetsWithin, offsetsToRange, paintHighlights, clearHighlights } from './range.js';
@@ -57,6 +58,11 @@ const PANEL_CSS = `
 .tb-hide .tb-badge, .tb-hide .tb-pin, .tb-hide .tb-region { display: none; }
 ::highlight(tb-range) { background: var(--tb-mark-bg); color: inherit; text-decoration: underline dotted var(--tb-mark-outline); }
 .tb-badge.tb-orphan { opacity: .7; }
+/* an anchor carrying a live ATTENTION flag (setAnchorAttention) wears a generic "needs-notice" tint.
+   It overrides the per-actor tint (which is set inline) via !important, and disappears the moment the
+   flag is cleared. The MEANING of the flag (e.g. "unread") is the integrator's — Tackback only paints
+   and clears it; it attaches no semantics of its own. */
+.tb-badge.tb-attn, .tb-pin.tb-attn { background: var(--tb-attention) !important; color: #fff !important; }
 .tb-popup { position: fixed; z-index: 10000; width: 320px; background: var(--tb-popup-bg); color: var(--tb-popup-fg);
   border: 1px solid var(--tb-border); border-radius: 10px; box-shadow: 0 8px 28px rgba(0,0,0,.35); padding: 11px; font: 13px -apple-system, system-ui, sans-serif; }
 .tb-popup .tb-anchor { font-size: 11px; color: var(--tb-muted); margin-bottom: 4px; }
@@ -66,12 +72,23 @@ const PANEL_CSS = `
 .tb-reactions button.on { background: var(--tb-mark-bg); border-color: var(--tb-mark-outline); font-weight: 700; }
 .tb-existing { margin-top: 7px; border-top: 1px solid var(--tb-border); padding-top: 5px; max-height: 130px; overflow: auto; font-size: 12px; }
 .tb-existing .tb-c { padding: 4px 0; border-bottom: 1px dotted var(--tb-border); }
+/* a reply renders as its OWN flat row in the timeline — NOT nested/indented under its comment (REQ-704):
+   every utterance (comment or reply) is one row appended in chronological order, each carrying its own
+   actor color + label so who-said-what stays legible without an indent tree. */
+.tb-existing .tb-c-reply { padding: 4px 0; border-bottom: 1px dotted var(--tb-border); font-size: 12px; }
+.tb-existing .tb-who { font-weight: 700; margin-right: 2px; }
 .tb-existing .tb-del { color: var(--tb-danger); cursor: pointer; float: right; font-weight: 700; margin-left: 8px; }
 /* a region's move/resize history rendered inline in the thread, alongside comments but NOT deletable (REQ-704/009). */
 .tb-existing .tb-ev { padding: 3px 0; border-bottom: 1px dotted var(--tb-border); color: var(--tb-muted); font-size: 11px; }
+/* the marker under a sent-but-unresolved utterance in a conversation (interactive transport, REQ-702):
+   the integrator resolves it via its own UI/events — the library never invents an ack. */
+.tb-existing .tb-pending-note { padding: 2px 0 5px; color: var(--tb-muted); font-size: 11px; font-style: italic; }
 .tb-acts { display: flex; gap: 6px; justify-content: flex-end; margin-top: 7px; }
 .tb-acts button { cursor: pointer; border: none; border-radius: 6px; padding: 6px 14px; }
 .tb-save { background: var(--tb-accent); color: #fff; } .tb-cancel { background: #bbb; color: #111; }
+/* the save/send button greys out while the input is empty (no text AND no reaction) — a commit needs
+   at least one, so an empty commit is never offered (REQ: Principal 2026-08-05). */
+.tb-save:disabled { background: #b9bcc0; color: #eef0f2; cursor: not-allowed; opacity: .65; }
 /* right-click context menu on an anchor (badge / region pin) → delete the whole anchor (REQ: Keisuke 2026-06-15). */
 .tb-ctxmenu { position: fixed; z-index: 10001; background: var(--tb-popup-bg); color: var(--tb-popup-fg); border: 1px solid var(--tb-border); border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,.35); padding: 4px; font: 13px -apple-system, system-ui, sans-serif; min-width: 140px; }
 .tb-ctxmenu .tb-ctxitem { padding: 7px 10px; border-radius: 6px; cursor: pointer; }
@@ -80,7 +97,10 @@ const PANEL_CSS = `
 
 /**
  * @param {import('../core/engine.js').TackbackInstance} core
- * @param {object} [options]  { root?, theme?, reactions?, locale?, labels?, target?, controls? }
+ * @param {object} [options]  { root?, theme?, reactions?, actorColors?, locale?, labels?, target?, controls? }
+ *   `actorColors` maps an author CATEGORY (`author.kind`, opaque to Tackback) to a CSS color, e.g.
+ *   `{ ai: '#2563eb', human: '#db2777' }`; an anchor is tinted by its last speaker's category. With
+ *   no map, authors fall back to a generic per-identity hue. Tackback ships no categories or colors.
  *   `controls` selects which panel buttons are shown (the rest still work via the API). Defaults:
  *   `{ author: true, export: true, theme: false, marks: true, clear: true }` — the theme switch is
  *   hidden by default because `auto` (live OS dark-mode follow) is the right default; pass
@@ -91,7 +111,19 @@ export function attachPanel(core, options = {}) {
   const win = doc.defaultView || globalThis;
   const root = options.root || doc.body;
   const target = options.target || doc.body;
-  const reactions = options.reactions || DEFAULT_REACTIONS;
+  // COPY the set: `setReactions` mutates this array in place (closures capture its identity), so
+  // sharing the exported DEFAULT_REACTIONS singleton would let one panel's setReactions rewrite the
+  // library default for every other consumer in the page.
+  const reactions = [...(options.reactions || DEFAULT_REACTIONS)];
+  // `actorColors` is an OPTIONAL, integrator-supplied map from an author CATEGORY (author.kind — an
+  // opaque string to Tackback) to a CSS color, e.g. `{ ai: '#2563eb', human: '#db2777' }`. Tackback
+  // ships NO built-in categories or colors: it does not know what 'ai' or 'human' mean — it only tints
+  // an anchor by the LAST speaker's category using whatever map the caller injects here. With no map,
+  // an anchor falls back to a generic per-identity color (deterministic hash of the author key).
+  let actorColors = { ...(options.actorColors || {}) };
+  // colors the injected map has claimed — the fallback hues are drawn from the palette MINUS these,
+  // so an UNMAPPED author can never be painted the same color as a mapped category (see actors.js).
+  let claimed = claimedColors(actorColors);
   const i18n = new LocaleRegistry();
   if (options.labels) for (const [lang, b] of Object.entries(options.labels)) i18n.register(lang, b);
   if (options.locale) i18n.setLocale(options.locale);
@@ -164,7 +196,17 @@ export function attachPanel(core, options = {}) {
   if (controls.author) {
     authorInput = el(doc, 'input');
     authorInput.placeholder = t('panel.authorPlaceholder');
-    authorInput.onchange = () => core.setAuthor(authorInput.value.trim() || null);
+    const currentAuthor = core.getAuthor?.() ?? null;
+    if (currentAuthor) authorInput.value = typeof currentAuthor === 'string' ? currentAuthor : (currentAuthor.id || '');
+    // The field edits the author's NAME only. When the integrator mounted with a provenance object
+    // (`{ id, kind }`), patch `.id` and keep the rest — replacing the object would drop `kind` and
+    // silently disable every category-based rendering the integrator configured.
+    authorInput.onchange = () => {
+      const name = authorInput.value.trim();
+      const cur = core.getAuthor?.() ?? null;
+      if (cur && typeof cur === 'object') core.setAuthor({ ...cur, id: name || undefined });
+      else core.setAuthor(name || null);
+    };
     panel.appendChild(authorInput);
   }
   let exportBtn = null;
@@ -219,6 +261,20 @@ export function attachPanel(core, options = {}) {
     badge.style.top = (rect.top - rootRect.top) + 'px';
     root.appendChild(badge);
   }
+  // Resolve an author to its display color: the caller-injected category color (author.kind → color)
+  // wins; otherwise a generic, deterministic per-identity hue disjoint from that map (actors.js).
+  // Tackback bakes in no category semantics — 'ai'/'human'/etc. are meaningful only if mapped.
+  const actorColorOf = (author) => resolveActorColor(author, actorColors, claimed);
+  // Paint an anchor node (badge / region pin) at its NORMAL color = the color of the LAST speaker in the
+  // thread (the most recent comment OR reply by timestamp) — so an anchor reads as "who touched it last".
+  // A live ATTENTION flag on any comment in the group overrides this with the generic --tb-attention
+  // tint (applied as a class so its !important beats the inline actor color). Both are pure rendering:
+  // the "last speaker" mechanism and the attention flag carry no domain meaning of their own.
+  function paintAnchor(node, comments) {
+    const col = actorColorOf(lastSpeaker(comments));
+    if (col) { node.style.background = col; node.style.color = '#fff'; }
+    if (comments.some((c) => core.hasAttention(c.id))) node.classList.add('tb-attn');
+  }
   function renderMarks() {
     const currentOrphans = new Set();
     // collect orphan/resolve decisions during the render and APPLY them after the pass — calling
@@ -255,7 +311,7 @@ export function attachPanel(core, options = {}) {
       const r = resolveAnchorDom(comments[0].anchor, doc, core.surfaces);
       const badge = el(doc, 'span', 'tb-badge');
       badge.textContent = '💬' + comments.length;
-      tbTintBadge(badge, comments);
+      paintAnchor(badge, comments);
       badge.__tbComments = comments;   // for the right-click delete-anchor menu
       badge.onclick = (ev) => { ev.stopPropagation(); openThread(comments, ev); };
       if (!r) {   // unresolvable block → orphaned (REQ-004): never silently dropped, shown dimmed at the surface origin
@@ -277,7 +333,7 @@ export function attachPanel(core, options = {}) {
       const range = hit ? offsetsToRange(element, hit.start, hit.end) : null;
       const badge = el(doc, 'span', 'tb-badge');
       badge.textContent = '💬' + comments.length;
-      tbTintBadge(badge, comments);
+      paintAnchor(badge, comments);
       badge.__tbComments = comments;   // for the right-click delete-anchor menu
       badge.onclick = (ev) => { ev.stopPropagation(); openThread(comments, ev); };
       if (range) {
@@ -299,7 +355,7 @@ export function attachPanel(core, options = {}) {
         markOrphan(group.comments);
         const obadge = el(doc, 'span', 'tb-badge tb-orphan');
         obadge.textContent = '💬' + group.comments.length;
-        tbTintBadge(obadge, group.comments);
+        paintAnchor(obadge, group.comments);
         obadge.__tbComments = group.comments;
         obadge.title = group.anchor.surfaceId || 'region';
         obadge.onclick = (ev) => { ev.stopPropagation(); openThread(group.comments, ev); };
@@ -324,7 +380,7 @@ export function attachPanel(core, options = {}) {
       const pin = el(doc, 'span', 'tb-pin');   // the anchor icon — left-CLICK opens the thread, left-DRAG moves the region (REQ-008). The pin look is COMMON across surfaces (Keisuke 2026-06-16: distinguish by the region border only — the pin is too small to read); the binding is conveyed by the box border + this tooltip.
       if (boundToSurface) pin.title = `bound to surface "${group.anchor.surfaceId}" — moves & scales with it`;
       pin.textContent = '💬' + group.comments.length;
-      tbTintBadge(pin, group.comments);
+      paintAnchor(pin, group.comments);
       pin.__tbComments = group.comments;   // for the right-click delete-anchor menu
       Object.assign(pin.style, { left: (px.x + px.width) + 'px', top: (px.y + px.height) + 'px' });
       // NOTE: opening the thread on a plain icon click is handled in endHandleDrag (a no-move pointerup),
@@ -347,6 +403,7 @@ export function attachPanel(core, options = {}) {
   let popup = null;
   let popupCleanup = null;
   let popupRelabel = null;    // re-labels the open popup in place when the locale changes (preserves input)
+  let popupRetint = null;     // re-tints the open popup's rows when the actor color map changes
   const drafts = new Map();   // anchor key -> { body, reaction } — unsaved input preserved across dismiss
   function anchorKey(a) {
     if (!a) return null;
@@ -357,7 +414,7 @@ export function attachPanel(core, options = {}) {
   // The pending region's lifetime IS the popup's: closing the popup (outside-click, Escape, Cancel,
   // empty save) removes the dashed rect, so no orphaned region ever lingers (Keisuke 2026-06-15).
   function closePopup() {
-    popupCleanup?.(); popupCleanup = null; popupRelabel = null; popup?.remove(); popup = null;
+    popupCleanup?.(); popupCleanup = null; popupRelabel = null; popupRetint = null; popup?.remove(); popup = null;
     if (pendingRegionEl) { pendingRegionEl.remove(); pendingRegionEl = null; }
     doc.documentElement.classList.remove('tb-popup-open');   // region affordances (resize grip / move cursor) re-enabled
   }
@@ -376,71 +433,132 @@ export function attachPanel(core, options = {}) {
       const { icon, label } = resolveReaction(reactions, def.id, i18n.active);
       b.textContent = `${icon} ${label}`; b.title = label;
       if (def.id === reactionId) b.classList.add('on');   // restore preserved reaction
-      b.onclick = () => { reactionId = reactionId === def.id ? '' : def.id; [...rwrap.children].forEach((x) => x.classList.toggle('on', x === b && !!reactionId)); };
+      b.onclick = () => { reactionId = reactionId === def.id ? '' : def.id; [...rwrap.children].forEach((x) => x.classList.toggle('on', x === b && !!reactionId)); updateSaveState(); };
       rwrap.appendChild(b);
     }
     const lbl = (k, fb) => { const v = t(k); return v === k ? fb : v; };   // i18n with a literal fallback
     const commit = popupCommit(core.getTransport());   // save vs send + close vs stay-open (REQ-702/703)
     const exwrap = el(doc, 'div', 'tb-existing');
-    // Render the thread inline as a TIME-ORDERED timeline (REQ-704): comments interleaved with the
-    // region's move/resize history (REQ-009). Comments are deletable; move/resize event rows are NOT —
-    // they are an immutable record of how the anchor was repositioned (Keisuke 2026-06-15). Replies are
-    // fed via the seam (addReply); the panel only displays + reports them.
+    // Render the thread inline as ONE flat, TIME-ORDERED timeline (REQ-704): every utterance —
+    // comment or reply — is its own row carrying its actor color + label, interleaved with the
+    // region's move/resize history (REQ-009). A comment is deletable; a reply is not (replies arrive
+    // through the addReply seam), and move/resize rows never are — they are an immutable record of how
+    // the anchor was repositioned (Keisuke 2026-06-15).
+    // Because the rows are FLAT SIBLINGS, a comment's replies are no longer carried by its DOM
+    // subtree: each row registers under the id of the comment it belongs to, so deleting that comment
+    // removes the whole group. Without this a delete would leave its replies on screen as orphan rows.
+    const rowsByComment = new Map();   // comment id -> [row, ...its reply rows]
+    const trackRow = (ownerId, row) => {
+      const rows = rowsByComment.get(ownerId) || rowsByComment.set(ownerId, []).get(ownerId);
+      rows.push(row);
+    };
+    // rows re-tint live when the injected category map changes (setActorColors), so an open popup
+    // never keeps showing colors from the previous map.
+    const tinted = [];
+    const applyTint = (r) => {
+      const col = actorColorOf(r.author);
+      r.row.style.borderLeft = col ? `3px solid ${col}` : '';
+      r.row.style.paddingLeft = col ? '6px' : '';
+      if (r.who) r.who.style.color = col || 'inherit';
+    };
+    const tintRow = (row, who, author) => { const r = { row, who, author }; tinted.push(r); applyTint(r); };
+    const whoLabel = (author) => {
+      const key = tbAuthorKey(author);
+      if (!key) return null;
+      const wl = el(doc, 'span', 'tb-who'); wl.textContent = `${key}: `;
+      return wl;
+    };
     const renderCommentRow = (c) => {
       const row = el(doc, 'div', 'tb-c');
-      const col = tbAuthorColor(c.author);
-      if (col) { row.style.borderLeft = `3px solid ${col}`; row.style.paddingLeft = '6px'; }
       const del = el(doc, 'span', 'tb-del'); del.textContent = '✕';
-      del.onclick = () => { core.deleteComment(c.id); row.remove(); if (!exwrap.querySelector('.tb-c')) closePopup(); };  // close only when the last COMMENT is gone (event rows are not comments)
+      // deleting a comment takes ITS REPLY ROWS with it (they are siblings in the flat timeline, not
+      // children), then closes only when the last COMMENT is gone (reply/event rows are not comments).
+      del.onclick = () => {
+        core.deleteComment(c.id);
+        for (const r of (rowsByComment.get(c.id) || [])) r.remove();
+        rowsByComment.delete(c.id);
+        if (!exwrap.querySelector('.tb-c')) closePopup();
+      };
       row.appendChild(del);
       const { icon } = c.reaction ? resolveReaction(reactions, c.reaction, i18n.active) : { icon: '' };
-      const whoKey = tbAuthorKey(c.author);
-      if (whoKey) { const wl = el(doc, 'span'); wl.textContent = ` ${whoKey}: `; wl.style.color = col || 'inherit'; wl.style.fontWeight = '700'; row.appendChild(wl); }
+      const wl = whoLabel(c.author);
+      if (wl) row.appendChild(wl);
       row.append(doc.createTextNode(`${icon ? icon + ' ' : ''}${c.body || t('popup.emojiOnly')}`));
-      for (const rep of (c.replies || [])) {   // ordered by createdAt (REQ-307)
-        const rr = el(doc, 'div', 'tb-reply');
-        const rcol = tbAuthorColor(rep.author);
-        if (rcol) { rr.style.borderLeft = `3px solid ${rcol}`; rr.style.paddingLeft = '6px'; }
-        const rwho = tbAuthorKey(rep.author);
-        rr.textContent = `↳ ${rwho ? rwho + ': ' : ''}${rep.body}`;
-        row.appendChild(rr);
-      }
+      tintRow(row, wl, c.author);
+      trackRow(c.id, row);
+      exwrap.appendChild(row);
+    };
+    const renderReplyRow = (rep, ownerId) => {
+      const row = el(doc, 'div', 'tb-c-reply');
+      const wl = whoLabel(rep.author);
+      if (wl) row.appendChild(wl);
+      row.append(doc.createTextNode(rep.body || ''));
+      tintRow(row, wl, rep.author);
+      trackRow(ownerId, row);
       exwrap.appendChild(row);
     };
     const events = (existing && existing[0] && existing[0].anchor && existing[0].anchor.events) || [];
+    // ONE flat, time-ordered timeline (REQ-704): every comment AND every reply is its own row, appended
+    // in chronological order and interleaved with the region's move/resize history — replies are NO
+    // longer nested/indented under their comment; each row stands alone, attributed by actor color+label.
     const timeline = [];
-    for (const c of existing || []) timeline.push({ t: String(c.createdAt || ''), kind: 'comment', c });
+    for (const c of existing || []) {
+      timeline.push({ t: String(c.createdAt || ''), kind: 'comment', c });
+      for (const rep of (c.replies || [])) timeline.push({ t: String(rep.createdAt || ''), kind: 'reply', rep, ownerId: c.id });
+    }
     for (const evt of events) if (evt.type === 'move' || evt.type === 'resize') timeline.push({ t: String(evt.ts || ''), kind: 'event', evt });
     timeline.sort((a, b) => a.t.localeCompare(b.t));
     for (const item of timeline) {
       if (item.kind === 'event') { const er = el(doc, 'div', 'tb-ev'); er.textContent = t('event.' + item.evt.type); exwrap.appendChild(er); }
+      else if (item.kind === 'reply') renderReplyRow(item.rep, item.ownerId);
       else renderCommentRow(item.c);
     }
-    // NOTE: the inline reply box is DROPPED from v1 (Keisuke 2026-06-15: "Reply はちょっと Too Much").
-    // Replies (a conversation under a comment) return on the Interplay track when many intelligences
-    // communicate (REQ-307/704 = post-v1). The core addReply API + reply rendering above stay dormant.
+    // NOTE: there is still no inline reply BOX (Keisuke 2026-06-15: "Reply はちょっと Too Much") — a
+    // reply enters through the seam (core.addReply), driven by the integrator. What changed in 0.9.1
+    // is the DISPLAY: replies now render as flat, actor-labeled rows in this timeline (REQ-704), for
+    // the multi-party conversation the Interplay track drives.
     const acts = el(doc, 'div', 'tb-acts');
     const cancel = btn(doc, t('popup.cancel'), 'tb-cancel');
     const save = btn(doc, commit.action === 'send' ? lbl('popup.send', 'Send') : t('popup.save'), 'tb-save');
+    // The commit button greys out (disabled) whenever the input is empty — no body text AND no reaction
+    // — and re-enables the instant either is present. A commit needs at least one, so an empty commit is
+    // never offered (pure UX; no domain meaning). Hoisted so the reaction handlers above can call it.
+    function updateSaveState() { save.disabled = !canCommit(ta.value, reactionId); }
+    ta.addEventListener('input', updateSaveState);
+    updateSaveState();   // initial: reflects any restored draft (body/reaction)
     const clearDraft = () => { if (draftKey != null) drafts.delete(draftKey); };
     // preserve unsaved input on dismiss-by-outside-click / Escape; explicit Cancel discards it.
     const preserveDraft = () => {
       if (draftKey == null) return;
-      if (ta.value.trim() || reactionId) drafts.set(draftKey, { body: ta.value, reaction: reactionId });
+      if (canCommit(ta.value, reactionId)) drafts.set(draftKey, { body: ta.value, reaction: reactionId });
       else drafts.delete(draftKey);
     };
     cancel.onclick = () => { clearDraft(); closePopup(); };   // closePopup removes the pending region too
     save.onclick = () => {
       const body = ta.value.trim();
-      if (!body && !reactionId) { clearDraft(); return closePopup(); }
-      onSave(body, reactionId); clearDraft();
+      if (!canCommit(body, reactionId)) { clearDraft(); return closePopup(); }
+      const created = onSave(body, reactionId); clearDraft();
       // the saved region is now a committed overlay (rendered via `change`); drop the pending draft rect.
       if (pendingRegionEl) { pendingRegionEl.remove(); pendingRegionEl = null; }
       // local/fire-and-forget → close; interactive transport → stay open as a conversation with a
       // pending indicator until the integrator reports ack/reply (REQ-702/703). No real transport in
       // the standalone lib, so the integrator drives the resolution via its own UI/events.
       if (commit.closeOnCommit) return closePopup();
-      ta.value = ''; const p = el(doc, 'div', 'tb-pending-note'); p.textContent = lbl('popup.pending', 'sent — awaiting reply…'); exwrap.appendChild(p); ta.focus();
+      // staying open: reset the WHOLE input — text, reaction, and the button state. Clearing
+      // `ta.value` fires no `input` event, so without this the button would stay enabled over an
+      // empty box and the next click would fall into the empty-commit branch above and close the
+      // conversation. The reaction must clear too, or it would ride along on the next send.
+      ta.value = ''; reactionId = '';
+      [...rwrap.children].forEach((x) => x.classList.remove('on'));
+      updateSaveState();
+      // echo the just-sent utterance into the timeline. The popup renders its rows once, on open, so
+      // without this the message you just sent is the ONE utterance the conversation does not show —
+      // it sits in the model until the popup is reopened. It is the same row the next render would
+      // produce (deletable, actor-colored), followed by its own pending marker.
+      if (created && created.id) renderCommentRow(created);
+      const p = el(doc, 'div', 'tb-pending-note'); p.textContent = lbl('popup.pending', 'sent — awaiting reply…'); exwrap.appendChild(p);
+      exwrap.scrollTop = exwrap.scrollHeight;   // the newest rows are at the bottom of a scrolling thread
+      ta.focus();
     };
     acts.append(cancel, save);
     popup.append(anchorEl, ta, rwrap, exwrap, acts);
@@ -449,7 +567,9 @@ export function attachPanel(core, options = {}) {
     const pos = clampToViewport(ev?.clientX ?? 120, ev?.clientY ?? 120, popup.offsetWidth, popup.offsetHeight, vw, vh);
     Object.assign(popup.style, { left: pos.x + 'px', top: pos.y + 'px' });
     ta.focus();
-    ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) save.click(); });
+    // Cmd/Ctrl+Enter commits — but only when the button itself would: the keyboard path must obey the
+    // same empty-commit rule, never dismiss the popup as a side effect of an empty box.
+    ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !save.disabled) save.click(); });
     // dismiss on click outside the popup or Escape. Block/range keep the unsaved draft (restorable on
     // reopen); a PENDING region is ephemeral — its rect is removed on close (REQ-012) and would never
     // recur, so its draft is DISCARDED too, per REQ-703 (Keisuke: a dismissed uncommitted region keeps
@@ -460,6 +580,7 @@ export function attachPanel(core, options = {}) {
     const register = () => { doc.addEventListener('mousedown', onDocDown, true); doc.addEventListener('keydown', onKey, true); };
     (globalThis.setTimeout || ((f) => f()))(register, 0);   // defer so the opening event doesn't self-dismiss
     popupCleanup = () => { doc.removeEventListener('mousedown', onDocDown, true); doc.removeEventListener('keydown', onKey, true); };
+    popupRetint = () => { for (const r of tinted) applyTint(r); };
     // re-label the popup in place when the locale changes (input is preserved — no rebuild)
     popupRelabel = () => {
       ta.placeholder = t('popup.placeholder');
@@ -792,6 +913,17 @@ export function attachPanel(core, options = {}) {
   // ---- wire to core + initial render -----------------------------------------------------------
   const offChange = core.on('change', renderMarks);
   const offRecalc = core.on('recalculate', renderMarks);
+  // Flipping an attention flag changes exactly ONE class on the affected anchors. A full renderMarks
+  // would rebuild every overlay — throwing away the elements an in-flight region move/resize drag is
+  // holding — so the flag is applied as a targeted toggle instead. The flag is re-read from the core
+  // (not from the event) so the "any comment in the anchor" grouping matches the render path exactly.
+  function syncAttention() {
+    doc.querySelectorAll('.tb-badge,.tb-pin').forEach((node) => {
+      const cs = node.__tbComments;
+      if (cs) node.classList.toggle('tb-attn', cs.some((c) => core.hasAttention(c.id)));
+    });
+  }
+  const offAttention = core.on('attention:change', syncAttention);
   const offReady = core.on('ready', () => { hintEl.textContent = core.surfaces.size ? t('hint.pdf') : t('hint.html'); renderMarks(); });
   renderMarks();
 
@@ -799,11 +931,14 @@ export function attachPanel(core, options = {}) {
   return {
     setTheme(theme) { currentTheme = theme; applyTheme(theme); if (themeBtn) themeBtn.textContent = themeLabel(); },
     setReactions(defs) { reactions.length = 0; reactions.push(...defs); },
+    // Update the injected category→color map live (the integrator owns the mapping; Tackback just
+    // applies it to the last-speaker tint). Pass `{}` to clear back to the generic per-identity hues.
+    setActorColors(map) { actorColors = { ...(map || {}) }; claimed = claimedColors(actorColors); renderMarks(); popupRetint?.(); },
     setLocale(lang) { const ok = i18n.setLocale(lang); relabel(); return ok; },
     registerLocale(lang, bundle) { i18n.register(lang, bundle); },
     toggleMarks() { doc.documentElement.classList.toggle('tb-hide'); },
     destroy() {
-      offChange(); offRecalc(); offReady(); offDocSurface();
+      offChange(); offRecalc(); offAttention(); offReady(); offDocSurface();
       doc.removeEventListener('contextmenu', onContext); doc.removeEventListener('contextmenu', onCtxPdf);
       doc.removeEventListener('pointerdown', onPointerDown); doc.removeEventListener('pointermove', onMove); doc.removeEventListener('pointerup', onUp); doc.removeEventListener('pointercancel', onCancel);
       doc.removeEventListener('lostpointercapture', finalizeFromCaptureLoss); win.removeEventListener?.('blur', finalizeFromCaptureLoss);
@@ -833,22 +968,7 @@ export function attachPanel(core, options = {}) {
 function el(doc, tag, cls) { const e = doc.createElement(tag); if (cls) e.className = cls; return e; }
 function btn(doc, text, cls) { const b = el(doc, 'button', cls); b.textContent = text; return b; }
 function ensurePositioned(elx) { const pos = getComputedStyle(elx).position; if (pos === 'static') elx.style.position = 'relative'; }
-// Author → deterministic color, so "who said what" is visible at a glance (restores per-author
-// color-coding). A single-author thread tints its badge; the thread popup colors each comment by author.
-const TB_AUTHOR_PALETTE = ['#2563eb', '#dc2626', '#059669', '#d97706', '#7c3aed', '#0891b2', '#db2777', '#65a30d'];
-function tbAuthorKey(a) { return !a ? '' : (typeof a === 'string' ? a : (a.id || a.kind || '')); }
-function tbAuthorColor(a) {
-  const k = tbAuthorKey(a);
-  if (!k) return '';          // anonymous / unnamed → the lively default accent (not a drab grey); named &
-                              // AI authors still get a distinct palette hue, so human-vs-AI stays visible
-  let h = 0; for (let i = 0; i < k.length; i++) h = (h * 31 + k.charCodeAt(i)) >>> 0;
-  return TB_AUTHOR_PALETTE[h % TB_AUTHOR_PALETTE.length];
-}
-// Tint a badge when every comment in its thread shares one author (mixed-author → leave the default).
-function tbTintBadge(badge, comments) {
-  const keys = new Set(comments.map((c) => tbAuthorKey(c.author)));
-  if (keys.size === 1) { const col = tbAuthorColor(comments[0].author); if (col) { badge.style.background = col; badge.style.color = '#fff'; } }
-}
+// Author → color and "who spoke last" live in ./actors.js (DOM-free, unit-tested), imported above.
 
 // Import modal: paste an exported envelope and merge it in (REQ-204). Merge + skip-on-conflict so an
 // incoming envelope ADDS comments (an AI participant's anchored replies/contributions) without
