@@ -113,7 +113,20 @@ A thread can hold utterances from several participants — people, and whatever 
 `addReply` seam. The panel renders them as **one flat, time-ordered timeline** (no reply indent tree):
 every comment and reply is its own row, labelled and colored by who wrote it. An anchor badge counts
 **every utterance** under it — comments and replies alike — so a thread that drew three answers reads
-as busy from the page, without opening it.
+as busy from the page, without opening it. A thread that is **open** keeps up: an answer arriving
+through `addReply` is appended to the Pane in place, without disturbing what you are typing.
+
+Attach a transport descriptor and the Pane becomes a conversation rather than a note-taking box:
+
+```js
+tb.setTransport({ interactive: true });   // a DESCRIPTOR — Tackback never transports anything itself
+// the commit button now reads "Send", the Pane stays open after a send with a pending marker, and
+// your sent utterance appears in the timeline immediately. Answer it whenever your backend replies:
+tb.on('comment:add', (c) => myBackend.send(c).then((answer) =>
+  tb.addReply(c.id, { body: answer, author: { id: 'helper', kind: 'assistant' } })));
+```
+
+With no transport the button reads "Save" and the Pane closes on commit — the offline shape.
 
 Tackback assigns **no meaning** to who a participant is. It reads an opaque `kind` off the author and
 looks it up in a map *you* supply — it ships no categories and no colors of its own:

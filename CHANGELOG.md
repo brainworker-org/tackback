@@ -20,10 +20,19 @@ what a reaction *means*, and which colors stand for what all stay with the integ
   — right-click an anchor → *Delete anchor*. `core.deleteComment` is unchanged for integrators with
   their own rules.
 
+- **An open thread keeps up with the conversation.** Utterances that arrive while the Pane is showing —
+  an answer through the `addReply` seam, a comment committed elsewhere on the same anchor — are appended
+  in place instead of waiting for the next open. Rows already on screen are skipped by key, and the
+  input box, its draft and the reaction selection are untouched.
+
 ### Docs / demo
 - README: the customization section now shows, in one snippet, how to replace the reaction set, the
   theme tokens and the participant colors — the axes an integrator is expected to drive. New *Deleting*
   section states the anchor-level model.
+- The demo gained a **Scenario** toggle: *local (Save)* — no transport, the popup closes on commit, the
+  backend-free shape — versus *conversation (Send)* — an interactive transport descriptor, so the popup
+  stays open and the simulated participant answers a beat after each Send. Simulating a reply against a
+  Save button was telling the wrong story about what the mode is.
 - The demo's alternative reaction set is now genuinely distinct (🚀🔁✂️💡🛑, five ids of its own) instead
   of the default three plus one, and a new **Colors** toggle swaps the participant colors and the panel
   theme tokens together — so both replaceability axes are visible in one page.

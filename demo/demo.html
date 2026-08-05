@@ -318,12 +318,31 @@
   // rendering is visible with no backend and no network. Everything domain-specific lives here in
   // the demo, never in the library: the 'assistant' category, its color, and the decision that a new
   // reply is worth flagging are all the integrator's. Tackback only renders what it is told.
+  //
+  // Two scenarios, because Tackback supports two shapes and they read differently:
+  //   local        — no transport: the button says Save, the popup closes on commit. The
+  //                  backend-free shape (comment, then Export JSON).
+  //   conversation — an INTERACTIVE transport descriptor: the button says Send, the popup stays open
+  //                  as a conversation, and the simulated participant answers a beat later. The
+  //                  descriptor is all Tackback knows — it never transports anything itself; the
+  //                  "answer" below is this page playing the integrator's part, with no network.
+  let scenario = 'local';
+  function applyScenario() {
+    tb.setTransport(scenario === 'conversation' ? { interactive: true } : null);
+  }
+  applyScenario();
   let simSeq = 0;
   const SIM_LINES = [
     'Looks resolvable — the anchor survives a reflow because it stores the quote, not an offset.',
     'One more thought: the region is normalized, so this holds at any zoom.',
     'Agreed. Nothing here depends on a backend.',
   ];
+  mkBtn('Scenario: local (Save)', (b) => {
+    scenario = scenario === 'local' ? 'conversation' : 'local';
+    b.textContent = 'Scenario: ' + (scenario === 'conversation' ? 'conversation (Send)' : 'local (Save)');
+    b.classList.toggle('on', scenario === 'conversation');
+    applyScenario();
+  });
   mkBtn('Simulate a reply', (b) => {
     const target = tb.listComments()[0];
     if (!target) {   // nudge in place — never a modal dialog, which would block the page
@@ -331,13 +350,24 @@
       setTimeout(() => { b.textContent = 'Simulate a reply'; }, 2200);
       return;
     }
-    tb.addReply(target.id, {
+    answerOn(target.id);
+  });
+  // The simulated participant's answer. In `conversation` scenario this also fires ~1.2s after every
+  // Send, which is the whole point of an interactive transport: you send, the Pane keeps the thread
+  // open with a pending marker, and the answer lands in it without a reopen.
+  function answerOn(commentId) {
+    if (!tb.getComment(commentId)) return;   // the thread was deleted while we waited
+    tb.addReply(commentId, {
       body: SIM_LINES[simSeq++ % SIM_LINES.length],
       author: { id: 'Assistant', kind: 'ai' },   // a category the DEMO defines, mapped to blue above
     });
     // the reply arrived while the reader may be elsewhere → raise the generic attention flag. What it
     // MEANS (here: "unread") is the demo's call; Tackback just paints --tb-attention on the anchor.
-    tb.setAnchorAttention(target.id, true);
+    tb.setAnchorAttention(commentId, true);
+  }
+  tb.on('comment:add', (c) => {
+    if (scenario !== 'conversation') return;
+    setTimeout(() => { if (scenario === 'conversation') answerOn(c.id); }, 1200);
   });
   // …and clear that flag when the thread is actually opened. Again: the library has no notion of
   // "read" — the integrator decides when the notice has served its purpose.

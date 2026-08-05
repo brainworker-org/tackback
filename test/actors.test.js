@@ -7,7 +7,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { AUTHOR_PALETTE, authorKey, authorColor, claimedColors, actorColorOf, lastSpeaker, utteranceCount } from '../src/panel/actors.js';
+import { AUTHOR_PALETTE, authorKey, authorColor, claimedColors, actorColorOf, lastSpeaker, utteranceCount, timelineItems } from '../src/panel/actors.js';
 
 const at = (n) => `2026-08-05T10:0${n}:00.000Z`;
 
@@ -35,6 +35,31 @@ test('lastSpeaker: order-independent (unsorted input), empty/absent input → nu
 
 test('lastSpeaker: a comment with no timestamps still yields an author (never throws)', () => {
   assert.equal(lastSpeaker([{ author: 'x' }]), 'x');
+});
+
+// ---- timelineItems (what an open thread draws, and how it grows) ----
+test('timelineItems: comments and replies interleave in one chronological list', () => {
+  const thread = [
+    { id: 'a', createdAt: at(1), replies: [{ id: 'a1', createdAt: at(5) }] },
+    { id: 'b', createdAt: at(3), replies: [] },
+  ];
+  assert.deepEqual(timelineItems(thread).map((i) => i.key), ['c:a', 'c:b', 'r:a1'],
+    'a late reply sorts after a later comment — the thread is one timeline, not per-comment groups');
+  assert.deepEqual(timelineItems([]).map((i) => i.key), []);
+  assert.deepEqual(timelineItems(undefined), []);
+});
+
+test('timelineItems: keys are stable, so an open thread appends only what is new', () => {
+  const before = [{ id: 'a', createdAt: at(1), replies: [] }];
+  const drawn = new Set(timelineItems(before).map((i) => i.key));
+  // an answer arrives while the thread is on screen
+  const after = [{ id: 'a', createdAt: at(1), replies: [{ id: 'a1', createdAt: at(2) }] }];
+  const fresh = timelineItems(after).filter((i) => !drawn.has(i.key));
+  assert.deepEqual(fresh.map((i) => i.key), ['r:a1'], 'only the new utterance is appended');
+  assert.equal(fresh[0].kind, 'reply');
+  // re-running with nothing new appends nothing (safe to call on every change)
+  for (const i of fresh) drawn.add(i.key);
+  assert.deepEqual(timelineItems(after).filter((i) => !drawn.has(i.key)), []);
 });
 
 // ---- utteranceCount (what an anchor badge shows) ----

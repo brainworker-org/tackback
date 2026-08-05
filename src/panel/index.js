@@ -9,7 +9,7 @@ import { LocaleRegistry } from './i18n.js';
 import { indexAnnotatable, resolveAnchorDom, clampToViewport } from './dom.js';
 import { computeCapture, resolveRegionRect } from '../core/resolution.js';
 import { classifyGesture, popupCommit, canCommit, applyHandleDrag } from './interaction.js';
-import { actorColorOf as resolveActorColor, claimedColors, authorKey as tbAuthorKey, lastSpeaker, utteranceCount } from './actors.js';
+import { actorColorOf as resolveActorColor, claimedColors, authorKey as tbAuthorKey, lastSpeaker, utteranceCount, timelineItems } from './actors.js';
 import { documentSurface, DOCUMENT_SURFACE_ID } from '../core/media.js';
 import { normalizeRegion, buildQuoteSelector, resolveQuoteSelector } from '../core/anchor.js';
 import { selectionOffsetsWithin, offsetsToRange, paintHighlights, clearHighlights } from './range.js';
@@ -403,6 +403,7 @@ export function attachPanel(core, options = {}) {
   let popupCleanup = null;
   let popupRelabel = null;    // re-labels the open popup in place when the locale changes (preserves input)
   let popupRetint = null;     // re-tints the open popup's rows when the actor color map changes
+  let popupSync = null;       // appends utterances that arrive while the thread is open
   const drafts = new Map();   // anchor key -> { body, reaction } — unsaved input preserved across dismiss
   function anchorKey(a) {
     if (!a) return null;
@@ -413,7 +414,7 @@ export function attachPanel(core, options = {}) {
   // The pending region's lifetime IS the popup's: closing the popup (outside-click, Escape, Cancel,
   // empty save) removes the dashed rect, so no orphaned region ever lingers (Keisuke 2026-06-15).
   function closePopup() {
-    popupCleanup?.(); popupCleanup = null; popupRelabel = null; popupRetint = null; popup?.remove(); popup = null;
+    popupCleanup?.(); popupCleanup = null; popupRelabel = null; popupRetint = null; popupSync = null; popup?.remove(); popup = null;
     if (pendingRegionEl) { pendingRegionEl.remove(); pendingRegionEl = null; }
     doc.documentElement.classList.remove('tb-popup-open');   // region affordances (resize grip / move cursor) re-enabled
   }
@@ -484,18 +485,31 @@ export function attachPanel(core, options = {}) {
     // ONE flat, time-ordered timeline (REQ-704): every comment AND every reply is its own row, appended
     // in chronological order and interleaved with the region's move/resize history — replies are NO
     // longer nested/indented under their comment; each row stands alone, attributed by actor color+label.
-    const timeline = [];
-    for (const c of existing || []) {
-      timeline.push({ t: String(c.createdAt || ''), kind: 'comment', c });
-      for (const rep of (c.replies || [])) timeline.push({ t: String(rep.createdAt || ''), kind: 'reply', rep });
-    }
-    for (const evt of events) if (evt.type === 'move' || evt.type === 'resize') timeline.push({ t: String(evt.ts || ''), kind: 'event', evt });
-    timeline.sort((a, b) => a.t.localeCompare(b.t));
-    for (const item of timeline) {
+    // Every rendered item records its key, so the thread can GROW while it is open (see syncTimeline).
+    const renderedKeys = new Set();
+    const renderItem = (item) => {
+      if (renderedKeys.has(item.key)) return;
+      renderedKeys.add(item.key);
       if (item.kind === 'event') { const er = el(doc, 'div', 'tb-ev'); er.textContent = t('event.' + item.evt.type); exwrap.appendChild(er); }
       else if (item.kind === 'reply') renderReplyRow(item.rep);
       else renderCommentRow(item.c);
-    }
+    };
+    const evItems = events
+      .filter((evt) => evt.type === 'move' || evt.type === 'resize')
+      .map((evt) => ({ key: `e:${evt.ts}:${evt.type}`, t: String(evt.ts || ''), kind: 'event', evt }));
+    for (const item of [...timelineItems(existing), ...evItems].sort((a, b) => a.t.localeCompare(b.t))) renderItem(item);
+    // An OPEN thread keeps up with the conversation. Utterances that arrive while the Pane is
+    // showing — an answer from another participant through the addReply seam, a comment committed
+    // elsewhere on the same anchor — are appended in place instead of waiting for the next open.
+    // Rows already on screen are skipped by key, so this is safe to run on every change; the input
+    // box, its draft and the reaction selection are untouched.
+    popupSync = () => {
+      if (draftKey == null) return;
+      const group = core.listComments().filter((c) => anchorKey(c.anchor) === draftKey);
+      const before = renderedKeys.size;
+      for (const item of timelineItems(group)) renderItem(item);
+      if (renderedKeys.size !== before) exwrap.scrollTop = exwrap.scrollHeight;
+    };
     // NOTE: there is still no inline reply BOX (Keisuke 2026-06-15: "Reply はちょっと Too Much") — a
     // reply enters through the seam (core.addReply), driven by the integrator. What changed in 0.9.1
     // is the DISPLAY: replies now render as flat, actor-labeled rows in this timeline (REQ-704), for
@@ -534,11 +548,10 @@ export function attachPanel(core, options = {}) {
       ta.value = ''; reactionId = '';
       [...rwrap.children].forEach((x) => x.classList.remove('on'));
       updateSaveState();
-      // echo the just-sent utterance into the timeline. The popup renders its rows once, on open, so
-      // without this the message you just sent is the ONE utterance the conversation does not show —
-      // it sits in the model until the popup is reopened. It is the same row the next render would
-      // produce (deletable, actor-colored), followed by its own pending marker.
-      if (created && created.id) renderCommentRow(created);
+      // the sent utterance is normally already on screen — committing emitted `change`, and the open
+      // thread caught up through popupSync. This is the belt-and-braces path for a popup with no
+      // anchor key to group by; renderItem is keyed, so it never double-draws.
+      if (created && created.id) renderItem({ key: `c:${created.id}`, t: String(created.createdAt || ''), kind: 'comment', c: created });
       const p = el(doc, 'div', 'tb-pending-note'); p.textContent = lbl('popup.pending', 'sent — awaiting reply…'); exwrap.appendChild(p);
       exwrap.scrollTop = exwrap.scrollHeight;   // the newest rows are at the bottom of a scrolling thread
       ta.focus();
@@ -894,7 +907,9 @@ export function attachPanel(core, options = {}) {
   win.addEventListener?.('resize', queueRecalc);
 
   // ---- wire to core + initial render -----------------------------------------------------------
-  const offChange = core.on('change', renderMarks);
+  // one change → re-place the anchors, then let an open thread catch up with what was just said
+  const onChange = () => { renderMarks(); popupSync?.(); };
+  const offChange = core.on('change', onChange);
   const offRecalc = core.on('recalculate', renderMarks);
   // Flipping an attention flag changes exactly ONE class on the affected anchors. A full renderMarks
   // would rebuild every overlay — throwing away the elements an in-flight region move/resize drag is
