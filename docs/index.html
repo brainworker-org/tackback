@@ -87,7 +87,9 @@
       then right-click, to pin a phrase; <em>right-drag over an image, the inline diagram, or a non-text
       area</em> to comment a region. Comments appear as 💬 badges; the panel (bottom-right) lists them and
       exports / imports JSON. The bar at the <strong>bottom-left</strong> switches the UI display language
-      (EN/JA), the theme, and the reaction set. (This box is a text block too — try commenting it.)</p>
+      (EN/JA), the theme, the reaction set and the participant colors — and <strong>Simulate a reply</strong>
+      brings in a second participant so you can see a thread with more than one voice in it.
+      (This box is a text block too — try commenting it.)</p>
   </aside>
 
   <h2>What it is</h2>
@@ -143,19 +145,38 @@
     changes. Tackback stores a resilient descriptor per anchor type and degrades honestly when it
     can't resolve — the difference between a review tool you trust and one you don't.</p>
 
+  <h2>More than one participant</h2>
+  <p>A thread can hold utterances from several participants — people, and whatever you wire into the
+    reply seam. They render as <b>one flat, time-ordered timeline</b>: every comment and reply is its
+    own row, labelled and colored by who wrote it, with no indent tree. An anchor badge counts
+    <em>every</em> utterance under it, so a thread that drew three answers reads as busy from the page.</p>
+  <p>Tackback assigns <b>no meaning</b> to who a participant is. It reads an opaque <code>kind</code>
+    off the author and looks it up in a map you supply; it ships no categories and no colors of its
+    own. The same is true of the orange <b>attention</b> highlight — a generic "this wants a look"
+    flag whose meaning is yours, never persisted and never written into an export.</p>
+  <p>Press <b>Simulate a reply</b> in the "Try it" bar: a second participant answers, the anchor takes
+    that participant's color, and it turns orange until you open the thread. Switch <b>Scenario</b> to
+    <em>conversation</em> and the commit button becomes <b>Send</b> — the Pane stays open, your message
+    appears immediately with a pending marker, and the answer lands in place a moment later. In
+    <em>local</em> it stays <b>Save</b> and the Pane closes: the offline, backend-free shape.</p>
+
   <h2>Customization, at a glance</h2>
   <table>
     <thead><tr><th>Axis</th><th>How</th><th>Default</th></tr></thead>
     <tbody>
-      <tr><td>Theming</td><td><code>--tb-*</code> CSS tokens; <code>theme: 'auto'</code> follows the OS live</td><td>auto (light/dark)</td></tr>
-      <tr><td>Reactions</td><td>id + icon + per-locale label, fully replaceable set</td><td>question / agree / …</td></tr>
+      <tr><td>Reactions</td><td>id + icon + per-locale label — replace the whole set, any size</td><td>👍 agree / 👎 disagree / ❓ question</td></tr>
+      <tr><td>Colors</td><td><code>--tb-*</code> tokens (a partial map layers on the OS base) + <code>actorColors</code> per participant category</td><td>auto light/dark, no categories</td></tr>
       <tr><td>Language</td><td><code>setLocale()</code> at runtime; bring your own bundle</td><td>English, ja shipped</td></tr>
       <tr><td>Panel controls</td><td><code>controls: { theme, marks, … }</code> chooses visible buttons</td><td>theme switch hidden</td></tr>
     </tbody>
   </table>
-  <p>Use the <b>Language</b> button in the bottom-left "Try it" bar to switch the panel UI between
-    English and Japanese; the annotation data is untouched. The <b>Theme switch</b> button re-attaches
-    the panel with a manual light/dark/accent toggle shown.</p>
+  <p>The bottom-left "Try it" bar drives all of it live: <b>Language</b> switches the panel UI between
+    English and Japanese without touching the annotation data, <b>Reactions</b> swaps in a set with its
+    own ids and icons, <b>Colors</b> re-skins the participants and the panel together, and
+    <b>Theme switch</b> re-attaches the panel with the manual light/dark toggle shown.</p>
+  <p>Deleting is anchor-level: right-click an anchor and choose <em>Delete anchor</em> to remove that
+    whole conversation. The Pane offers no per-utterance delete — a reply belongs to its comment and
+    goes with it.</p>
 
   <h2>PDF page region <span style="font-weight:400">— post-v1 preview, optional sample</span></h2>
   <aside class="callout warn">
@@ -178,7 +199,7 @@
 
 <!-- The whole library: one classic script tag, one global. The module script below reads it. -->
 <!-- published bundle from CDN (jsdelivr mirrors npm). Pin keeps the hosted demo stable across releases. -->
-<script src="https://cdn.jsdelivr.net/npm/@brainworker/tackback@0.9.0/dist/tackback.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@brainworker/tackback@0.9.2/dist/tackback.umd.js"></script>
 <script type="module">
   // Test affordance (harmless in prod): pdf.js renders via requestAnimationFrame, which the browser
   // PAUSES while a tab is hidden — so a headless / background verification tab can stall mid-render.
@@ -222,27 +243,86 @@
 
   const tb = Tackback.mount({
     document: { id: 'tackback-demo', title: 'Tackback demo' },
-    author: 'Reviewer',
+    author: { id: 'Reviewer', kind: 'human' },   // an author CATEGORY (kind) — Tackback treats it as opaque
     mediaAdapters: pdf ? [pdf] : [],
   });
 
+  // A REPLACEMENT reaction set — deliberately nothing like the built-in one (👍 / 👎 / ❓). The set is
+  // yours: its size, its ids, its icons and its per-locale labels. Comments store the `id`, so an
+  // integrator can swap icons freely without touching stored data.
   const REVIEW_REACTIONS = [
-    { id: 'up',       icon: '👍', label: { en: 'Agree',    ja: '賛成' } },
-    { id: 'down',     icon: '👎', label: { en: 'Disagree', ja: '反対' } },
-    { id: 'question', icon: '❓', label: { en: 'Question', ja: '疑問' } },
-    { id: 'nit',      icon: '🔧', label: { en: 'Nit',      ja: 'nit' } },
+    { id: 'ship',    icon: '🚀', label: { en: 'Ship it', ja: '出そう' } },
+    { id: 'rework',  icon: '🔁', label: { en: 'Rework',  ja: '要再考' } },
+    { id: 'cut',     icon: '✂️', label: { en: 'Cut',     ja: '削る' } },
+    { id: 'idea',    icon: '💡', label: { en: 'Idea',    ja: '案' } },
+    { id: 'blocker', icon: '🛑', label: { en: 'Blocker', ja: '障害' } },
   ];
+
+  // …and a replacement COLOR scheme: the participant colors (keyed by author.kind) plus the panel's
+  // own `--tb-*` theme tokens. Both are plain options — no fork, no CSS override file. Tackback ships
+  // no categories and no colors of its own: 'human' and 'ai' below mean something only because THIS
+  // page says so.
+  const ACTOR_COLORS = {
+    default: { human: '#db2777', ai: '#2563eb' },
+    alt:     { human: '#0f766e', ai: '#b45309' },
+  };
+  const ALT_THEME = {
+    '--tb-accent': '#0f766e', '--tb-mark-bg': 'rgba(15,118,110,.18)', '--tb-mark-outline': '#0f766e',
+    '--tb-pin-bg': '#0f766e', '--tb-pin-fg': '#ffffff', '--tb-attention': '#b45309',
+  };
+  let altColors = false;
 
   function attach() {
     panel?.destroy();
     panel = Tackback.attachPanel(tb, {
-      theme: 'auto',
+      theme: altColors ? ALT_THEME : 'auto',   // a token map layers over the OS light/dark base
       locale,
       controls: { theme: showTheme },
       reactions: useCustomReactions ? REVIEW_REACTIONS.slice() : undefined,
+      // an anchor is tinted by its LAST speaker's category, using the map injected here
+      actorColors: ACTOR_COLORS[altColors ? 'alt' : 'default'],
     });
   }
   attach();
+
+  // ── a simulated second participant (this page plays the integrator's part; no backend, no network) ─
+  // Two scenarios, because Tackback supports two shapes and they read differently:
+  //   local        — no transport: the button says Save and the popup closes on commit.
+  //   conversation — an INTERACTIVE transport descriptor: the button says Send, the popup stays open,
+  //                  and the simulated participant answers a beat later. The descriptor is all
+  //                  Tackback knows — it never transports anything itself.
+  let scenario = 'local';
+  function applyScenario() {
+    tb.setTransport(scenario === 'conversation' ? { interactive: true } : null);
+  }
+  applyScenario();
+  let simSeq = 0;
+  const SIM_LINES = [
+    'Looks resolvable — the anchor survives a reflow because it stores the quote, not an offset.',
+    'One more thought: the region is normalized, so this holds at any zoom.',
+    'Agreed. Nothing here depends on a backend.',
+  ];
+  function answerOn(commentId) {
+    if (!tb.getComment(commentId)) return;   // the thread was deleted while we waited
+    tb.addReply(commentId, {
+      body: SIM_LINES[simSeq++ % SIM_LINES.length],
+      author: { id: 'Assistant', kind: 'ai' },   // a category this PAGE defines, mapped to blue above
+    });
+    // the reply arrived while the reader may be elsewhere → raise the generic attention flag. What it
+    // MEANS (here: "unread") is this page's call; Tackback just paints --tb-attention on the anchor.
+    tb.setAnchorAttention(commentId, true);
+  }
+  tb.on('comment:add', (c) => {
+    if (scenario !== 'conversation') return;
+    setTimeout(() => { if (scenario === 'conversation') answerOn(c.id); }, 1200);
+  });
+  // …and clear that flag when the thread is actually opened. Again: the library has no notion of
+  // "read" — the integrator decides when the notice has served its purpose.
+  document.addEventListener('click', (e) => {
+    const anchorEl = e.target.closest?.('.tb-badge,.tb-pin');
+    if (!anchorEl || !anchorEl.__tbComments) return;
+    for (const c of anchorEl.__tbComments) tb.setAnchorAttention(c.id, false);
+  }, true);
 
   // PDF zoom controls + status (only meaningful when the adapter loaded)
   if (pdf) {
@@ -283,11 +363,33 @@
     b.classList.toggle('on', showTheme);
     attach();
   });
-  mkBtn('Reactions: default', (b) => {
+  mkBtn('Reactions: default 👍👎❓', (b) => {
     useCustomReactions = !useCustomReactions;
-    b.textContent = 'Reactions: ' + (useCustomReactions ? 'review set' : 'default');
+    b.textContent = 'Reactions: ' + (useCustomReactions ? 'custom 🚀🔁✂️💡🛑' : 'default 👍👎❓');
     b.classList.toggle('on', useCustomReactions);
     attach();
+  });
+  // the whole color scheme — participant colors AND the panel's own tokens — is just options.
+  mkBtn('Colors: default', (b) => {
+    altColors = !altColors;
+    b.textContent = 'Colors: ' + (altColors ? 'custom' : 'default');
+    b.classList.toggle('on', altColors);
+    attach();
+  });
+  mkBtn('Scenario: local (Save)', (b) => {
+    scenario = scenario === 'local' ? 'conversation' : 'local';
+    b.textContent = 'Scenario: ' + (scenario === 'conversation' ? 'conversation (Send)' : 'local (Save)');
+    b.classList.toggle('on', scenario === 'conversation');
+    applyScenario();
+  });
+  mkBtn('Simulate a reply', (b) => {
+    const target = tb.listComments()[0];
+    if (!target) {   // nudge in place — never a modal dialog, which would block the page
+      b.textContent = 'Comment on something first ↑';
+      setTimeout(() => { b.textContent = 'Simulate a reply'; }, 2200);
+      return;
+    }
+    answerOn(target.id);
   });
   document.body.appendChild(bar);
 
