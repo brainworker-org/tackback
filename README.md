@@ -8,6 +8,11 @@ any HTML, including Markdown rendered to HTML.
 
 **▶ Try the live demo: https://brainworker-org.github.io/tackback/** — right-click text to comment, right-drag over an image/diagram to comment a region, switch language/theme from the bottom-left bar.
 
+> The hosted demo runs the **last published release** (it loads the package from a CDN), so it lags
+> this branch during pre-1.0 staging. To exercise what is in the source right now — the flat
+> multi-participant timeline, actor colors, attention, and the Save/Send scenarios — run
+> `demo/demo.html`: `npm run build`, serve the package root over http, and open it.
+
 > **Version 0.9.2 (staging).** Pre-1.0: the API is functional and tested but may still change before
 > the 1.0 stable release. The public API is the **JavaScript** API called in the browser (not an HTTP API).
 

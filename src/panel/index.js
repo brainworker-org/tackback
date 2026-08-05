@@ -8,7 +8,7 @@ import { DEFAULT_REACTIONS, resolveReaction } from './reactions.js';
 import { LocaleRegistry } from './i18n.js';
 import { indexAnnotatable, resolveAnchorDom, clampToViewport } from './dom.js';
 import { computeCapture, resolveRegionRect } from '../core/resolution.js';
-import { classifyGesture, popupCommit, canCommit, applyHandleDrag } from './interaction.js';
+import { classifyGesture, popupCommit, canCommit, nextSendState, applyHandleDrag } from './interaction.js';
 import { actorColorOf as resolveActorColor, claimedColors, authorKey as tbAuthorKey, lastSpeaker } from './actors.js';
 import { threadKeyOf, timelineItems, utteranceCount, planInsertions } from './thread.js';
 import { documentSurface, DOCUMENT_SURFACE_ID } from '../core/media.js';
@@ -496,8 +496,28 @@ export function attachPanel(core, options = {}) {
     const rowByKey = new Map();
     const buildRow = (item) => (item.kind === 'event' ? eventRow(item.evt)
       : item.kind === 'reply' ? replyRow(item.rep) : commentRow(item.c));
+    // REQ-702: a sent utterance is PENDING until the conversation answers it. Exactly one marker
+    // exists at a time — it belongs to the latest send — and it is settled the moment this thread
+    // receives a new utterance, which is the only resolution signal the panel can observe on its own
+    // (the integrator can still drive its own, richer resolution through the seam). Without this the
+    // marker outlived the answer it was waiting for and stacked up, one per send.
+    let sendState = null;   // null | 'pending' | 'failed'
+    let pendingNote = null;
+    const markSent = () => {
+      pendingNote?.remove();
+      pendingNote = el(doc, 'div', 'tb-pending-note');
+      pendingNote.textContent = lbl('popup.pending', 'sent — awaiting reply…');
+      exwrap.appendChild(pendingNote);
+      sendState = 'pending';
+    };
+    const settleSend = (signal) => {
+      if (sendState !== 'pending') return;
+      sendState = nextSendState(sendState, signal);
+      if (sendState === 'ok') { pendingNote?.remove(); pendingNote = null; sendState = null; }
+    };
     const draw = (items) => {
       const plan = planInsertions(rows, items);
+      if (plan.length) settleSend('reply');   // something was said here → the wait is over
       for (const { item, beforeKey } of plan) {
         const node = buildRow(item);
         const beforeEl = beforeKey ? rowByKey.get(beforeKey) : null;
@@ -567,7 +587,7 @@ export function attachPanel(core, options = {}) {
       // thread caught up through popupSync. This is the belt-and-braces path for the commit that has
       // just established the thread; draw() is keyed, so it never double-draws.
       if (created && created.id) draw(timelineItems([created]));
-      const p = el(doc, 'div', 'tb-pending-note'); p.textContent = lbl('popup.pending', 'sent — awaiting reply…'); exwrap.appendChild(p);
+      markSent();
       exwrap.scrollTop = exwrap.scrollHeight;   // the newest rows are at the bottom of a scrolling thread
       ta.focus();
     };

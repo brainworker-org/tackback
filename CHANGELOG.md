@@ -20,6 +20,9 @@ what a reaction *means*, and which colors stand for what all stay with the integ
   — right-click an anchor → *Delete anchor*. `core.deleteComment` is unchanged for integrators with
   their own rules.
 
+- **A sent utterance stops saying "awaiting reply" once it is answered.** The pending marker is
+  settled the moment the thread receives a new utterance, and only the latest send carries one — they
+  used to outlive the answer they were waiting for and stack up, one per send.
 - **An open thread keeps up with the conversation.** Utterances that arrive while the Pane is showing —
   an answer through the `addReply` seam, a comment committed elsewhere on the same anchor — are appended
   in place instead of waiting for the next open. Rows already on screen are skipped by key, and the
