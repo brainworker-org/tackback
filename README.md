@@ -13,7 +13,7 @@ any HTML, including Markdown rendered to HTML.
 > multi-participant timeline, actor colors, attention, and the Save/Send scenarios — run
 > `demo/demo.html`: `npm run build`, serve the package root over http, and open it.
 
-> **Version 0.9.2 (staging).** Pre-1.0: the API is functional and tested but may still change before
+> **Version 0.9.3 (staging).** Pre-1.0: the API is functional and tested but may still change before
 > the 1.0 stable release. The public API is the **JavaScript** API called in the browser (not an HTTP API).
 
 ## Install
@@ -67,11 +67,15 @@ attachPanel(tb, {
 > toggles the theme switch; the bottom-right panel lists comments and exports/imports JSON. The page
 > also shows an optional **post-v1** PDF region preview (pdf.js from a CDN; degrades to a note offline).
 
-## The three anchor types
+## The four anchor types
 - **block** — a whole element (heading / paragraph / list item / cell). Right-click it.
 - **range** — a text phrase, stored as a W3C `TextQuoteSelector` (exact + prefix/suffix + offset).
   Re-resolves across edits/reflow; on drift it **fails loud** (`anchor:orphaned`) and never silently
   re-points. Painted via the CSS Custom Highlight API (no DOM mutation).
+- **document** — the document *as a whole*, rather than any place inside it. It has no coordinates
+  and no badge on the page: it is opened from the panel (`controls: { docThread }`, on by default, or
+  `panel.openDocumentThread()`), and behaves like every other thread once open — same timeline, same
+  participants, same Save/Send. One per instance.
 - **region** — a rectangle over any non-text surface (an image/diagram in a `<figure>`, a marked
   `[data-tb-surface]` element, or a PDF page), stored as a normalized rect, so it is
   **zoom-independent** (overlay = normalized × current surface size). The surface set is configurable
@@ -196,7 +200,10 @@ you inject your own pdf.js into `createPdfAdapter`, so nothing of pdf.js is redi
 - **One instance per document.** A single `Tackback` instance + panel per document is the supported
   shape; multiple panels in one document share the `tb-range` CSS highlight registration and would interfere.
 - **`importEnvelope` is not document-bound.** It does not check the envelope's `document.id`/revision
-  against the current document — callers are responsible for matching. A partially-invalid `replace`
+  against the current document — callers are responsible for matching. This bites hardest on the
+  **document** anchor: block/range/region anchors from a foreign envelope fail visibly (they do not
+  resolve, so they orphan), but a document anchor always resolves, so a foreign document thread merges
+  into this one with no signal at all. A partially-invalid `replace`
   import is refused (throws `IMPORT_INVALID`) unless `allowPartial: true`, so a malformed file can't
   silently wipe existing comments.
 - **`ready` resolves, never rejects.** Initialization/adapter failures surface on the `error` event
