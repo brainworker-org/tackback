@@ -181,8 +181,7 @@ Initial public-prep release (staging). Standalone extraction of the Tackback lib
 - [PolyForm Shield License 1.0.0](https://polyformproject.org/licenses/shield/1.0.0): free for any use
   including commercial, except to provide a product that competes with Tackback.
 
-[Unreleased]: https://github.com/brainworker-org/tackback/compare/v0.9.3...HEAD
-[0.9.3]: https://github.com/brainworker-org/tackback/releases/tag/v0.9.3
+[Unreleased]: https://github.com/brainworker-org/tackback/compare/v0.9.2...HEAD
 [0.9.2]: https://github.com/brainworker-org/tackback/releases/tag/v0.9.2
 [0.9.1]: https://github.com/brainworker-org/tackback/releases/tag/v0.9.1
 [0.9.0]: https://github.com/brainworker-org/tackback/releases/tag/v0.9.0

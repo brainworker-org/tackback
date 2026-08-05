@@ -40,7 +40,7 @@ export const JA = {
   'panel.toggleMarks': 'マーク表示 ⇄',
   'panel.clearAll': '全消去',
   'panel.docThread': '🗒 文書全体について',
-  'anchor.document': 'この文書', 
+  'anchor.document': 'この文書',
   'import.placeholder': 'エクスポート済みの Tackback JSON を貼り付けて「読み込み」。マージされ、既存コメントは保持されます。',
   'import.load': '読み込み', 'import.badJson': 'JSON が不正です — 貼り付けたテキストを確認してください。',
   'panel.theme': '🌗 表示: {mode}',

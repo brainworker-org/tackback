@@ -105,9 +105,10 @@ const PANEL_CSS = `
  *   `{ ai: '#2563eb', human: '#db2777' }`; an anchor is tinted by its last speaker's category. With
  *   no map, authors fall back to a generic per-identity hue. Tackback ships no categories or colors.
  *   `controls` selects which panel buttons are shown (the rest still work via the API). Defaults:
- *   `{ author: true, export: true, theme: false, marks: true, clear: true }` — the theme switch is
- *   hidden by default because `auto` (live OS dark-mode follow) is the right default; pass
- *   `controls: { theme: true }` to show it.
+ *   `{ author: true, export: true, import: false, theme: true, marks: true, clear: true, docThread: true }`.
+ *   `docThread` opens the conversation about the document AS A WHOLE — it is the only thread with no
+ *   mark on the page, so the control is its mark (utterance count + attention tint). Hiding it does
+ *   not remove the capability: `panel.openDocumentThread()` is the same action.
  */
 export function attachPanel(core, options = {}) {
   const doc = (options.root && options.root.ownerDocument) || globalThis.document;
@@ -706,6 +707,7 @@ export function attachPanel(core, options = {}) {
       const q = a.selector?.exact || '';
       return `“${q.length > 40 ? q.slice(0, 40) + '…' : q}”`;
     }
+    if (a.type !== 'block') return null;   // an unknown kind gets no label rather than block's
     const elx = doc.getElementById(a.elementId);
     return (elx?.getAttribute('data-tb-section') || a.elementId);
   }

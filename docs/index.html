@@ -325,6 +325,12 @@
   // …and clear that flag when the thread is actually opened. Again: the library has no notion of
   // "read" — the integrator decides when the notice has served its purpose.
   document.addEventListener('click', (e) => {
+    // the document thread has no mark on the page — its mark is the panel control, so opening it
+    // has to clear the notice the same way opening an anchored thread does.
+    if (e.target.closest?.('.tb-docbtn')) {
+      tb.listComments().forEach((c) => { if (c.anchor.type === 'document') tb.setAnchorAttention(c.id, false); });
+      return;
+    }
     const anchorEl = e.target.closest?.('.tb-badge,.tb-pin');
     if (!anchorEl || !anchorEl.__tbComments) return;
     for (const c of anchorEl.__tbComments) tb.setAnchorAttention(c.id, false);
