@@ -6,6 +6,8 @@ locally, and **export it as JSON or hook it into a backend** (per comment or all
 any HTML, including Markdown rendered to HTML.
 **No backend required, no network, no runtime dependencies** — it runs from a single offline page.
 
+**▶ Try the live demo: https://brainworker-org.github.io/tackback/** — right-click text to comment, right-drag over an image/diagram to comment a region, switch language/theme from the bottom-left bar.
+
 > **Version 0.9.1 (staging).** Pre-1.0: the API is functional and tested but may still change before
 > the 1.0 stable release. The public API is the **JavaScript** API called in the browser (not an HTTP API).
 
