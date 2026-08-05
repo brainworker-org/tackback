@@ -21,8 +21,11 @@ what a reaction *means*, and which colors stand for what all stay with the integ
   their own rules.
 
 - **A sent utterance stops saying "awaiting reply" once it is answered.** The pending marker is
-  settled the moment the thread receives a new utterance, and only the latest send carries one — they
-  used to outlive the answer they were waiting for and stack up, one per send.
+  settled by another utterance landing in the thread, and only the latest send carries one — they used
+  to outlive the answer they were waiting for and stack up, one per send. Two things deliberately do
+  not settle it: an anchor being moved or resized (nobody said anything), and the send's own utterance.
+  An answer sent synchronously from a `comment:add` handler settles it too — that arrives before the
+  commit call has even returned.
 - **An open thread keeps up with the conversation.** Utterances that arrive while the Pane is showing —
   an answer through the `addReply` seam, a comment committed elsewhere on the same anchor — are appended
   in place instead of waiting for the next open. Rows already on screen are skipped by key, and the

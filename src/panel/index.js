@@ -8,7 +8,7 @@ import { DEFAULT_REACTIONS, resolveReaction } from './reactions.js';
 import { LocaleRegistry } from './i18n.js';
 import { indexAnnotatable, resolveAnchorDom, clampToViewport } from './dom.js';
 import { computeCapture, resolveRegionRect } from '../core/resolution.js';
-import { classifyGesture, popupCommit, canCommit, nextSendState, applyHandleDrag } from './interaction.js';
+import { classifyGesture, popupCommit, canCommit, nextSendState, answersSend, applyHandleDrag } from './interaction.js';
 import { actorColorOf as resolveActorColor, claimedColors, authorKey as tbAuthorKey, lastSpeaker } from './actors.js';
 import { threadKeyOf, timelineItems, utteranceCount, planInsertions } from './thread.js';
 import { documentSurface, DOCUMENT_SURFACE_ID } from '../core/media.js';
@@ -497,12 +497,17 @@ export function attachPanel(core, options = {}) {
     const buildRow = (item) => (item.kind === 'event' ? eventRow(item.evt)
       : item.kind === 'reply' ? replyRow(item.rep) : commentRow(item.c));
     // REQ-702: a sent utterance is PENDING until the conversation answers it. Exactly one marker
-    // exists at a time — it belongs to the latest send — and it is settled the moment this thread
-    // receives a new utterance, which is the only resolution signal the panel can observe on its own
-    // (the integrator can still drive its own, richer resolution through the seam). Without this the
-    // marker outlived the answer it was waiting for and stacked up, one per send.
-    let sendState = null;   // null | 'pending' | 'failed'
+    // exists at a time — it belongs to the latest send — and it is settled by the only resolution
+    // signal the panel can observe on its own: another utterance landing in this thread (the
+    // integrator can still drive its own, richer resolution through the seam).
+    //
+    // Timing is the whole difficulty. `addComment` delivers `change` and `comment:add` SYNCHRONOUSLY,
+    // so an integrator that answers inside its `comment:add` handler has already replied by the time
+    // the commit call returns — before the marker is raised. Rows drawn during a commit are therefore
+    // recorded and judged once the marker exists, instead of being missed for good.
+    let sendState = null;      // null | 'pending' | 'failed'
     let pendingNote = null;
+    let inFlight = null;       // rows drawn while a commit is in progress
     const markSent = () => {
       pendingNote?.remove();
       pendingNote = el(doc, 'div', 'tb-pending-note');
@@ -517,7 +522,9 @@ export function attachPanel(core, options = {}) {
     };
     const draw = (items) => {
       const plan = planInsertions(rows, items);
-      if (plan.length) settleSend('reply');   // something was said here → the wait is over
+      const drawn = plan.map((p) => p.item);
+      if (inFlight) inFlight.push(...drawn);            // judged after the marker is raised
+      else if (answersSend(drawn)) settleSend('reply');  // an utterance — not an anchor move — answers
       for (const { item, beforeKey } of plan) {
         const node = buildRow(item);
         const beforeEl = beforeKey ? rowByKey.get(beforeKey) : null;
@@ -566,7 +573,12 @@ export function attachPanel(core, options = {}) {
     save.onclick = () => {
       const body = ta.value.trim();
       if (!canCommit(body, reactionId)) { clearDraft(); return closePopup(); }
-      const created = onSave(body, reactionId); clearDraft();
+      // watch what gets drawn while the commit runs: `addComment` delivers its events synchronously,
+      // so an answer can arrive before this call even returns.
+      inFlight = [];
+      let created, drawnDuringCommit;
+      try { created = onSave(body, reactionId); } finally { drawnDuringCommit = inFlight; inFlight = null; }
+      clearDraft();
       // the saved region is now a committed overlay (rendered via `change`); drop the pending draft rect.
       if (pendingRegionEl) { pendingRegionEl.remove(); pendingRegionEl = null; }
       // local/fire-and-forget → close; interactive transport → stay open as a conversation with a
@@ -588,6 +600,11 @@ export function attachPanel(core, options = {}) {
       // just established the thread; draw() is keyed, so it never double-draws.
       if (created && created.id) draw(timelineItems([created]));
       markSent();
+      // …and only now judge what landed during the commit. The utterance we just committed does not
+      // answer itself; anything else said in this thread does — including a reply an integrator sent
+      // synchronously from its `comment:add` handler, which would otherwise leave the marker waiting
+      // for an answer that had already arrived.
+      if (answersSend(drawnDuringCommit, created && created.id ? `c:${created.id}` : null)) settleSend('reply');
       exwrap.scrollTop = exwrap.scrollHeight;   // the newest rows are at the bottom of a scrolling thread
       ta.focus();
     };

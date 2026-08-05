@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { classifyGesture, popupCommit, canCommit, nextSendState, handleAt, applyHandleDrag } from '../src/panel/interaction.js';
+import { classifyGesture, popupCommit, canCommit, nextSendState, answersSend, handleAt, applyHandleDrag } from '../src/panel/interaction.js';
 
 // ---- REQ-006: gesture = right-drag>threshold → region; below → selection→range / none→block --------
 
@@ -49,6 +49,27 @@ test('canCommit: the state AFTER an interactive send is disabled again (the stay
   // button — otherwise the next click hits the empty-commit path and dismisses the conversation.
   assert.equal(popupCommit({ interactive: true }).closeOnCommit, false, 'the popup stays open');
   assert.equal(canCommit('', ''), false, 'cleared text + cleared reaction → disabled');
+});
+
+test('answersSend: an utterance answers a send; an anchor move never does', () => {
+  const reply = { kind: 'reply', key: 'r:a:0:a1' };
+  const moved = { kind: 'event', key: 'e:0:t:move' };
+  assert.equal(answersSend([reply]), true);
+  assert.equal(answersSend([moved]), false, 'dragging the anchor is not something anyone said');
+  assert.equal(answersSend([moved, reply]), true, 'the utterance still counts alongside the move');
+  assert.equal(answersSend([]), false);
+  assert.equal(answersSend(null), false);
+});
+
+test('answersSend: the utterance just committed does not answer itself', () => {
+  const own = { kind: 'comment', key: 'c:new' };
+  assert.equal(answersSend([own], 'c:new'), false, 'your own send is drawn before the marker exists');
+  // …but a reply that arrived synchronously during the same commit DOES answer it: an integrator can
+  // reply from its comment:add handler, before the commit call has even returned.
+  const sync = { kind: 'reply', key: 'r:new:0:x' };
+  assert.equal(answersSend([own, sync], 'c:new'), true, 'a synchronous answer must not be missed');
+  // a second, unrelated comment in the thread counts too
+  assert.equal(answersSend([own, { kind: 'comment', key: 'c:other' }], 'c:new'), true);
 });
 
 test('nextSendState: pending → ok on ack/reply, → failed on error/timeout (never an indefinite hang)', () => {
