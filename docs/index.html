@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tackback — single demo (anchored comments, drop-in)</title>
+<!--
+  THE Tackback demo — one page that exercises the whole tool.
+
+  This consolidates the older split demos (showcase / harness / umd-harness / pdf-harness) into a
+  single self-contained page. It loads ONLY the bundled dist/tackback.umd.js (run `npm run build`
+  first) and drives everything through the global `Tackback`. Serve the package root over http
+  (e.g. `python3 -m http.server 8903` from the tackback-lib root) and open demo/demo.html.
+
+  What it shows:
+    • the three v1 anchor kinds — block, range (phrase), region (rect) — over DOM-rendered content
+      (text, an inline <svg> diagram, an <img>, and a marked panel surface);
+    • the bottom-LEFT "Try it" bar: UI display language (EN/JA), theme switch, reaction set;
+    • the bottom-RIGHT Tackback panel: comment list, reactions, JSON export / import, theme, marks;
+    • a clearly-labelled POST-V1 PREVIEW: a region over a real PDF page (pdf.js from a CDN).
+
+  ⚠️ The PDF block is a DEMO of Tackback annotating a page that *contains* a PDF — it is a
+  post-v1 / optional-sample surface, NOT a v1 focus. v1 ships region annotation over the
+  DOM-rendered document; the PDF/raster path ships only as this optional adapter sample.
+  Everything except the PDF block runs fully offline; the PDF block needs network (pdf.js CDN)
+  and degrades to a note if offline.
+-->
+<style>
+  :root { color-scheme: light dark; }
+  /* The article themes itself with the same --tb-* tokens the panel sets, so light/dark stay in sync. */
+  body { font: 16px/1.75 -apple-system, system-ui, "Segoe UI", sans-serif;
+    color: var(--tb-fg, #1c1e21); background: var(--tb-bg, #fbfbf7);
+    margin: 0; padding: 0 0 7rem; transition: background .2s, color .2s; }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 2.5rem 1.5rem; }
+  header.hero { border-bottom: 1px solid var(--tb-border, #e2e2dd); margin-bottom: 1.5rem; }
+  h1 { font-size: 2rem; margin: 0 0 .4rem; }
+  .tag { color: var(--tb-muted, #6b6b66); font-size: .95rem; margin: 0 0 1rem; }
+  h2 { font-size: 1.4rem; border-bottom: 1px solid var(--tb-border, #e2e2dd); padding-bottom: .25rem; margin-top: 2rem; }
+  h3 { font-size: 1.1rem; margin-top: 1.5rem; }
+  blockquote { margin: 1rem 0; padding: .5rem 1rem; border-left: 3px solid var(--tb-accent, #33a877);
+    color: var(--tb-muted, #555); background: rgba(127,127,127,.06); border-radius: 0 6px 6px 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .95rem; }
+  th, td { border: 1px solid var(--tb-border, #ddd); padding: .5rem .7rem; text-align: left; }
+  th { background: rgba(127,127,127,.08); }
+  code { background: rgba(127,127,127,.13); padding: .1em .4em; border-radius: 4px; font-size: .9em; }
+  .callout { background: rgba(51,168,119,.1); border: 1px solid var(--tb-accent, #33a877);
+    border-radius: 8px; padding: .8rem 1rem; margin: 1.2rem 0; font-size: .95rem; }
+  .callout.warn { background: rgba(201,138,0,.12); border-color: #c98a00; }
+  /* a right-draggable "surface" so a region anchor is demonstrable without any PDF */
+  .demo-surface { position: relative; height: 200px; margin: 1rem 0; border: 1px dashed var(--tb-accent, #33a877);
+    border-radius: 8px; display: flex; align-items: center; justify-content: center; text-align: center;
+    color: var(--tb-muted, #888); font-size: .9rem; user-select: none; padding: 1rem;
+    background: repeating-linear-gradient(45deg, rgba(127,127,127,.04) 0 12px, transparent 12px 24px); }
+  /* a <figure> wrapping a non-text surface (image / inline SVG) that can host the region overlay */
+  .demo-figure { display: inline-block; position: relative; margin: 1rem 0; line-height: 0;
+    border: 1px solid var(--tb-border, #ddd); border-radius: 8px; }
+  .demo-figure img, .demo-figure svg { border-radius: 8px; max-width: 100%; height: auto; display: block; }
+  /* the PDF preview region */
+  #pdf-box { position: relative; min-height: 80px; margin: 1rem 0; }
+  #pdf-box .tb-page { box-shadow: 0 2px 12px rgba(0,0,0,.2); background: #fff; margin: 12px auto; }
+  .pdf-note { color: var(--tb-muted, #888); font-size: .9rem; }
+  .pdf-tools { display: flex; gap: .5rem; align-items: center; font-size: .85rem; margin: .5rem 0; }
+  .pdf-tools button { font: inherit; cursor: pointer; padding: .2rem .55rem; border: 1px solid var(--tb-border, #bbb);
+    background: transparent; color: inherit; border-radius: 6px; }
+  /* the "Try it" bar — these are DEMO-page controls, separate from the Tackback panel itself */
+  .trybar { position: fixed; left: 16px; bottom: 16px; z-index: 9998; display: flex; flex-wrap: wrap;
+    gap: 6px; align-items: center; background: var(--tb-popup-bg, #fff); color: var(--tb-popup-fg, #111);
+    border: 1px solid var(--tb-border, #ccc); border-radius: 10px; padding: 8px 10px;
+    box-shadow: 0 4px 16px rgba(0,0,0,.18); font: 12px system-ui; max-width: min(46vw, 420px); }
+  .trybar b { font-size: 11px; opacity: .7; margin-right: 2px; }
+  .trybar button { font: inherit; cursor: pointer; border: 1px solid var(--tb-border, #bbb);
+    background: transparent; color: inherit; border-radius: 6px; padding: 4px 8px; }
+  .trybar button.on { background: var(--tb-accent, #33a877); color: #fff; border-color: transparent; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="hero">
+    <h1>Tackback</h1>
+    <p class="tag">Anchored comments for any web page — pin a comment to a block, a phrase, or a region
+      (images, diagrams and other non-text content included). Export as JSON, import it back, or hook
+      into a backend. One <code>&lt;script&gt;</code>, zero runtime dependencies, no backend.</p>
+  </header>
+
+  <aside class="callout">
+    <p><strong>Try it:</strong> right-click any text block to comment it; <em>select text first</em>,
+      then right-click, to pin a phrase; <em>right-drag over an image, the inline diagram, or a non-text
+      area</em> to comment a region. Comments appear as 💬 badges; the panel (bottom-right) lists them and
+      exports / imports JSON. The bar at the <strong>bottom-left</strong> switches the UI display language
+      (EN/JA), the theme, and the reaction set. (This box is a text block too — try commenting it.)</p>
+  </aside>
+
+  <h2>What it is</h2>
+  <p>Tackback attaches durable, anchored comments to a document without changing the document. Each
+    comment remembers <em>where</em> it was placed — a block, a selected phrase, or a region drawn over
+    an image, diagram or other non-text content — and re-finds that spot when the page is re-rendered.</p>
+  <p>It ships as a headless core plus an optional default panel. The core holds no opinion about the
+    DOM; the panel is one way to drive it. Everything in this page (except the PDF preview at the bottom)
+    runs from a single bundled script with no network calls and no external packages.</p>
+
+  <h2>The three anchor kinds (v1)</h2>
+  <h3>Block</h3>
+  <p>The simplest anchor: a whole element. Right-click this paragraph and the comment pins to it,
+    surviving re-renders as long as the element keeps its identity.</p>
+  <h3>Range (phrase)</h3>
+  <p>Select a few words inside this sentence and right-click — the comment pins to the exact quote
+    using a W3C-style text selector, highlighted without rewriting the DOM. If the text later drifts,
+    the comment is marked orphaned rather than silently re-anchored to the wrong place.</p>
+  <h3>Region (rectangle over non-text content)</h3>
+  <p><strong>Right-drag a rectangle</strong> over the inline diagram, the image, or any non-text surface
+    to anchor a comment to that area — <em>no PDF required</em>. The box is stored as a normalized rect,
+    so it follows zoom and scroll, and the rectangle you drew stays visible while you type. The v1 region
+    surface is the <strong>DOM-rendered document</strong>: an inline <code>&lt;svg&gt;</code>, an
+    <code>&lt;img&gt;</code>, a <code>&lt;figure&gt;</code>, or any element.</p>
+
+  <h4>An inline SVG diagram (a DOM surface)</h4>
+  <figure class="demo-figure" data-tb-surface="svg-0">
+    <svg xmlns="http://www.w3.org/2000/svg" width="320" height="180" role="img"
+         aria-label="Inline SVG flow diagram — right-drag a region over it">
+      <rect width="320" height="180" fill="#eef3f8"/>
+      <rect x="24" y="34" width="104" height="48" rx="6" fill="#1d9bf0"/>
+      <rect x="192" y="34" width="104" height="48" rx="6" fill="#d6336c"/>
+      <line x1="128" y1="58" x2="192" y2="58" stroke="#666" stroke-width="2"/>
+      <rect x="108" y="108" width="104" height="44" rx="6" fill="#c98a00"/>
+      <text x="160" y="172" font-family="sans-serif" font-size="11" fill="#555" text-anchor="middle">Inline SVG (non-text) — right-drag a region</text>
+    </svg>
+  </figure>
+
+  <h4>An image (a DOM surface)</h4>
+  <figure class="demo-figure" data-tb-surface="figure-0">
+    <img alt="Sample raster image — right-drag a region over it" width="320" height="180"
+      src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='320'%20height='180'%3E%3Crect%20width='320'%20height='180'%20fill='%23f3eef8'/%3E%3Ccircle%20cx='90'%20cy='90'%20r='44'%20fill='%237048e8'/%3E%3Ccircle%20cx='230'%20cy='90'%20r='44'%20fill='%2320c997'/%3E%3Ctext%20x='160'%20y='168'%20font-family='sans-serif'%20font-size='11'%20fill='%23555'%20text-anchor='middle'%3ESample%20image%20(non-text)%20%E2%80%94%20right-drag%20a%20region%3C/text%3E%3C/svg%3E" />
+  </figure>
+
+  <h4>A marked panel surface</h4>
+  <div class="demo-surface" data-tb-surface="panel-0">
+    <span>…or right-drag anywhere on this panel (a marked surface) to anchor a region.</span>
+  </div>
+
+  <h2>Why anchoring is the hard part</h2>
+  <blockquote>A comment is only as useful as its ability to find its way back to what it was about.</blockquote>
+  <p>Most lightweight comment tools store an offset or an XPath and break the moment the document
+    changes. Tackback stores a resilient descriptor per anchor type and degrades honestly when it
+    can't resolve — the difference between a review tool you trust and one you don't.</p>
+
+  <h2>Customization, at a glance</h2>
+  <table>
+    <thead><tr><th>Axis</th><th>How</th><th>Default</th></tr></thead>
+    <tbody>
+      <tr><td>Theming</td><td><code>--tb-*</code> CSS tokens; <code>theme: 'auto'</code> follows the OS live</td><td>auto (light/dark)</td></tr>
+      <tr><td>Reactions</td><td>id + icon + per-locale label, fully replaceable set</td><td>question / agree / …</td></tr>
+      <tr><td>Language</td><td><code>setLocale()</code> at runtime; bring your own bundle</td><td>English, ja shipped</td></tr>
+      <tr><td>Panel controls</td><td><code>controls: { theme, marks, … }</code> chooses visible buttons</td><td>theme switch hidden</td></tr>
+    </tbody>
+  </table>
+  <p>Use the <b>Language</b> button in the bottom-left "Try it" bar to switch the panel UI between
+    English and Japanese; the annotation data is untouched. The <b>Theme switch</b> button re-attaches
+    the panel with a manual light/dark/accent toggle shown.</p>
+
+  <h2>PDF page region <span style="font-weight:400">— post-v1 preview, optional sample</span></h2>
+  <aside class="callout warn">
+    <p><strong>This block is a demo, not a v1 feature.</strong> Tackback v1 annotates the
+      <strong>DOM-rendered document</strong> (the sections above). A region over a <em>raster surface that
+      is not in the DOM</em> — a PDF page or a <code>&lt;canvas&gt;</code> — is <strong>post-v1</strong>,
+      shipped only as this optional <code>pdf</code> adapter sample. It is shown here to demonstrate that
+      Tackback can annotate a page that <em>contains</em> a PDF; it is <strong>not</strong> a v1 focus.
+      pdf.js is the consumer's own peer dependency (loaded here from a CDN), so this block — unlike the rest
+      of the page — needs network and falls back to a note when offline.</p>
+  </aside>
+  <div class="pdf-tools" id="pdf-tools" hidden>
+    <button id="zoom-out" type="button">−</button>
+    <span id="zoom-label">100%</span>
+    <button id="zoom-in" type="button">+</button>
+    <span class="pdf-note">right-drag a region over a page → comment; zoom to see the rect stay put</span>
+  </div>
+  <div id="pdf-box"><p class="pdf-note" id="pdf-status">initializing the optional PDF sample…</p></div>
+</div>
+
+<!-- The whole library: one classic script tag, one global. The module script below reads it. -->
+<!-- published bundle from CDN (jsdelivr mirrors npm). Pin keeps the hosted demo stable across releases. -->
+<script src="https://cdn.jsdelivr.net/npm/@brainworker/tackback@0.9.0/dist/tackback.umd.js"></script>
+<script type="module">
+  // Test affordance (harmless in prod): pdf.js renders via requestAnimationFrame, which the browser
+  // PAUSES while a tab is hidden — so a headless / background verification tab can stall mid-render.
+  // ?raf-shim routes rAF through setTimeout so a hidden tab can finish. A normal visible tab never needs it.
+  if (new URLSearchParams(location.search).has('raf-shim')) {
+    window.requestAnimationFrame = (cb) => setTimeout(() => cb(performance.now()), 0);
+  }
+
+  // ── config ────────────────────────────────────────────────────────────────────────────────────
+  const PDFJS_VER = '4.0.379';                  // pinned to the version this adapter is validated against
+  const CDN = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VER}`;
+  // A tiny 2-page sample PDF, inlined as base64 so the demo carries its own content (only pdf.js
+  // itself comes from the CDN). Decoded to bytes and handed to the pdf adapter as `data`.
+  const SAMPLE_PDF_B64 = 'JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUiA1IDAgUl0gL0NvdW50IDIgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA2MTIgNzkyXSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSA3IDAgUiA+PiA+PiAvQ29udGVudHMgNCAwIFIgPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCAxMzYgPj4Kc3RyZWFtCkJUIC9GMSAyNCBUZiA3MiA3MjAgVGQgKFBERiBQYWdlIDEgLSBEZXNpZ24gZ29hbHMpIFRqIEVUCkJUIC9GMSAxNCBUZiA3MiA2ODAgVGQgKFRoZSBhbmNob3IgbXVzdCBzdXJ2aXZlIHpvb20gYW5kIHNjcm9sbCBjaGFuZ2VzLikgVGogRVQKZW5kc3RyZWFtCmVuZG9iago1IDAgb2JqCjw8IC9UeXBlIC9QYWdlIC9QYXJlbnQgMiAwIFIgL01lZGlhQm94IFswIDAgNjEyIDc5Ml0gL1Jlc291cmNlcyA8PCAvRm9udCA8PCAvRjEgNyAwIFIgPj4gPj4gL0NvbnRlbnRzIDYgMCBSID4+CmVuZG9iago2IDAgb2JqCjw8IC9MZW5ndGggMTQyID4+CnN0cmVhbQpCVCAvRjEgMjQgVGYgNzIgNzIwIFRkIChQREYgUGFnZSAyIC0gQmFja2VuZCkgVGogRVQKQlQgL0YxIDE0IFRmIDcyIDY4MCBUZCAoUmVnaW9uIGNvbW1lbnQgaW4gUERGIHVzZXItc3BhY2UgY29vcmRzICh6b29tIGluZGVwZW5kZW50KS4pIFRqIEVUCmVuZHN0cmVhbQplbmRvYmoKNyAwIG9iago8PCAvVHlwZSAvRm9udCAvU3VidHlwZSAvVHlwZTEgL0Jhc2VGb250IC9IZWx2ZXRpY2EgPj4KZW5kb2JqCnhyZWYKMCA4CjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDAwOSAwMDAwMCBuIAowMDAwMDAwMDU4IDAwMDAwIG4gCjAwMDAwMDAxMjEgMDAwMDAgbiAKMDAwMDAwMDI0NyAwMDAwMCBuIAowMDAwMDAwNDM0IDAwMDAwIG4gCjAwMDAwMDA1NjAgMDAwMDAgbiAKMDAwMDAwMDc1MyAwMDAwMCBuIAp0cmFpbGVyCjw8IC9TaXplIDggL1Jvb3QgMSAwIFIgPj4Kc3RhcnR4cmVmCjgyMwolJUVPRg==';
+
+  const bytes = Uint8Array.from(atob(SAMPLE_PDF_B64), c => c.charCodeAt(0));
+  const pdfBox = document.getElementById('pdf-box');
+  const pdfStatus = document.getElementById('pdf-status');
+
+  // ── try the optional PDF (raster) adapter — degrades gracefully when offline / blocked ──────────
+  let pdf = null;
+  try {
+    const pdfjsLib = await import(`${CDN}/build/pdf.min.mjs`);
+    pdf = Tackback.createPdfAdapter({
+      pdfjs: pdfjsLib,
+      data: bytes,
+      workerSrc: `${CDN}/build/pdf.worker.min.mjs`,
+      standardFontDataUrl: `${CDN}/standard_fonts/`,
+      container: pdfBox,
+      scale: 1.0,
+    });
+    pdfStatus.remove();
+  } catch (err) {
+    pdfStatus.textContent = 'PDF preview unavailable (pdf.js could not load from the CDN — you may be ' +
+      'offline). This is an optional post-v1 sample; the rest of the demo works without it.';
+  }
+
+  // ── one Tackback instance + one panel for the whole page ────────────────────────────────────────
+  // (the panel binds document-level listeners, so a single instance owns the page.)
+  let showTheme = false, locale = 'en', useCustomReactions = false, panel = null;
+
+  const tb = Tackback.mount({
+    document: { id: 'tackback-demo', title: 'Tackback demo' },
+    author: 'Reviewer',
+    mediaAdapters: pdf ? [pdf] : [],
+  });
+
+  const REVIEW_REACTIONS = [
+    { id: 'up',       icon: '👍', label: { en: 'Agree',    ja: '賛成' } },
+    { id: 'down',     icon: '👎', label: { en: 'Disagree', ja: '反対' } },
+    { id: 'question', icon: '❓', label: { en: 'Question', ja: '疑問' } },
+    { id: 'nit',      icon: '🔧', label: { en: 'Nit',      ja: 'nit' } },
+  ];
+
+  function attach() {
+    panel?.destroy();
+    panel = Tackback.attachPanel(tb, {
+      theme: 'auto',
+      locale,
+      controls: { theme: showTheme },
+      reactions: useCustomReactions ? REVIEW_REACTIONS.slice() : undefined,
+    });
+  }
+  attach();
+
+  // PDF zoom controls + status (only meaningful when the adapter loaded)
+  if (pdf) {
+    const tools = document.getElementById('pdf-tools');
+    const zoomLabel = document.getElementById('zoom-label');
+    const refreshZoom = () => { zoomLabel.textContent = Math.round(pdf.scale * 100) + '%'; };
+    document.getElementById('zoom-in').onclick  = async () => { await pdf.setScale(Math.min(3, pdf.scale + 0.25)); refreshZoom(); };
+    document.getElementById('zoom-out').onclick = async () => { await pdf.setScale(Math.max(0.5, pdf.scale - 0.25)); refreshZoom(); };
+    tools.hidden = false;
+    refreshZoom();
+  }
+  tb.on('error', (e) => {
+    if (pdf && (e?.code === 'ADAPTER_FAILED')) {
+      const n = document.createElement('p'); n.className = 'pdf-note';
+      n.textContent = 'PDF render failed (' + (e.code) + ') — the optional sample surface is inert; the rest of the demo works.';
+      pdfBox.prepend(n);
+    }
+  });
+
+  // ── bottom-left "Try it" bar : demo-page controls (NOT part of the Tackback panel) ───────────────
+  const bar = document.createElement('div');
+  bar.className = 'trybar';
+  bar.innerHTML = '<b>Try it:</b>';
+  function mkBtn(label, onClick, isOn) {
+    const b = document.createElement('button');
+    b.textContent = label; if (isOn) b.classList.add('on');
+    b.onclick = () => onClick(b);
+    bar.appendChild(b); return b;
+  }
+  mkBtn('Language: EN', (b) => {
+    locale = locale === 'en' ? 'ja' : 'en';
+    b.textContent = 'Language: ' + locale.toUpperCase();
+    panel.setLocale(locale);
+  });
+  mkBtn('Theme switch: off', (b) => {
+    showTheme = !showTheme;
+    b.textContent = 'Theme switch: ' + (showTheme ? 'on' : 'off');
+    b.classList.toggle('on', showTheme);
+    attach();
+  });
+  mkBtn('Reactions: default', (b) => {
+    useCustomReactions = !useCustomReactions;
+    b.textContent = 'Reactions: ' + (useCustomReactions ? 'review set' : 'default');
+    b.classList.toggle('on', useCustomReactions);
+    attach();
+  });
+  document.body.appendChild(bar);
+
+  // ── expose for verification drivers (folds in the old umd-harness smoke role) ────────────────────
+  window.__api = Object.keys(Tackback);
+  window.__tb = tb;
+  window.__pdf = pdf;
+  window.__panel = () => panel;
+  window.__ready = false;
+  tb.ready.then(() => { window.__ready = true; });
+</script>
+</body>
+</html>
