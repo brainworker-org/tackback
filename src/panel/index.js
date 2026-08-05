@@ -9,7 +9,8 @@ import { LocaleRegistry } from './i18n.js';
 import { indexAnnotatable, resolveAnchorDom, clampToViewport } from './dom.js';
 import { computeCapture, resolveRegionRect } from '../core/resolution.js';
 import { classifyGesture, popupCommit, canCommit, applyHandleDrag } from './interaction.js';
-import { actorColorOf as resolveActorColor, claimedColors, authorKey as tbAuthorKey, lastSpeaker, utteranceCount, timelineItems } from './actors.js';
+import { actorColorOf as resolveActorColor, claimedColors, authorKey as tbAuthorKey, lastSpeaker } from './actors.js';
+import { threadKeyOf, timelineItems, utteranceCount, planInsertions } from './thread.js';
 import { documentSurface, DOCUMENT_SURFACE_ID } from '../core/media.js';
 import { normalizeRegion, buildQuoteSelector, resolveQuoteSelector } from '../core/anchor.js';
 import { selectionOffsetsWithin, offsetsToRange, paintHighlights, clearHighlights } from './range.js';
@@ -294,15 +295,15 @@ export function attachPanel(core, options = {}) {
     const byQuote = new Map();     // elementId\0exact\0start -> {anchor, comments[]}  (range)
     const regions = new Map();     // threadId|id -> {anchor, comments[]}
     for (const c of core.listComments()) {
+      // group by the SINGLE thread identity an open Pane also matches against (thread.js), so a
+      // badge and the conversation it opens can never disagree about what belongs together.
+      const key = threadKeyOf(c);
       if (c.anchor.type === 'region') {
-        const key = c.threadId || c.id;
         (regions.get(key) || regions.set(key, { anchor: c.anchor, comments: [] }).get(key)).comments.push(c);
       } else if (c.anchor.type === 'range') {
-        const s = c.anchor.selector;
-        const key = `${c.anchor.elementId}\0${s.exact}\0${s.start ?? ''}`;
         (byQuote.get(key) || byQuote.set(key, { anchor: c.anchor, comments: [] }).get(key)).comments.push(c);
       } else {
-        (byElement.get(c.anchor.elementId) || byElement.set(c.anchor.elementId, []).get(c.anchor.elementId)).push(c);
+        (byElement.get(key) || byElement.set(key, []).get(key)).push(c);
       }
     }
     // block — badge floats at the element's top-right on the overlay (no DOM insertion → no layout shift)
@@ -418,10 +419,13 @@ export function attachPanel(core, options = {}) {
     if (pendingRegionEl) { pendingRegionEl.remove(); pendingRegionEl = null; }
     doc.documentElement.classList.remove('tb-popup-open');   // region affordances (resize grip / move cursor) re-enabled
   }
-  function openPopup({ anchorLabel, existing, onSave, draftKey, ephemeralDraft }, ev) {
+  function openPopup({ anchorLabel, existing, onSave, draftKey, threadKey: initialThreadKey = null, ephemeralDraft }, ev) {
     closePopup();
     popup = el(doc, 'div', 'tb-popup');
     doc.documentElement.classList.add('tb-popup-open');   // lock region affordances while editing (REQ-008): no resize grip on hover, no move cursor
+    // the thread this Pane belongs to (thread.js). A brand-new region has none until its first
+    // comment exists — it is adopted below, on commit.
+    let threadKey = initialThreadKey;
     const draft = (draftKey != null && drafts.get(draftKey)) || null;
     let reactionId = draft?.reaction || '';
     const anchorEl = el(doc, 'div', 'tb-anchor'); anchorEl.textContent = '📍 ' + anchorLabel;
@@ -464,51 +468,59 @@ export function attachPanel(core, options = {}) {
       const wl = el(doc, 'span', 'tb-who'); wl.textContent = `${key}: `;
       return wl;
     };
-    const renderCommentRow = (c) => {
+    const commentRow = (c) => {
       const row = el(doc, 'div', 'tb-c');
       const { icon } = c.reaction ? resolveReaction(reactions, c.reaction, i18n.active) : { icon: '' };
       const wl = whoLabel(c.author);
       if (wl) row.appendChild(wl);
       row.append(doc.createTextNode(`${icon ? icon + ' ' : ''}${c.body || t('popup.emojiOnly')}`));
       tintRow(row, wl, c.author);
-      exwrap.appendChild(row);
+      return row;
     };
-    const renderReplyRow = (rep) => {
+    const replyRow = (rep) => {
       const row = el(doc, 'div', 'tb-c-reply');
       const wl = whoLabel(rep.author);
       if (wl) row.appendChild(wl);
       row.append(doc.createTextNode(rep.body || ''));
       tintRow(row, wl, rep.author);
-      exwrap.appendChild(row);
+      return row;
     };
+    const eventRow = (evt) => { const er = el(doc, 'div', 'tb-ev'); er.textContent = t('event.' + evt.type); return er; };
     const events = (existing && existing[0] && existing[0].anchor && existing[0].anchor.events) || [];
     // ONE flat, time-ordered timeline (REQ-704): every comment AND every reply is its own row, appended
     // in chronological order and interleaved with the region's move/resize history — replies are NO
     // longer nested/indented under their comment; each row stands alone, attributed by actor color+label.
-    // Every rendered item records its key, so the thread can GROW while it is open (see syncTimeline).
-    const renderedKeys = new Set();
-    const renderItem = (item) => {
-      if (renderedKeys.has(item.key)) return;
-      renderedKeys.add(item.key);
-      if (item.kind === 'event') { const er = el(doc, 'div', 'tb-ev'); er.textContent = t('event.' + item.evt.type); exwrap.appendChild(er); }
-      else if (item.kind === 'reply') renderReplyRow(item.rep);
-      else renderCommentRow(item.c);
+    // The rows on screen, in display order — the state a re-render reconciles against (thread.js
+    // decides WHAT goes WHERE; this only performs the DOM insertion it asks for).
+    const rows = [];              // [{ key, t, el }] in display order
+    const rowByKey = new Map();
+    const buildRow = (item) => (item.kind === 'event' ? eventRow(item.evt)
+      : item.kind === 'reply' ? replyRow(item.rep) : commentRow(item.c));
+    const draw = (items) => {
+      const plan = planInsertions(rows, items);
+      for (const { item, beforeKey } of plan) {
+        const node = buildRow(item);
+        const beforeEl = beforeKey ? rowByKey.get(beforeKey) : null;
+        if (beforeEl) exwrap.insertBefore(node, beforeEl); else exwrap.appendChild(node);
+        rowByKey.set(item.key, node);
+        const at = rows.findIndex((r) => r.t.localeCompare(item.t) > 0);
+        const rec = { key: item.key, t: item.t, el: node };
+        if (at === -1) rows.push(rec); else rows.splice(at, 0, rec);
+      }
+      return plan.length;
     };
-    const evItems = events
-      .filter((evt) => evt.type === 'move' || evt.type === 'resize')
-      .map((evt) => ({ key: `e:${evt.ts}:${evt.type}`, t: String(evt.ts || ''), kind: 'event', evt }));
-    for (const item of [...timelineItems(existing), ...evItems].sort((a, b) => a.t.localeCompare(b.t))) renderItem(item);
-    // An OPEN thread keeps up with the conversation. Utterances that arrive while the Pane is
-    // showing — an answer from another participant through the addReply seam, a comment committed
-    // elsewhere on the same anchor — are appended in place instead of waiting for the next open.
-    // Rows already on screen are skipped by key, so this is safe to run on every change; the input
-    // box, its draft and the reaction selection are untouched.
+    draw(timelineItems(existing, events));
+    // An OPEN thread keeps up with the conversation. Utterances arriving while the Pane is showing —
+    // an answer from another participant through the addReply seam, a comment committed elsewhere in
+    // the same thread — are drawn in place, at their chronological position. Rows already on screen
+    // are matched by key, so this is safe to run on every change; the input box, its draft and the
+    // reaction selection are never touched.
     popupSync = () => {
-      if (draftKey == null) return;
-      const group = core.listComments().filter((c) => anchorKey(c.anchor) === draftKey);
-      const before = renderedKeys.size;
-      for (const item of timelineItems(group)) renderItem(item);
-      if (renderedKeys.size !== before) exwrap.scrollTop = exwrap.scrollHeight;
+      if (threadKey == null) return;   // nothing to group by yet (an uncommitted region)
+      const group = core.listComments().filter((c) => threadKeyOf(c) === threadKey);
+      if (!group.length) return;
+      const evts = (group[0].anchor && group[0].anchor.events) || [];
+      if (draw(timelineItems(group, evts))) exwrap.scrollTop = exwrap.scrollHeight;
     };
     // NOTE: there is still no inline reply BOX (Keisuke 2026-06-15: "Reply はちょっと Too Much") — a
     // reply enters through the seam (core.addReply), driven by the integrator. What changed in 0.9.1
@@ -548,10 +560,13 @@ export function attachPanel(core, options = {}) {
       ta.value = ''; reactionId = '';
       [...rwrap.children].forEach((x) => x.classList.remove('on'));
       updateSaveState();
+      // a brand-new region's thread identity only exists once its first comment does — adopt it now,
+      // so the rest of the conversation syncs like any other thread.
+      if (created && threadKey == null) threadKey = threadKeyOf(created);
       // the sent utterance is normally already on screen — committing emitted `change`, and the open
-      // thread caught up through popupSync. This is the belt-and-braces path for a popup with no
-      // anchor key to group by; renderItem is keyed, so it never double-draws.
-      if (created && created.id) renderItem({ key: `c:${created.id}`, t: String(created.createdAt || ''), kind: 'comment', c: created });
+      // thread caught up through popupSync. This is the belt-and-braces path for the commit that has
+      // just established the thread; draw() is keyed, so it never double-draws.
+      if (created && created.id) draw(timelineItems([created]));
       const p = el(doc, 'div', 'tb-pending-note'); p.textContent = lbl('popup.pending', 'sent — awaiting reply…'); exwrap.appendChild(p);
       exwrap.scrollTop = exwrap.scrollHeight;   // the newest rows are at the bottom of a scrolling thread
       ta.focus();
@@ -591,7 +606,7 @@ export function attachPanel(core, options = {}) {
   }
   function openThread(comments, ev) {
     const a = comments[0].anchor;
-    openPopup({ anchorLabel: anchorLabelOf(a), existing: comments, draftKey: anchorKey(a), onSave: (body, reaction) => core.addComment({ anchor: a, body, reaction, threadId: comments[0].threadId || (a.type === 'region' || a.type === 'range' ? comments[0].id : undefined) }) }, ev);
+    openPopup({ anchorLabel: anchorLabelOf(a), existing: comments, draftKey: anchorKey(a), threadKey: threadKeyOf(comments[0]), onSave: (body, reaction) => core.addComment({ anchor: a, body, reaction, threadId: comments[0].threadId || (a.type === 'region' || a.type === 'range' ? comments[0].id : undefined) }) }, ev);
   }
   function anchorLabelOf(a) {
     if (a.type === 'region') return a.pageIndex != null ? `p.${a.pageIndex} region` : 'region';
@@ -622,7 +637,7 @@ export function attachPanel(core, options = {}) {
     } else {
       anchor = { type: 'block', elementId: elx.id };
     }
-    openPopup({ anchorLabel: anchorLabelOf(anchor), existing: [], draftKey: anchorKey(anchor), onSave: (body, reaction) => core.addComment({ anchor, body, reaction, snapshot }) }, e);
+    openPopup({ anchorLabel: anchorLabelOf(anchor), existing: [], draftKey: anchorKey(anchor), threadKey: threadKeyOf({ anchor }), onSave: (body, reaction) => core.addComment({ anchor, body, reaction, snapshot }) }, e);
   };
   const onContext = (e) => {
     if (e.target.closest('.tb-popup,.tb-panel')) return;

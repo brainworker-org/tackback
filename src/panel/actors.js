@@ -73,38 +73,6 @@ export function actorColorOf(author, actorColors, claimed) {
 }
 
 /**
- * A thread's utterances as ONE chronological list — every comment and every reply, each carrying a
- * stable `key` so a renderer can tell what it has already drawn. This is what makes an OPEN thread
- * able to grow: re-run it after a change, skip the keys already on screen, append the rest.
- * @param {Comment[]|null|undefined} comments
- * @returns {Array<{key:string, t:string, kind:'comment'|'reply', c?:Comment, rep?:object}>}
- */
-export function timelineItems(comments) {
-  const items = [];
-  for (const c of comments || []) {
-    items.push({ key: `c:${c.id}`, t: String(c.createdAt || ''), kind: 'comment', c });
-    for (const rep of (c.replies || [])) {
-      items.push({ key: `r:${rep.id}`, t: String(rep.createdAt || ''), kind: 'reply', rep });
-    }
-  }
-  items.sort((a, b) => a.t.localeCompare(b.t));
-  return items;
-}
-
-/**
- * How many UTTERANCES a thread holds — every comment plus every reply. This is what an anchor badge
- * counts: a thread where one comment drew three replies reads as four, because four things were said
- * there. Counting root comments only would make a busy conversation look untouched.
- * @param {Comment[]|null|undefined} comments
- * @returns {number}
- */
-export function utteranceCount(comments) {
-  let n = 0;
-  for (const c of comments || []) n += 1 + ((c.replies && c.replies.length) || 0);
-  return n;
-}
-
-/**
  * The author of the LAST utterance in a thread — the most recent comment OR reply by timestamp — so
  * an anchor can be tinted by "who touched it last". Pure and category-agnostic (returns the Author
  * as-is; ties resolve to the later item in iteration order).

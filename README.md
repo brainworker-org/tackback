@@ -172,7 +172,7 @@ Type declarations (`.d.ts`, generated from JSDoc) ship with the package.
 
 ## Tests
 ```sh
-npm test     # node --test — 164 tests, zero external deps
+npm test     # node --test — the full suite, zero external deps
 ```
 `node:test` + `node:assert` are built into Node ≥ 18 — no install needed, matching the library's
 runtime zero-dependency ethos. DOM/PDF rendering is verified in the browser via the single bundled
