@@ -96,8 +96,16 @@ re-skins and re-labels Tackback without forking it or overriding its CSS:
 - **Panel controls** — `controls: { author, export, import, theme, marks, clear, docThread }` chooses
   which buttons render; every one except `import` is on by default. `docThread` opens the conversation
   about the document as a whole — the only thread with no mark on the page, so the control is its mark
-  (utterance count + attention tint). Hiding a control never removes the capability: each has an
-  equivalent on the PanelInstance (`setTheme`, `toggleMarks`, `openDocumentThread`, …).
+  (utterance count + attention tint).
+
+Hiding a button does not hide the *data* behind it, but what remains reachable differs by control:
+
+| control | with the button hidden |
+|---|---|
+| `theme` / `marks` / `docThread` | `panel.setTheme()` / `panel.toggleMarks()` / `panel.openDocumentThread()` |
+| `author` | `core.setAuthor()` — the same state the field edits |
+| `export` / `import` | `core.exportEnvelope()` / `core.importEnvelope()` — the data path; the paste-and-load *dialogs* are the panel's own and have no API form |
+| `clear` | no equivalent. The button is more than a loop over `deleteComment`: it confirms first, closes an open Pane and drops an uncommitted region rect. Drive `core.deleteComment()` yourself and decide those for your UI. |
 
 ```js
 const panel = attachPanel(tb, {

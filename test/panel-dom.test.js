@@ -226,10 +226,11 @@ test('panel: an anchor kind the build does not know is not drawn as some other k
   } finally { f.restore(); }
 });
 
-test('panel: a page-level clear-on-open policy sees the control click', () => {
-  // the demos clear their own "unread" notice when a thread is opened, from a document-level
-  // listener. The fixture has to bubble for that to be exercisable at all — before it did not, so a
-  // policy that missed the document control (as both demos' did) could not have been caught here.
+test('panel: a control click reaches a page-level listener, so a clear-on-open policy can work', () => {
+  // This pins the MECHANISM, not either demo: an integrator clearing its own notice when a thread
+  // opens does so from a document-level listener, and the fixture could not bubble at all before, so
+  // no such policy was exercisable here. A regression in a demo's own listener would still not fail
+  // this test — the demos are not loaded.
   const f = mountPanel();
   try {
     const c = f.core.addComment({ anchor: { type: 'document' }, body: 'q' });
