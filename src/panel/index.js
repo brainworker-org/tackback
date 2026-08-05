@@ -10,7 +10,7 @@ import { indexAnnotatable, resolveAnchorDom, clampToViewport } from './dom.js';
 import { computeCapture, resolveRegionRect } from '../core/resolution.js';
 import { classifyGesture, popupCommit, canCommit, nextSendState, answersSend, applyHandleDrag } from './interaction.js';
 import { actorColorOf as resolveActorColor, claimedColors, authorKey as tbAuthorKey, lastSpeaker } from './actors.js';
-import { threadKeyOf, timelineItems, utteranceCount, planInsertions } from './thread.js';
+import { threadKeyOf, timelineItems, utteranceCount, planInsertions, anchorLabelSpec } from './thread.js';
 import { documentSurface, DOCUMENT_SURFACE_ID } from '../core/media.js';
 import { normalizeRegion, buildQuoteSelector, resolveQuoteSelector } from '../core/anchor.js';
 import { selectionOffsetsWithin, offsetsToRange, paintHighlights, clearHighlights } from './range.js';
@@ -108,7 +108,8 @@ const PANEL_CSS = `
  *   `{ author: true, export: true, import: false, theme: true, marks: true, clear: true, docThread: true }`.
  *   `docThread` opens the conversation about the document AS A WHOLE — it is the only thread with no
  *   mark on the page, so the control is its mark (utterance count + attention tint). Hiding it does
- *   not remove the capability: `panel.openDocumentThread()` is the same action.
+ *   not remove the capability: `panel.openDocumentThread()` is the same action. (`clear` is the one
+ *   control with no API equivalent — see the README.)
  */
 export function attachPanel(core, options = {}) {
   const doc = (options.root && options.root.ownerDocument) || globalThis.document;
@@ -173,7 +174,11 @@ export function attachPanel(core, options = {}) {
   // ---- panel chrome ----------------------------------------------------------------------------
   // `controls` chooses which buttons appear. The theme switch is hidden by default — `auto`
   // (live OS dark-mode follow, wired above) is the right default and rarely needs a manual toggle.
-  // Hidden controls still work via the PanelInstance API (e.g. `setTheme`, `toggleMarks`).
+  // Hiding a button never hides the DATA behind it, but the substitute differs by control:
+  // theme/marks/docThread have PanelInstance methods; author/export/import have core equivalents
+  // (setAuthor / exportEnvelope / importEnvelope — the dialogs themselves are the panel's own); and
+  // `clear` has none, because the button also confirms, closes an open Pane and drops an uncommitted
+  // region rect. See the README table.
   // theme: shown by default so a participant can switch the colour scheme (STORY-06); the default theme
   // value is still 'auto' (live OS light/dark follow) — the toggle adds the named palettes on top.
   // `import` is OFF by default — it is the receiver / AI-participant path (STORY-02/04), which is
@@ -701,15 +706,14 @@ export function attachPanel(core, options = {}) {
   }
 
   function anchorLabelOf(a) {
-    if (a.type === 'document') return lbl('anchor.document', 'this document');
-    if (a.type === 'region') return a.pageIndex != null ? `p.${a.pageIndex} region` : 'region';
-    if (a.type === 'range') {
-      const q = a.selector?.exact || '';
-      return `“${q.length > 40 ? q.slice(0, 40) + '…' : q}”`;
+    const spec = anchorLabelSpec(a);
+    if (!spec) return null;                       // an unknown kind gets no label rather than block's
+    if (spec.kind === 'document') return lbl('anchor.document', 'this document');
+    if (spec.kind === 'block') {
+      const elx = doc.getElementById(spec.elementId);
+      return (elx?.getAttribute('data-tb-section') || spec.elementId);
     }
-    if (a.type !== 'block') return null;   // an unknown kind gets no label rather than block's
-    const elx = doc.getElementById(a.elementId);
-    return (elx?.getAttribute('data-tb-section') || a.elementId);
+    return spec.text;
   }
 
   // ---- gestures --------------------------------------------------------------------------------

@@ -7,7 +7,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { threadKeyOf, timelineItems, utteranceCount, planInsertions } from '../src/panel/thread.js';
+import { threadKeyOf, timelineItems, utteranceCount, planInsertions, anchorLabelSpec } from '../src/panel/thread.js';
 
 const at = (n) => `2026-08-05T10:0${n}:00.000Z`;
 const block = (id) => ({ type: 'block', elementId: id });
@@ -159,4 +159,31 @@ test('threadKeyOf: an unrecognised anchor kind gets no identity instead of borro
   // `block:undefined` and every such comment collapsed into one imaginary shared thread.
   assert.equal(threadKeyOf({ id: 'x', anchor: { type: 'workspace' } }), null);
   assert.equal(threadKeyOf({ id: 'y', anchor: { type: 'documnet' } }), null, 'including a typo');
+});
+
+// --- anchorLabelSpec: how an anchor names itself, decided without the DOM -----------------------
+
+test('anchorLabelSpec: each kind names itself; block defers its name to the document', () => {
+  assert.deepEqual(anchorLabelSpec({ type: 'document' }), { kind: 'document' });
+  assert.deepEqual(anchorLabelSpec({ type: 'region', pageIndex: 3 }), { kind: 'region', text: 'p.3 region' });
+  assert.deepEqual(anchorLabelSpec({ type: 'region' }), { kind: 'region', text: 'region' });
+  assert.deepEqual(anchorLabelSpec({ type: 'range', selector: { exact: 'a phrase' } }), { kind: 'range', text: '\u201ca phrase\u201d' });
+  // a block only knows its element; the section name lives in the document, so it returns the lookup
+  assert.deepEqual(anchorLabelSpec({ type: 'block', elementId: 'p1' }), { kind: 'block', elementId: 'p1' });
+});
+
+test('anchorLabelSpec: a long quote is truncated so the header stays a header', () => {
+  const long = 'x'.repeat(120);
+  const { text } = anchorLabelSpec({ type: 'range', selector: { exact: long } });
+  assert.ok(text.length < 50 && text.includes('\u2026'), `expected an elided quote, got ${text.length} chars`);
+});
+
+test('anchorLabelSpec: an unrecognised kind gets NO label rather than borrowing block\'s', () => {
+  // this is the regression the panel fixture could not catch: restoring the old fall-through left
+  // every panel test green, because the label path is not what those tests assert on.
+  assert.equal(anchorLabelSpec({ type: 'workspace' }), null);
+  assert.equal(anchorLabelSpec({ type: 'workspace', elementId: 'p1' }), null,
+    'an unknown kind that happens to carry elementId must not be labelled as a block');
+  assert.equal(anchorLabelSpec(null), null);
+  assert.equal(anchorLabelSpec({}), null);
 });
