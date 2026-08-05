@@ -14,7 +14,7 @@ import { TackbackError } from './errors.js';
 
 // MUST equal package.json "version" (export envelope's generator.version comes from here);
 // export.test.js asserts they match so they can't drift.
-const LIB_VERSION = '0.9.1';
+const LIB_VERSION = '0.9.2';
 const nowIso = () => new Date().toISOString();
 
 /**

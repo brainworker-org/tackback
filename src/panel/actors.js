@@ -73,6 +73,19 @@ export function actorColorOf(author, actorColors, claimed) {
 }
 
 /**
+ * How many UTTERANCES a thread holds — every comment plus every reply. This is what an anchor badge
+ * counts: a thread where one comment drew three replies reads as four, because four things were said
+ * there. Counting root comments only would make a busy conversation look untouched.
+ * @param {Comment[]|null|undefined} comments
+ * @returns {number}
+ */
+export function utteranceCount(comments) {
+  let n = 0;
+  for (const c of comments || []) n += 1 + ((c.replies && c.replies.length) || 0);
+  return n;
+}
+
+/**
  * The author of the LAST utterance in a thread — the most recent comment OR reply by timestamp — so
  * an anchor can be tinted by "who touched it last". Pure and category-agnostic (returns the Author
  * as-is; ties resolve to the later item in iteration order).

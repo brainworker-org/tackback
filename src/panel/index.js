@@ -9,7 +9,7 @@ import { LocaleRegistry } from './i18n.js';
 import { indexAnnotatable, resolveAnchorDom, clampToViewport } from './dom.js';
 import { computeCapture, resolveRegionRect } from '../core/resolution.js';
 import { classifyGesture, popupCommit, canCommit, applyHandleDrag } from './interaction.js';
-import { actorColorOf as resolveActorColor, claimedColors, authorKey as tbAuthorKey, lastSpeaker } from './actors.js';
+import { actorColorOf as resolveActorColor, claimedColors, authorKey as tbAuthorKey, lastSpeaker, utteranceCount } from './actors.js';
 import { documentSurface, DOCUMENT_SURFACE_ID } from '../core/media.js';
 import { normalizeRegion, buildQuoteSelector, resolveQuoteSelector } from '../core/anchor.js';
 import { selectionOffsetsWithin, offsetsToRange, paintHighlights, clearHighlights } from './range.js';
@@ -77,7 +77,6 @@ const PANEL_CSS = `
    actor color + label so who-said-what stays legible without an indent tree. */
 .tb-existing .tb-c-reply { padding: 4px 0; border-bottom: 1px dotted var(--tb-border); font-size: 12px; }
 .tb-existing .tb-who { font-weight: 700; margin-right: 2px; }
-.tb-existing .tb-del { color: var(--tb-danger); cursor: pointer; float: right; font-weight: 700; margin-left: 8px; }
 /* a region's move/resize history rendered inline in the thread, alongside comments but NOT deletable (REQ-704/009). */
 .tb-existing .tb-ev { padding: 3px 0; border-bottom: 1px dotted var(--tb-border); color: var(--tb-muted); font-size: 11px; }
 /* the marker under a sent-but-unresolved utterance in a conversation (interactive transport, REQ-702):
@@ -310,7 +309,7 @@ export function attachPanel(core, options = {}) {
     for (const comments of byElement.values()) {
       const r = resolveAnchorDom(comments[0].anchor, doc, core.surfaces);
       const badge = el(doc, 'span', 'tb-badge');
-      badge.textContent = '💬' + comments.length;
+      badge.textContent = '💬' + utteranceCount(comments);
       paintAnchor(badge, comments);
       badge.__tbComments = comments;   // for the right-click delete-anchor menu
       badge.onclick = (ev) => { ev.stopPropagation(); openThread(comments, ev); };
@@ -332,7 +331,7 @@ export function attachPanel(core, options = {}) {
       const hit = element ? resolveQuoteSelector(element.textContent, anchor.selector) : null;
       const range = hit ? offsetsToRange(element, hit.start, hit.end) : null;
       const badge = el(doc, 'span', 'tb-badge');
-      badge.textContent = '💬' + comments.length;
+      badge.textContent = '💬' + utteranceCount(comments);
       paintAnchor(badge, comments);
       badge.__tbComments = comments;   // for the right-click delete-anchor menu
       badge.onclick = (ev) => { ev.stopPropagation(); openThread(comments, ev); };
@@ -354,7 +353,7 @@ export function attachPanel(core, options = {}) {
       if (!r || !r.rect) {   // unresolvable region (surface gone / rect uncomputable) → orphaned (REQ-004), not silently hidden
         markOrphan(group.comments);
         const obadge = el(doc, 'span', 'tb-badge tb-orphan');
-        obadge.textContent = '💬' + group.comments.length;
+        obadge.textContent = '💬' + utteranceCount(group.comments);
         paintAnchor(obadge, group.comments);
         obadge.__tbComments = group.comments;
         obadge.title = group.anchor.surfaceId || 'region';
@@ -379,7 +378,7 @@ export function attachPanel(core, options = {}) {
       box.appendChild(grip);
       const pin = el(doc, 'span', 'tb-pin');   // the anchor icon — left-CLICK opens the thread, left-DRAG moves the region (REQ-008). The pin look is COMMON across surfaces (Keisuke 2026-06-16: distinguish by the region border only — the pin is too small to read); the binding is conveyed by the box border + this tooltip.
       if (boundToSurface) pin.title = `bound to surface "${group.anchor.surfaceId}" — moves & scales with it`;
-      pin.textContent = '💬' + group.comments.length;
+      pin.textContent = '💬' + utteranceCount(group.comments);
       paintAnchor(pin, group.comments);
       pin.__tbComments = group.comments;   // for the right-click delete-anchor menu
       Object.assign(pin.style, { left: (px.x + px.width) + 'px', top: (px.y + px.height) + 'px' });
@@ -390,7 +389,7 @@ export function attachPanel(core, options = {}) {
       r.element.append(box, pin);
       regionOverlays.push({ box, pin, surfaceEl: r.element, comments: group.comments });
     }
-    countEl.textContent = t('panel.count', { n: core.listComments().length });
+    countEl.textContent = t('panel.count', { n: utteranceCount(core.listComments()) });   // utterances, so the panel total agrees with the badges
     orphanedIds.clear(); for (const id of currentOrphans) orphanedIds.add(id);   // transition set for the next render (all kinds)
     // apply the collected orphan/resolve mutations AFTER the render pass (no mid-iteration re-entry).
     // reportOrphaned is idempotent + transition-guarded; markResolved is a no-op on a non-orphan — so the
@@ -441,17 +440,13 @@ export function attachPanel(core, options = {}) {
     const exwrap = el(doc, 'div', 'tb-existing');
     // Render the thread inline as ONE flat, TIME-ORDERED timeline (REQ-704): every utterance —
     // comment or reply — is its own row carrying its actor color + label, interleaved with the
-    // region's move/resize history (REQ-009). A comment is deletable; a reply is not (replies arrive
-    // through the addReply seam), and move/resize rows never are — they are an immutable record of how
-    // the anchor was repositioned (Keisuke 2026-06-15).
-    // Because the rows are FLAT SIBLINGS, a comment's replies are no longer carried by its DOM
-    // subtree: each row registers under the id of the comment it belongs to, so deleting that comment
-    // removes the whole group. Without this a delete would leave its replies on screen as orphan rows.
-    const rowsByComment = new Map();   // comment id -> [row, ...its reply rows]
-    const trackRow = (ownerId, row) => {
-      const rows = rowsByComment.get(ownerId) || rowsByComment.set(ownerId, []).get(ownerId);
-      rows.push(row);
-    };
+    // region's move/resize history (REQ-009), which is an immutable record of how the anchor was
+    // repositioned (Keisuke 2026-06-15).
+    // NOTHING in the timeline is deletable from here (Keisuke 2026-08-05, hands-on): a per-row ✕ made
+    // "delete one utterance" look like the granularity of the model, when a reply belongs to its
+    // comment and goes with it — so removing a comment silently took a whole side of the conversation
+    // away. Deletion is an ANCHOR-level act: right-click the anchor → Delete anchor. The core
+    // deleteComment API is untouched; it is simply not an affordance the Pane offers.
     // rows re-tint live when the injected category map changes (setActorColors), so an open popup
     // never keeps showing colors from the previous map.
     const tinted = [];
@@ -470,31 +465,19 @@ export function attachPanel(core, options = {}) {
     };
     const renderCommentRow = (c) => {
       const row = el(doc, 'div', 'tb-c');
-      const del = el(doc, 'span', 'tb-del'); del.textContent = '✕';
-      // deleting a comment takes ITS REPLY ROWS with it (they are siblings in the flat timeline, not
-      // children), then closes only when the last COMMENT is gone (reply/event rows are not comments).
-      del.onclick = () => {
-        core.deleteComment(c.id);
-        for (const r of (rowsByComment.get(c.id) || [])) r.remove();
-        rowsByComment.delete(c.id);
-        if (!exwrap.querySelector('.tb-c')) closePopup();
-      };
-      row.appendChild(del);
       const { icon } = c.reaction ? resolveReaction(reactions, c.reaction, i18n.active) : { icon: '' };
       const wl = whoLabel(c.author);
       if (wl) row.appendChild(wl);
       row.append(doc.createTextNode(`${icon ? icon + ' ' : ''}${c.body || t('popup.emojiOnly')}`));
       tintRow(row, wl, c.author);
-      trackRow(c.id, row);
       exwrap.appendChild(row);
     };
-    const renderReplyRow = (rep, ownerId) => {
+    const renderReplyRow = (rep) => {
       const row = el(doc, 'div', 'tb-c-reply');
       const wl = whoLabel(rep.author);
       if (wl) row.appendChild(wl);
       row.append(doc.createTextNode(rep.body || ''));
       tintRow(row, wl, rep.author);
-      trackRow(ownerId, row);
       exwrap.appendChild(row);
     };
     const events = (existing && existing[0] && existing[0].anchor && existing[0].anchor.events) || [];
@@ -504,13 +487,13 @@ export function attachPanel(core, options = {}) {
     const timeline = [];
     for (const c of existing || []) {
       timeline.push({ t: String(c.createdAt || ''), kind: 'comment', c });
-      for (const rep of (c.replies || [])) timeline.push({ t: String(rep.createdAt || ''), kind: 'reply', rep, ownerId: c.id });
+      for (const rep of (c.replies || [])) timeline.push({ t: String(rep.createdAt || ''), kind: 'reply', rep });
     }
     for (const evt of events) if (evt.type === 'move' || evt.type === 'resize') timeline.push({ t: String(evt.ts || ''), kind: 'event', evt });
     timeline.sort((a, b) => a.t.localeCompare(b.t));
     for (const item of timeline) {
       if (item.kind === 'event') { const er = el(doc, 'div', 'tb-ev'); er.textContent = t('event.' + item.evt.type); exwrap.appendChild(er); }
-      else if (item.kind === 'reply') renderReplyRow(item.rep, item.ownerId);
+      else if (item.kind === 'reply') renderReplyRow(item.rep);
       else renderCommentRow(item.c);
     }
     // NOTE: there is still no inline reply BOX (Keisuke 2026-06-15: "Reply はちょっと Too Much") — a

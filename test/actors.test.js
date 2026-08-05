@@ -7,7 +7,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { AUTHOR_PALETTE, authorKey, authorColor, claimedColors, actorColorOf, lastSpeaker } from '../src/panel/actors.js';
+import { AUTHOR_PALETTE, authorKey, authorColor, claimedColors, actorColorOf, lastSpeaker, utteranceCount } from '../src/panel/actors.js';
 
 const at = (n) => `2026-08-05T10:0${n}:00.000Z`;
 
@@ -35,6 +35,25 @@ test('lastSpeaker: order-independent (unsorted input), empty/absent input → nu
 
 test('lastSpeaker: a comment with no timestamps still yields an author (never throws)', () => {
   assert.equal(lastSpeaker([{ author: 'x' }]), 'x');
+});
+
+// ---- utteranceCount (what an anchor badge shows) ----
+test('utteranceCount: every comment AND every reply counts', () => {
+  const thread = [
+    { createdAt: at(1), replies: [{ createdAt: at(2) }, { createdAt: at(3) }] },
+    { createdAt: at(4), replies: [] },
+  ];
+  assert.equal(utteranceCount(thread), 4, '2 comments + 2 replies — a busy thread must not read as 2');
+  assert.equal(utteranceCount([{ createdAt: at(1) }]), 1, 'a comment with no replies field counts as one');
+  assert.equal(utteranceCount([]), 0);
+  assert.equal(utteranceCount(null), 0);
+});
+
+test('utteranceCount: answers from another participant move the number', () => {
+  const c = { createdAt: at(1), replies: [] };
+  assert.equal(utteranceCount([c]), 1);
+  const answered = { ...c, replies: [{ createdAt: at(2), author: { id: 'other', kind: 'ai' } }] };
+  assert.equal(utteranceCount([answered]), 2, 'the reply is visible in the count, not hidden inside it');
 });
 
 // ---- authorKey / authorColor ----
