@@ -592,13 +592,14 @@ export function attachPanel(core, options = {}) {
       ta.value = ''; reactionId = '';
       [...rwrap.children].forEach((x) => x.classList.remove('on'));
       updateSaveState();
-      // a brand-new region's thread identity only exists once its first comment does — adopt it now,
-      // so the rest of the conversation syncs like any other thread.
+      // A brand-new region's thread identity only exists once its first comment does — adopt it now,
+      // then sync. Until this point the thread had no identity to match against, so NOTHING committed
+      // during it was drawn: not the utterance itself, and not an answer an integrator sent
+      // synchronously. Syncing here catches both, into the same batch, so the settlement below judges
+      // them as if they had arrived like any other. draw() is keyed, so nothing is drawn twice.
       if (created && threadKey == null) threadKey = threadKeyOf(created);
-      // the sent utterance is normally already on screen — committing emitted `change`, and the open
-      // thread caught up through popupSync. This is the belt-and-braces path for the commit that has
-      // just established the thread; draw() is keyed, so it never double-draws.
-      if (created && created.id) draw(timelineItems([created]));
+      inFlight = drawnDuringCommit;
+      try { popupSync(); } finally { inFlight = null; }
       markSent();
       // …and only now judge what landed during the commit. The utterance we just committed does not
       // answer itself; anything else said in this thread does — including a reply an integrator sent
