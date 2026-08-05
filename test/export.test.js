@@ -10,6 +10,12 @@ import { memoryAdapter } from '../src/core/storage.js';
 test('integrity: Tackback.version (→ export generator.version) matches package.json', () => {
   const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   assert.equal(Tackback.version, pkg.version);   // the export envelope stamps this — must not drift
+  // …and the lockfile records the same version in both places it carries one. A hand-edited version
+  // bump leaves the lock behind, which is invisible until someone reads the repo and finds two
+  // answers to "what version is this?" (0.9.2: it had been sitting at 0.9.1).
+  const lock = JSON.parse(readFileSync(new URL('../package-lock.json', import.meta.url), 'utf8'));
+  assert.equal(lock.version, pkg.version, 'package-lock.json root version drifted from package.json');
+  assert.equal(lock.packages[''].version, pkg.version, 'package-lock.json self-entry drifted from package.json');
 });
 
 const v2 = (id) => ({ id, anchor: { type: 'block', elementId: 'e' }, body: 'b', createdAt: 't' });
