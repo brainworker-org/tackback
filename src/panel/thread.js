@@ -25,6 +25,9 @@
 export function threadKeyOf(comment) {
   const a = comment && comment.anchor;
   if (!a) return null;
+  // The document as a whole is ONE conversation per instance — the mount is already scoped to a
+  // single document, so the anchor needs nothing further to identify its thread.
+  if (a.type === 'document') return 'document';
   if (a.type === 'region') {
     const id = comment.threadId || comment.id;
     return id ? `region:${id}` : null;
@@ -33,7 +36,11 @@ export function threadKeyOf(comment) {
     const s = a.selector || {};
     return `range:${a.elementId}\u0000${s.exact ?? ''}\u0000${s.start ?? ''}`;
   }
-  return `block:${a.elementId}`;
+  if (a.type === 'block') return `block:${a.elementId}`;
+  // An unrecognised kind gets NO identity rather than borrowing block's. This dispatch used to end in
+  // a bare `return block:...`, so any kind this build did not know about became `block:undefined` —
+  // every such comment silently collapsing into one imaginary shared thread.
+  return null;
 }
 
 /**

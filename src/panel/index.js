@@ -64,6 +64,9 @@ const PANEL_CSS = `
    flag is cleared. The MEANING of the flag (e.g. "unread") is the integrator's — Tackback only paints
    and clears it; it attaches no semantics of its own. */
 .tb-badge.tb-attn, .tb-pin.tb-attn { background: var(--tb-attention) !important; color: #fff !important; }
+/* the document thread has no mark on the page — the panel control is its mark, so it carries the
+   same attention tint. */
+.tb-panel button.tb-docbtn.tb-attn { background: var(--tb-attention); color: #fff; }
 .tb-popup { position: fixed; z-index: 10000; width: 320px; background: var(--tb-popup-bg); color: var(--tb-popup-fg);
   border: 1px solid var(--tb-border); border-radius: 10px; box-shadow: 0 8px 28px rgba(0,0,0,.35); padding: 11px; font: 13px -apple-system, system-ui, sans-serif; }
 .tb-popup .tb-anchor { font-size: 11px; color: var(--tb-muted); margin-bottom: 4px; }
@@ -102,9 +105,10 @@ const PANEL_CSS = `
  *   `{ ai: '#2563eb', human: '#db2777' }`; an anchor is tinted by its last speaker's category. With
  *   no map, authors fall back to a generic per-identity hue. Tackback ships no categories or colors.
  *   `controls` selects which panel buttons are shown (the rest still work via the API). Defaults:
- *   `{ author: true, export: true, theme: false, marks: true, clear: true }` — the theme switch is
- *   hidden by default because `auto` (live OS dark-mode follow) is the right default; pass
- *   `controls: { theme: true }` to show it.
+ *   `{ author: true, export: true, import: false, theme: true, marks: true, clear: true, docThread: true }`.
+ *   `docThread` opens the conversation about the document AS A WHOLE — it is the only thread with no
+ *   mark on the page, so the control is its mark (utterance count + attention tint). Hiding it does
+ *   not remove the capability: `panel.openDocumentThread()` is the same action.
  */
 export function attachPanel(core, options = {}) {
   const doc = (options.root && options.root.ownerDocument) || globalThis.document;
@@ -128,6 +132,7 @@ export function attachPanel(core, options = {}) {
   if (options.labels) for (const [lang, b] of Object.entries(options.labels)) i18n.register(lang, b);
   if (options.locale) i18n.setLocale(options.locale);
   const t = (k, v) => i18n.t(k, v);
+  const lbl = (k, fb) => { const v = t(k); return v === k ? fb : v; };   // i18n with a literal fallback
 
   doc.documentElement.setAttribute('data-tb-root', '');
   indexAnnotatable(root);
@@ -174,7 +179,7 @@ export function attachPanel(core, options = {}) {
   // `import` is OFF by default — it is the receiver / AI-participant path (STORY-02/04), which is
   // post-v1 scope; enable it explicitly with `controls: { import: true }`. Every control is config-
   // toggleable here, so an integrator can show/hide any menu item (Keisuke 2026-06-15).
-  const CONTROL_DEFAULTS = { author: true, export: true, import: false, theme: true, marks: true, clear: true };
+  const CONTROL_DEFAULTS = { author: true, export: true, import: false, theme: true, marks: true, clear: true, docThread: true };
   const controls = { ...CONTROL_DEFAULTS, ...(options.controls || {}) };
 
   // The theme switch (when shown) cycles named "play" themes: default (OS auto) → ocean → passion.
@@ -236,6 +241,16 @@ export function attachPanel(core, options = {}) {
     marksBtn.onclick = () => doc.documentElement.classList.toggle('tb-hide');
     panel.appendChild(marksBtn);
   }
+  // The document thread's entry point. Every other thread advertises itself with a badge on the
+  // thing it is about; this one is about the whole document, so the panel is where it lives. The
+  // button carries the same utterance count a badge would, and wears the same attention tint.
+  let docBtn = null;
+  if (controls.docThread) {
+    docBtn = btn(doc, t('panel.docThread'), 'tb-sec');
+    docBtn.classList.add('tb-docbtn');
+    docBtn.onclick = (ev) => openDocumentThread(ev);
+    panel.appendChild(docBtn);
+  }
   let clearBtn = null;
   if (controls.clear) {
     clearBtn = btn(doc, t('panel.clearAll'), 'tb-sec');
@@ -253,6 +268,9 @@ export function attachPanel(core, options = {}) {
   target.appendChild(panel);
 
   // ---- marks / overlays ------------------------------------------------------------------------
+  // the document thread's comments, refreshed by every renderMarks. It has no mark on the page, so
+  // the panel control is where its count and its attention tint are shown.
+  let docComments = [];
   const orphanedIds = new Set();   // range ids currently orphaned — emit anchor:orphaned only on transition (§6 R1 M5)
   // place a badge on the document surface overlay (absolute within the positioned root) at the
   // top-right of a target rect — NOT inserted into the DOM, so the page layout never shifts (W-DB5V).
@@ -294,18 +312,29 @@ export function attachPanel(core, options = {}) {
     const byElement = new Map();   // elementId -> comments[]  (block)
     const byQuote = new Map();     // elementId\0exact\0start -> {anchor, comments[]}  (range)
     const regions = new Map();     // threadId|id -> {anchor, comments[]}
+    docComments = [];              // the document thread — it has no place on the page (see below)
     for (const c of core.listComments()) {
       // group by the SINGLE thread identity an open Pane also matches against (thread.js), so a
       // badge and the conversation it opens can never disagree about what belongs together.
       const key = threadKeyOf(c);
-      if (c.anchor.type === 'region') {
+      if (c.anchor.type === 'document') {
+        // The document thread is about the whole document, so there is nowhere on the page to put a
+        // badge — it is reached from the panel instead. It still RESOLVES (to the document surface),
+        // so it takes part in the ordinary resolve pass below and any orphan stamped on it by an
+        // older build gets cleared rather than lingering forever.
+        docComments.push(c);
+      } else if (c.anchor.type === 'region') {
         (regions.get(key) || regions.set(key, { anchor: c.anchor, comments: [] }).get(key)).comments.push(c);
       } else if (c.anchor.type === 'range') {
         (byQuote.get(key) || byQuote.set(key, { anchor: c.anchor, comments: [] }).get(key)).comments.push(c);
-      } else {
+      } else if (c.anchor.type === 'block') {
         (byElement.get(key) || byElement.set(key, []).get(key)).push(c);
       }
+      // an unrecognised kind is grouped nowhere — it is not silently drawn as some other kind
     }
+    // the document thread resolves whenever the document surface is registered; clear any orphan an
+    // older build stamped on it (a 0.9.2 session reading 0.9.3 storage would have done exactly that).
+    if (docComments.length && resolveAnchorDom({ type: 'document' }, doc, core.surfaces)) clearOrphan(docComments);
     // block — badge floats at the element's top-right on the overlay (no DOM insertion → no layout shift)
     for (const comments of byElement.values()) {
       const r = resolveAnchorDom(comments[0].anchor, doc, core.surfaces);
@@ -391,6 +420,7 @@ export function attachPanel(core, options = {}) {
       regionOverlays.push({ box, pin, surfaceEl: r.element, comments: group.comments });
     }
     countEl.textContent = t('panel.count', { n: utteranceCount(core.listComments()) });   // utterances, so the panel total agrees with the badges
+    refreshDocBtn();
     orphanedIds.clear(); for (const id of currentOrphans) orphanedIds.add(id);   // transition set for the next render (all kinds)
     // apply the collected orphan/resolve mutations AFTER the render pass (no mid-iteration re-entry).
     // reportOrphaned is idempotent + transition-guarded; markResolved is a no-op on a non-orphan — so the
@@ -408,9 +438,11 @@ export function attachPanel(core, options = {}) {
   const drafts = new Map();   // anchor key -> { body, reaction } — unsaved input preserved across dismiss
   function anchorKey(a) {
     if (!a) return null;
+    if (a.type === 'document') return 'document';
     if (a.type === 'region') return `region:${a.surfaceId}:${a.pageIndex}:${a.rect ? `${a.rect.x},${a.rect.y},${a.rect.width},${a.rect.height}` : ''}`;
     if (a.type === 'range') return `range:${a.elementId}:${a.selector?.exact ?? ''}:${a.selector?.start ?? ''}`;
-    return `block:${a.elementId}`;
+    if (a.type === 'block') return `block:${a.elementId}`;
+    return null;
   }
   // The pending region's lifetime IS the popup's: closing the popup (outside-click, Escape, Cancel,
   // empty save) removes the dashed rect, so no orphaned region ever lingers (Keisuke 2026-06-15).
@@ -440,7 +472,6 @@ export function attachPanel(core, options = {}) {
       b.onclick = () => { reactionId = reactionId === def.id ? '' : def.id; [...rwrap.children].forEach((x) => x.classList.toggle('on', x === b && !!reactionId)); updateSaveState(); };
       rwrap.appendChild(b);
     }
-    const lbl = (k, fb) => { const v = t(k); return v === k ? fb : v; };   // i18n with a literal fallback
     const commit = popupCommit(core.getTransport());   // save vs send + close vs stay-open (REQ-702/703)
     const exwrap = el(doc, 'div', 'tb-existing');
     // Render the thread inline as ONE flat, TIME-ORDERED timeline (REQ-704): every utterance —
@@ -646,12 +677,37 @@ export function attachPanel(core, options = {}) {
     const a = comments[0].anchor;
     openPopup({ anchorLabel: anchorLabelOf(a), existing: comments, draftKey: anchorKey(a), threadKey: threadKeyOf(comments[0]), onSave: (body, reaction) => core.addComment({ anchor: a, body, reaction, threadId: comments[0].threadId || (a.type === 'region' || a.type === 'range' ? comments[0].id : undefined) }) }, ev);
   }
+  // Open the conversation about the document as a whole. Public on the PanelInstance too, so an
+  // integrator that hides the control can still reach the thread — the panel's standing rule is that
+  // a hidden control never means a lost capability.
+  function openDocumentThread(ev) {
+    const a = { type: 'document' };
+    const existing = core.listComments().filter((c) => c.anchor && c.anchor.type === 'document');
+    openPopup({
+      anchorLabel: anchorLabelOf(a),
+      existing,
+      draftKey: anchorKey(a),
+      threadKey: 'document',
+      onSave: (body, reaction) => core.addComment({ anchor: a, body, reaction }),
+    }, ev);
+  }
+  // The control shows what a badge would: how many utterances the document thread holds, and whether
+  // it carries an attention flag. Both are read from the same places the marks read them.
+  function refreshDocBtn() {
+    if (!docBtn) return;
+    const n = utteranceCount(docComments);
+    docBtn.textContent = n ? `${t('panel.docThread')} 💬${n}` : t('panel.docThread');
+    docBtn.classList.toggle('tb-attn', docComments.some((c) => core.hasAttention(c.id)));
+  }
+
   function anchorLabelOf(a) {
+    if (a.type === 'document') return lbl('anchor.document', 'this document');
     if (a.type === 'region') return a.pageIndex != null ? `p.${a.pageIndex} region` : 'region';
     if (a.type === 'range') {
       const q = a.selector?.exact || '';
       return `“${q.length > 40 ? q.slice(0, 40) + '…' : q}”`;
     }
+    if (a.type !== 'block') return null;   // an unknown kind gets no label rather than block's
     const elx = doc.getElementById(a.elementId);
     return (elx?.getAttribute('data-tb-section') || a.elementId);
   }
@@ -973,6 +1029,7 @@ export function attachPanel(core, options = {}) {
       const cs = node.__tbComments;
       if (cs) node.classList.toggle('tb-attn', cs.some((c) => core.hasAttention(c.id)));
     });
+    refreshDocBtn();   // the document thread's "mark" is the panel control
   }
   const offAttention = core.on('attention:change', syncAttention);
   const offReady = core.on('ready', () => { hintEl.textContent = core.surfaces.size ? t('hint.pdf') : t('hint.html'); renderMarks(); });
@@ -988,6 +1045,8 @@ export function attachPanel(core, options = {}) {
     setLocale(lang) { const ok = i18n.setLocale(lang); relabel(); return ok; },
     registerLocale(lang, bundle) { i18n.register(lang, bundle); },
     toggleMarks() { doc.documentElement.classList.toggle('tb-hide'); },
+    /** Open the conversation about the document as a whole (the `docThread` control's action). */
+    openDocumentThread() { openDocumentThread(); },
     destroy() {
       offChange(); offRecalc(); offAttention(); offReady(); offDocSurface();
       doc.removeEventListener('contextmenu', onContext); doc.removeEventListener('contextmenu', onCtxPdf);
@@ -1008,6 +1067,7 @@ export function attachPanel(core, options = {}) {
     if (exportBtn) exportBtn.textContent = t('panel.export');
     if (marksBtn) marksBtn.textContent = t('panel.toggleMarks');
     if (clearBtn) clearBtn.textContent = t('panel.clearAll');
+    refreshDocBtn();
     if (themeBtn) themeBtn.textContent = themeLabel();
     hintEl.textContent = core.surfaces.size ? t('hint.pdf') : t('hint.html');
     popupRelabel?.();   // an open popup follows the locale change live

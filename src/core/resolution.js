@@ -14,6 +14,7 @@
 // region ALGEBRA stay in ./anchor.js (pure, DOM-free); this module is the DOM walk that drives them.
 
 import { regionToPx, resolveQuoteSelector, applyRegionFallback, rectsIntersect } from './anchor.js';
+import { DOCUMENT_SURFACE_ID } from './media.js';
 
 /** The annotatable node set: elements that can carry a block/range comment. The ONE definition.
  *  h1 (the document title) IS annotatable — a reviewer must be able to comment on the title itself
@@ -240,6 +241,16 @@ export function resolveAnchorDom(anchor, doc, surfaces) {
     const element = doc.getElementById(anchor.elementId);
     return element ? { element } : null;
   }
+  // document — the whole document surface IS the place. Resolving here rather than treating a
+  // document anchor as place-less is what keeps it an ordinary anchor: it resolves whenever the
+  // surface is registered, so it takes part in the normal resolve/orphan lifecycle instead of
+  // needing an exception to it. No rect: the anchor is the surface, not a rectangle on it.
+  if (anchor.type === 'document') {
+    const element = surfaces.get(DOCUMENT_SURFACE_ID)?.element;
+    return element ? { element } : null;
+  }
+  if (anchor.type !== 'region') return null;   // an unknown kind resolves to nothing; it never
+                                               // borrows another kind's resolution by falling through
   // region — resolve the surface element. Reload-stable resolution order: (1) a live adapter surface
   // (PDF), (2) a stamped/consumer-marked [data-tb-surface], (3) an `el-<id>` surfaceId back to the
   // element's own id (so a region on an id'd <figure> survives a reload — the runtime data-tb-surface

@@ -166,3 +166,21 @@ test('destroy: subsequent mutation throws, no events delivered', () => {
   assert.throws(() => tb.addComment(blockInput()));
   assert.equal(changes, 0);
 });
+
+test('a document comment lives in the same collection and round-trips through the envelope', () => {
+  const tb = mountFresh();
+  const doc = tb.addComment({ anchor: { type: 'document' }, body: 'is this the right shape overall?' });
+  const block = tb.addComment(blockInput());
+  assert.equal(tb.listComments().length, 2, 'one collection — not a second store for document threads');
+  tb.addReply(doc.id, { body: 'a second participant answers', author: { id: 'other', kind: 'ai' } });
+  const env = tb.exportEnvelope();
+  assert.equal(env.comments.find((c) => c.id === doc.id).anchor.type, 'document');
+  assert.equal(env.surfaces, undefined, 'a document anchor contributes no raster surface descriptor');
+  // …and comes back through import unchanged
+  const tb2 = mountFresh();
+  const res = tb2.importEnvelope(env, { mode: 'replace' });
+  assert.equal(res.dropped, 0, 'a document comment is not filtered out as invalid');
+  const back = tb2.listComments().find((c) => c.anchor.type === 'document');
+  assert.equal(back.replies.length, 1);
+  void block;
+});

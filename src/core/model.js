@@ -18,7 +18,8 @@ import { newId } from './id.js';
  * @typedef {{ type: 'block',  elementId: string }} BlockAnchor
  * @typedef {{ type: 'range',  elementId: string, selector: TextQuoteSelector }} RangeAnchor
  * @typedef {{ type: 'region', surfaceId: string, pageIndex?: number, rect: NormalizedRect, fallback?: RegionFallback, events?: AnchorEvent[], capture?: Capture }} RegionAnchor
- * @typedef {BlockAnchor | RangeAnchor | RegionAnchor} Anchor
+ * @typedef {{ type: 'document' }} DocumentAnchor   // the document AS A WHOLE — see isValidAnchor
+ * @typedef {BlockAnchor | RangeAnchor | RegionAnchor | DocumentAnchor} Anchor
  * @typedef {string | { id: string, kind?: 'human'|'ai'|string }} Author  // string (legacy/simple) or provenance object (spec REQ-301)
  * @typedef {Object} Reply
  * @property {string} id
@@ -41,7 +42,7 @@ import { newId } from './id.js';
  * @typedef {{ body: string, author?: Author }} AddReplyInput
  */
 
-const ANCHOR_TYPES = new Set(['block', 'range', 'region']);
+const ANCHOR_TYPES = new Set(['block', 'range', 'region', 'document']);
 
 /**
  * Validate an anchor shape (cheap structural check; not a DOM existence check).
@@ -53,6 +54,11 @@ export function isValidAnchor(a) {
   const anchor = /** @type {any} */ (a);
   if (!ANCHOR_TYPES.has(anchor.type)) return false;
   const nonEmpty = (s) => typeof s === 'string' && s.length > 0;
+  // document — a conversation about the whole document rather than a place inside it. It carries no
+  // coordinates because its place IS the document surface (see resolveAnchorDom): the instance
+  // already knows which document it is mounted on, so the anchor has nothing left to say. Nothing to
+  // validate beyond the type, and nothing that can drift.
+  if (anchor.type === 'document') return true;
   if (anchor.type === 'block') return nonEmpty(anchor.elementId);
   if (anchor.type === 'range') {
     return nonEmpty(anchor.elementId) && anchor.selector && nonEmpty(anchor.selector.exact);

@@ -142,3 +142,21 @@ test('planInsertions: several out-of-order arrivals stay ordered among themselve
   assert.deepEqual(plan.map((p) => [p.item.key, p.beforeKey]), [['c:m', 'c:z'], ['c:k', 'c:m']],
     'the second arrival is placed relative to the first, not to the original screen');
 });
+
+// --- 0.9.3: the document thread, and dispatch that no longer guesses ---
+
+test('threadKeyOf: every document comment belongs to the one document thread', () => {
+  const a = { id: 'a', createdAt: at(1), anchor: { type: 'document' } };
+  const b = { id: 'b', createdAt: at(2), anchor: { type: 'document' } };
+  assert.equal(threadKeyOf(a), 'document');
+  assert.equal(threadKeyOf(a), threadKeyOf(b), 'one conversation about the document, not one per comment');
+  assert.notEqual(threadKeyOf(a), threadKeyOf({ id: 'c', anchor: block('p1') }),
+    'and it is not the same thread as any place inside the document');
+});
+
+test('threadKeyOf: an unrecognised anchor kind gets no identity instead of borrowing block\'s', () => {
+  // this dispatch used to end in a bare `return block:...`, so an unknown kind became
+  // `block:undefined` and every such comment collapsed into one imaginary shared thread.
+  assert.equal(threadKeyOf({ id: 'x', anchor: { type: 'workspace' } }), null);
+  assert.equal(threadKeyOf({ id: 'y', anchor: { type: 'documnet' } }), null, 'including a typo');
+});

@@ -91,6 +91,8 @@
       exports / imports JSON. The bar at the <strong>bottom-left</strong> switches the UI display language
       (EN/JA), the theme, the reaction set and the participant colors — and <strong>Simulate a reply</strong>
       brings in a second participant so you can see a thread with more than one voice in it.
+      The panel also has <strong>🗒 About this document</strong> — a thread about the whole document
+      rather than any place in it, with the same timeline, participants and Save/Send behaviour.
       (This box is a text block too — try commenting it.)</p>
   </aside>
 
@@ -323,6 +325,12 @@
   // …and clear that flag when the thread is actually opened. Again: the library has no notion of
   // "read" — the integrator decides when the notice has served its purpose.
   document.addEventListener('click', (e) => {
+    // the document thread has no mark on the page — its mark is the panel control, so opening it
+    // has to clear the notice the same way opening an anchored thread does.
+    if (e.target.closest?.('.tb-docbtn')) {
+      tb.listComments().forEach((c) => { if (c.anchor.type === 'document') tb.setAnchorAttention(c.id, false); });
+      return;
+    }
     const anchorEl = e.target.closest?.('.tb-badge,.tb-pin');
     if (!anchorEl || !anchorEl.__tbComments) return;
     for (const c of anchorEl.__tbComments) tb.setAnchorAttention(c.id, false);

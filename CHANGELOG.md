@@ -6,6 +6,46 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
 
 ## [Unreleased]
 
+## [0.9.3] — 2026-08-06
+The second Interaction shape: a conversation about the **document as a whole**, alongside the
+per-anchor threads that were already there. Still mechanism only — the library supplies the thread
+and the hook, never a server and never a meaning.
+
+### Added
+- **A fourth anchor kind, `document`.** A comment anchored to `{ type: 'document' }` is about the
+  whole document rather than a place inside it. It reuses everything the anchored threads use: the
+  flat multi-participant timeline, actor colors, reactions, the attention flag, the transport seam
+  (Save vs Send, the pending marker, live arrival of replies), export/import.
+  Its *place* is the document surface, so it takes part in the ordinary resolve/orphan lifecycle
+  rather than needing an exception carved out of it.
+- **`controls: { docThread }`** (default **on**) — the panel control that opens it. Every other
+  thread advertises itself with a badge on the thing it is about; this one has nowhere on the page to
+  sit, so the control is its mark: it shows the same utterance count and wears the same attention
+  tint. New label keys `panel.docThread` / `anchor.document` (EN + JA).
+- **`panel.openDocumentThread()`** — the same action on the PanelInstance, so hiding the control
+  never removes the capability.
+
+### Fixed
+- **Anchor dispatch no longer guesses.** An anchor kind a build did not recognise used to borrow
+  another kind's handling: `resolveAnchorDom` fell through to the region path (resolving against
+  `surfaces.get(undefined)`, failing, and getting **stamped as orphaned**), `threadKeyOf` produced
+  `block:undefined` so every such comment collapsed into one imaginary shared thread, and
+  `anchorLabelOf` rendered `📍 undefined`. Each now returns nothing for a kind it does not know.
+
+### Compatibility
+- Additive: `schemaVersion` is unchanged, because nothing reads it — the envelope's anchor field is a
+  union and this adds a member.
+- **Older consumers drop document comments on import.** 0.9.2 and earlier reject
+  `anchor.type:'document'` as invalid: a `merge` import silently skips them (counted in the returned
+  `dropped`), a `replace` import throws `IMPORT_INVALID` unless `allowPartial: true`. A 0.9.2 build
+  reading 0.9.3 *storage* will also stamp them as orphaned; returning to 0.9.3 clears that stamp.
+
+### Known limitation
+- **`importEnvelope` is still not document-bound**, and a document anchor cannot fail to resolve — so
+  importing an envelope from a *different* document merges its document thread into this one silently,
+  where a block/range/region anchor would have orphaned visibly. Match the document yourself before
+  importing.
+
 ## [0.9.2] — 2026-08-05
 Corrections from hands-on use of 0.9.1. Same rule as before: mechanism only — what a participant *is*,
 what a reaction *means*, and which colors stand for what all stay with the integrator.
