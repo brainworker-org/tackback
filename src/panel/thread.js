@@ -44,6 +44,28 @@ export function threadKeyOf(comment) {
 }
 
 /**
+ * How an anchor names itself in the Pane header — the DECISION, without the DOM.
+ *
+ * A block anchor's label is the section it sits in, which only the document can supply, so the
+ * caller passes a lookup and this returns what to ask for. Everything else is decided here. An
+ * unrecognised kind returns null: it gets no label rather than borrowing block's, which is what the
+ * panel used to do (rendering a bare "undefined", or another kind's section name).
+ * @param {{type?:string, selector?:{exact?:string}, pageIndex?:number, elementId?:string}|null|undefined} a
+ * @returns {{ kind:'document' }|{ kind:'region', text:string }|{ kind:'range', text:string }|{ kind:'block', elementId:string }|null}
+ */
+export function anchorLabelSpec(a) {
+  if (!a) return null;
+  if (a.type === 'document') return { kind: 'document' };
+  if (a.type === 'region') return { kind: 'region', text: a.pageIndex != null ? `p.${a.pageIndex} region` : 'region' };
+  if (a.type === 'range') {
+    const q = a.selector?.exact || '';
+    return { kind: 'range', text: `“${q.length > 40 ? `${q.slice(0, 40)}…` : q}”` };
+  }
+  if (a.type === 'block') return { kind: 'block', elementId: a.elementId };
+  return null;
+}
+
+/**
  * A thread's contents as ONE chronological list — every comment, every reply, and the anchor's
  * move/resize history — each carrying a key that identifies that row and nothing else.
  *

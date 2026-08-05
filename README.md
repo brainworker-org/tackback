@@ -51,7 +51,7 @@ import { attachPanel } from '@brainworker/tackback/panel';
 const tb = Tackback.mount({ document: { id: 'my-doc', title: 'Design notes' } });
 attachPanel(tb, {
   theme: 'auto', locale: 'en',        // theming / reactions / i18n are all customizable
-  controls: { theme: true },          // pick which panel buttons show; the theme switch is hidden by default
+  controls: { docThread: true },      // pick which panel buttons show; all but `import` are on by default
 });
 ```
 
@@ -93,8 +93,11 @@ re-skins and re-labels Tackback without forking it or overriding its CSS:
 - **Colors** — `--tb-*` theme tokens (a partial map layers over the OS light/dark base), plus
   `actorColors` for the participant tints.
 - **Language** — `setLocale()` at runtime; English and Japanese ship, bring your own bundle.
-- **Panel controls** — `controls: { author, export, import, theme, marks, clear }` chooses which
-  buttons render. The theme switch is hidden by default (`auto` already follows the OS).
+- **Panel controls** — `controls: { author, export, import, theme, marks, clear, docThread }` chooses
+  which buttons render; every one except `import` is on by default. `docThread` opens the conversation
+  about the document as a whole — the only thread with no mark on the page, so the control is its mark
+  (utterance count + attention tint). Hiding a control never removes the capability: each has an
+  equivalent on the PanelInstance (`setTheme`, `toggleMarks`, `openDocumentThread`, …).
 
 ```js
 const panel = attachPanel(tb, {

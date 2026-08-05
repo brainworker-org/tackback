@@ -10,7 +10,7 @@ import { indexAnnotatable, resolveAnchorDom, clampToViewport } from './dom.js';
 import { computeCapture, resolveRegionRect } from '../core/resolution.js';
 import { classifyGesture, popupCommit, canCommit, nextSendState, answersSend, applyHandleDrag } from './interaction.js';
 import { actorColorOf as resolveActorColor, claimedColors, authorKey as tbAuthorKey, lastSpeaker } from './actors.js';
-import { threadKeyOf, timelineItems, utteranceCount, planInsertions } from './thread.js';
+import { threadKeyOf, timelineItems, utteranceCount, planInsertions, anchorLabelSpec } from './thread.js';
 import { documentSurface, DOCUMENT_SURFACE_ID } from '../core/media.js';
 import { normalizeRegion, buildQuoteSelector, resolveQuoteSelector } from '../core/anchor.js';
 import { selectionOffsetsWithin, offsetsToRange, paintHighlights, clearHighlights } from './range.js';
@@ -701,15 +701,14 @@ export function attachPanel(core, options = {}) {
   }
 
   function anchorLabelOf(a) {
-    if (a.type === 'document') return lbl('anchor.document', 'this document');
-    if (a.type === 'region') return a.pageIndex != null ? `p.${a.pageIndex} region` : 'region';
-    if (a.type === 'range') {
-      const q = a.selector?.exact || '';
-      return `“${q.length > 40 ? q.slice(0, 40) + '…' : q}”`;
+    const spec = anchorLabelSpec(a);
+    if (!spec) return null;                       // an unknown kind gets no label rather than block's
+    if (spec.kind === 'document') return lbl('anchor.document', 'this document');
+    if (spec.kind === 'block') {
+      const elx = doc.getElementById(spec.elementId);
+      return (elx?.getAttribute('data-tb-section') || spec.elementId);
     }
-    if (a.type !== 'block') return null;   // an unknown kind gets no label rather than block's
-    const elx = doc.getElementById(a.elementId);
-    return (elx?.getAttribute('data-tb-section') || a.elementId);
+    return spec.text;
   }
 
   // ---- gestures --------------------------------------------------------------------------------

@@ -66,8 +66,8 @@ function fakeElement(doc, tag) {
     getBoundingClientRect: () => ({ left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100 }),
     addEventListener(type, fn) { (el.listeners[type] ||= []).push(fn); },
     removeEventListener(type, fn) { el.listeners[type] = (el.listeners[type] || []).filter((f) => f !== fn); },
-    dispatchEvent(ev) { (el.listeners[ev.type] || []).forEach((f) => f({ ...ev, target: el })); return true; },
-    click() { el.onclick?.({ target: el, stopPropagation() {} }); },
+    dispatchEvent(ev) { return bubble(el, { ...ev, target: ev.target || el }); },
+    click() { bubble(el, { type: 'click', target: el, stopPropagation() {} }); },
     clientWidth: 100, clientHeight: 100, offsetWidth: 100, offsetHeight: 100,
     focus() {}, select() {}, value: '',
   };
@@ -79,6 +79,22 @@ function fakeElement(doc, tag) {
   Object.defineProperty(el, 'lastElementChild', { get: () => children[children.length - 1] || null });
   return el;
 }
+// Dispatch an event on `el` and let it travel up to the document, the way a page-level listener
+// (a clear-on-open policy, for instance) actually receives it.
+function bubble(el, ev) {
+  let stopped = false;
+  const e = { ...ev, stopPropagation() { stopped = true; } };
+  let node = el;
+  while (node && !stopped) {
+    node.onclick?.(e);
+    (node.listeners?.[e.type] || []).forEach((f) => f(e));
+    node = node.parentNode;
+  }
+  const doc = el.ownerDocument;
+  if (!stopped && doc) (doc.listeners?.[e.type] || []).forEach((f) => f(e));
+  return true;
+}
+
 function descendants(el) {
   const out = [];
   for (const c of el.children || []) {
@@ -207,5 +223,27 @@ test('panel: an anchor kind the build does not know is not drawn as some other k
   try {
     assert.equal(f.badges().length, 0, 'no badge invented for a kind we cannot place');
     assert.equal(f.core.listComments().length, 1, 'and the comment itself is not destroyed');
+  } finally { f.restore(); }
+});
+
+test('panel: a page-level clear-on-open policy sees the control click', () => {
+  // the demos clear their own "unread" notice when a thread is opened, from a document-level
+  // listener. The fixture has to bubble for that to be exercisable at all — before it did not, so a
+  // policy that missed the document control (as both demos' did) could not have been caught here.
+  const f = mountPanel();
+  try {
+    const c = f.core.addComment({ anchor: { type: 'document' }, body: 'q' });
+    f.core.setAnchorAttention(c.id, true);
+    let sawControlClick = false;
+    f.doc.addEventListener('click', (e) => {
+      if (e.target.closest?.('.tb-docbtn')) {
+        sawControlClick = true;
+        f.core.listComments().forEach((x) => { if (x.anchor.type === 'document') f.core.setAnchorAttention(x.id, false); });
+      }
+    });
+    f.docBtn().click();
+    assert.equal(sawControlClick, true, 'the click reached the page-level listener');
+    assert.equal(f.core.hasAttention(c.id), false, 'so the page could clear its own notice');
+    assert.equal(f.docBtn().classList.contains('tb-attn'), false, 'and the control drops the tint');
   } finally { f.restore(); }
 });
