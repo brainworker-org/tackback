@@ -44,6 +44,9 @@ what a reaction *means*, and which colors stand for what all stay with the integ
   theme tokens together — so both replaceability axes are visible in one page.
 
 ## [0.9.1] — 2026-08-05
+*Git release only — never published to npm; superseded the same day by 0.9.2, which is the first
+published version carrying this work.*
+
 Multi-party rendering polish (a patch on the 0.9 Pane-thread work). All changes are generic library
 mechanism — no domain meaning (who is "AI", what "approval" or "unread" mean) is baked into Tackback;
 those stay with the integrator, supplied via options / read off the model.
