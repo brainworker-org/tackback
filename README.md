@@ -63,8 +63,10 @@ attachPanel(tb, {
 > **Try it in a browser:** `demo/demo.html` is a single page that exercises the whole tool — a
 > single-`<script>` UMD drop-in that renders as a live, commentable page (block/range/region over text,
 > an inline SVG, an image, and a marked surface). Build the bundle (`npm run build`), serve the package
-> root over http, and open it. The bottom-left "Try it" bar flips locale, swaps the reaction set, and
-> toggles the theme switch; the bottom-right panel lists comments and exports/imports JSON. The page
+> root over http, and open it. The bottom-left bar is **not** part of Tackback — it drives the options
+> an integrator passes in, one axis at a time (colour scheme, reaction set, language, which panel
+> buttons show, and whether a transport is attached), so you can see what is customizable and what
+> each one changes. The bottom-right panel lists comments and exports/imports JSON. The page
 > also shows an optional **post-v1** PDF region preview (pdf.js from a CDN; degrades to a note offline).
 
 ## The four anchor types

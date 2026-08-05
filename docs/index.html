@@ -89,11 +89,11 @@
       then right-click, to pin a phrase; <em>right-drag over an image, the inline diagram, or a non-text
       area</em> to comment a region. Comments appear as 💬 badges; the panel (bottom-right) lists them and
       exports / imports JSON. The bar at the <strong>bottom-left</strong> switches the UI display language
-      (EN/JA), the theme, the reaction set and the participant colors — and <strong>Simulate a reply</strong>
-      brings in a second participant so you can see a thread with more than one voice in it.
-      The panel also has <strong>🗒 About this document</strong> — a thread about the whole document
-      rather than any place in it, with the same timeline, participants and Save/Send behaviour.
-      (This box is a text block too — try commenting it.)</p>
+      is not part of Tackback: it drives the <strong>options an integrator passes in</strong>, so you can
+      see what is customizable and what each one changes — the colour scheme, the reaction set, the
+      language, which panel buttons are shown, and whether a transport is attached (<em>Save</em> vs
+      <em>Send</em>). The panel also has <strong>🗒 About this document</strong>: a thread about the whole
+      document rather than any place in it. (This box is a text block too — try commenting it.)</p>
   </aside>
 
   <h2>What it is</h2>
@@ -161,11 +161,12 @@
     off the author and looks it up in a map you supply; it ships no categories and no colors of its
     own. The same is true of the orange <b>attention</b> highlight — a generic "this wants a look"
     flag whose meaning is yours, never persisted and never written into an export.</p>
-  <p>Press <b>Simulate a reply</b> in the "Try it" bar: a second participant answers, the anchor takes
-    that participant's color, and it turns orange until you open the thread. Switch <b>Scenario</b> to
-    <em>conversation</em> and the commit button becomes <b>Send</b> — the Pane stays open, your message
-    appears immediately with a pending marker, and the answer lands in place a moment later. In
-    <em>local</em> it stays <b>Save</b> and the Pane closes: the offline, backend-free shape.</p>
+  <p>Switch <b>Scenario</b> to <em>conversation</em> in the bottom-left bar and the commit button
+    becomes <b>Send</b>: the Pane stays open, your message appears immediately with a pending marker,
+    and a second participant answers a moment later — the anchor takes that participant's color, and
+    turns orange until you open the thread. In <em>local</em> it stays <b>Save</b>, the Pane closes,
+    and no answer arrives: that is the offline, backend-free shape, and a reply would imply the
+    backend it is defined as not having.</p>
 
   <h2>Customization, at a glance</h2>
   <table>
@@ -174,13 +175,14 @@
       <tr><td>Reactions</td><td>id + icon + per-locale label — replace the whole set, any size</td><td>👍 agree / 👎 disagree / ❓ question</td></tr>
       <tr><td>Colors</td><td><code>--tb-*</code> tokens (a partial map layers on the OS base) + <code>actorColors</code> per participant category</td><td>auto light/dark, no categories</td></tr>
       <tr><td>Language</td><td><code>setLocale()</code> at runtime; bring your own bundle</td><td>English, ja shipped</td></tr>
-      <tr><td>Panel controls</td><td><code>controls: { theme, marks, … }</code> chooses visible buttons</td><td>theme switch hidden</td></tr>
+      <tr><td>Panel controls</td><td><code>controls: { author, export, import, theme, marks, clear, docThread }</code> chooses visible buttons</td><td>all shown except <code>import</code></td></tr>
     </tbody>
   </table>
-  <p>The bottom-left "Try it" bar drives all of it live: <b>Language</b> switches the panel UI between
-    English and Japanese without touching the annotation data, <b>Reactions</b> swaps in a set with its
-    own ids and icons, <b>Colors</b> re-skins the participants and the panel together, and
-    <b>Theme switch</b> re-attaches the panel with the manual light/dark toggle shown.</p>
+  <p>The bottom-left bar drives all of it live, one axis at a time: <b>Colors</b> re-skins the
+    participants and the panel together, <b>Reactions</b> swaps in a set with its own ids and icons,
+    <b>Language</b> switches every label between English and Japanese without touching the annotation
+    data, and <b>Theme button</b> shows or hides one of the panel's own controls — hiding a button
+    never hides the data behind it.</p>
   <p>Deleting is anchor-level: right-click an anchor and choose <em>Delete anchor</em> to remove that
     whole conversation. The Pane offers no per-utterance delete — a reply belongs to its comment and
     goes with it.</p>
@@ -246,7 +248,7 @@
 
   // ── one Tackback instance + one panel for the whole page ────────────────────────────────────────
   // (the panel binds document-level listeners, so a single instance owns the page.)
-  let showTheme = false, locale = 'en', useCustomReactions = false, panel = null;
+  let showTheme = true, locale = 'en', useCustomReactions = false, panel = null;   // = CONTROL_DEFAULTS.theme
 
   const tb = Tackback.mount({
     document: { id: 'tackback-demo', title: 'Tackback demo' },
@@ -382,22 +384,21 @@
   // ── bottom-left "Try it" bar : demo-page controls (NOT part of the Tackback panel) ───────────────
   const bar = document.createElement('div');
   bar.className = 'trybar';
-  bar.innerHTML = '<b>Try it:</b>';
+  // This bar is NOT part of Tackback — it drives the options an integrator passes in, so that what
+  // is customizable is visible, and flipping one shows you what it changes.
+  bar.innerHTML = '<b>What you can customize</b>';
   function mkBtn(label, onClick, isOn) {
     const b = document.createElement('button');
     b.textContent = label; if (isOn) b.classList.add('on');
     b.onclick = () => onClick(b);
     bar.appendChild(b); return b;
   }
-  mkBtn('Language: EN', (b) => {
-    locale = locale === 'en' ? 'ja' : 'en';
-    b.textContent = 'Language: ' + locale.toUpperCase();
-    panel.setLocale(locale);
-  });
-  mkBtn('Theme switch: off', (b) => {
-    showTheme = !showTheme;
-    b.textContent = 'Theme switch: ' + (showTheme ? 'on' : 'off');
-    b.classList.toggle('on', showTheme);
+  // COLORS is one axis, not two: the panel's own `--tb-*` tokens and the participant colors move
+  // together, because to a reader they are one scheme.
+  mkBtn('Colors: default', (b) => {
+    altColors = !altColors;
+    b.textContent = 'Colors: ' + (altColors ? 'custom' : 'default');
+    b.classList.toggle('on', altColors);
     attach();
   });
   mkBtn('Reactions: default 👍👎❓', (b) => {
@@ -406,11 +407,17 @@
     b.classList.toggle('on', useCustomReactions);
     attach();
   });
-  // the whole color scheme — participant colors AND the panel's own tokens — is just options.
-  mkBtn('Colors: default', (b) => {
-    altColors = !altColors;
-    b.textContent = 'Colors: ' + (altColors ? 'custom' : 'default');
-    b.classList.toggle('on', altColors);
+  mkBtn('Language: EN', (b) => {
+    locale = locale === 'en' ? 'ja' : 'en';
+    b.textContent = 'Language: ' + locale.toUpperCase();
+    panel.setLocale(locale);
+  });
+  // WHICH CONTROLS SHOW is its own axis. The theme switch is the example: hiding a button never
+  // hides the data behind it — `panel.setTheme()` is still there.
+  mkBtn('Theme button: shown', (b) => {
+    showTheme = !showTheme;
+    b.textContent = 'Theme button: ' + (showTheme ? 'shown' : 'hidden');
+    b.classList.toggle('on', !showTheme);
     attach();
   });
   mkBtn('Scenario: local (Save)', (b) => {
@@ -418,15 +425,6 @@
     b.textContent = 'Scenario: ' + (scenario === 'conversation' ? 'conversation (Send)' : 'local (Save)');
     b.classList.toggle('on', scenario === 'conversation');
     applyScenario();
-  });
-  mkBtn('Simulate a reply', (b) => {
-    const target = tb.listComments()[0];
-    if (!target) {   // nudge in place — never a modal dialog, which would block the page
-      b.textContent = 'Comment on something first ↑';
-      setTimeout(() => { b.textContent = 'Simulate a reply'; }, 2200);
-      return;
-    }
-    answerOn(target.id);
   });
   document.body.appendChild(bar);
 

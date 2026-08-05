@@ -87,10 +87,11 @@
       then right-click, to pin a phrase; <em>right-drag over an image, the inline diagram, or a non-text
       area</em> to comment a region. Comments appear as 💬 badges; the panel (bottom-right) lists them and
       exports / imports JSON. The bar at the <strong>bottom-left</strong> switches the UI display language
-      (EN/JA), the theme, the reaction set and the participant colors — and <strong>Simulate a reply</strong>
-      brings in a second participant. The panel also has <strong>🗒 About this document</strong>: a thread
-      about the whole document rather than any place in it, with the same timeline, participants and
-      Save/Send behaviour. (This box is a text block too — try commenting it.)</p>
+      is not part of Tackback: it drives the <strong>options an integrator passes in</strong>, so you can
+      see what is customizable and what each one changes — the colour scheme, the reaction set, the
+      language, which panel buttons are shown, and whether a transport is attached (<em>Save</em> vs
+      <em>Send</em>). The panel also has <strong>🗒 About this document</strong>: a thread about the whole
+      document rather than any place in it. (This box is a text block too — try commenting it.)</p>
   </aside>
 
   <h2>What it is</h2>
@@ -153,7 +154,7 @@
       <tr><td>Theming</td><td><code>--tb-*</code> CSS tokens; <code>theme: 'auto'</code> follows the OS live</td><td>auto (light/dark)</td></tr>
       <tr><td>Reactions</td><td>id + icon + per-locale label, fully replaceable set</td><td>question / agree / …</td></tr>
       <tr><td>Language</td><td><code>setLocale()</code> at runtime; bring your own bundle</td><td>English, ja shipped</td></tr>
-      <tr><td>Panel controls</td><td><code>controls: { theme, marks, … }</code> chooses visible buttons</td><td>theme switch hidden</td></tr>
+      <tr><td>Panel controls</td><td><code>controls: { author, export, import, theme, marks, clear, docThread }</code> chooses visible buttons</td><td>all shown except <code>import</code></td></tr>
     </tbody>
   </table>
   <p>Use the <b>Language</b> button in the bottom-left "Try it" bar to switch the panel UI between
@@ -220,7 +221,7 @@
 
   // ── one Tackback instance + one panel for the whole page ────────────────────────────────────────
   // (the panel binds document-level listeners, so a single instance owns the page.)
-  let showTheme = false, locale = 'en', useCustomReactions = false, panel = null;
+  let showTheme = true, locale = 'en', useCustomReactions = false, panel = null;   // = CONTROL_DEFAULTS.theme
 
   const tb = Tackback.mount({
     document: { id: 'tackback-demo', title: 'Tackback demo' },
@@ -286,37 +287,15 @@
   // ── bottom-left "Try it" bar : demo-page controls (NOT part of the Tackback panel) ───────────────
   const bar = document.createElement('div');
   bar.className = 'trybar';
-  bar.innerHTML = '<b>Try it:</b>';
+  // This bar is NOT part of Tackback — it drives the options an integrator passes in, so that what
+  // is customizable is visible, and flipping one shows you what it changes.
+  bar.innerHTML = '<b>What you can customize</b>';
   function mkBtn(label, onClick, isOn) {
     const b = document.createElement('button');
     b.textContent = label; if (isOn) b.classList.add('on');
     b.onclick = () => onClick(b);
     bar.appendChild(b); return b;
   }
-  mkBtn('Language: EN', (b) => {
-    locale = locale === 'en' ? 'ja' : 'en';
-    b.textContent = 'Language: ' + locale.toUpperCase();
-    panel.setLocale(locale);
-  });
-  mkBtn('Theme switch: off', (b) => {
-    showTheme = !showTheme;
-    b.textContent = 'Theme switch: ' + (showTheme ? 'on' : 'off');
-    b.classList.toggle('on', showTheme);
-    attach();
-  });
-  mkBtn('Reactions: default 👍👎❓', (b) => {
-    useCustomReactions = !useCustomReactions;
-    b.textContent = 'Reactions: ' + (useCustomReactions ? 'custom 🚀🔁✂️💡🛑' : 'default 👍👎❓');
-    b.classList.toggle('on', useCustomReactions);
-    attach();
-  });
-  // the whole color scheme — participant colors AND the panel's own tokens — is just options.
-  mkBtn('Colors: default', (b) => {
-    altColors = !altColors;
-    b.textContent = 'Colors: ' + (altColors ? 'custom' : 'default');
-    b.classList.toggle('on', altColors);
-    attach();
-  });
   // A SIMULATED second participant — the demo plays the integrator's part, so the multi-party
   // rendering is visible with no backend and no network. Everything domain-specific lives here in
   // the demo, never in the library: the 'assistant' category, its color, and the decision that a new
@@ -340,21 +319,6 @@
     'One more thought: the region is normalized, so this holds at any zoom.',
     'Agreed. Nothing here depends on a backend.',
   ];
-  mkBtn('Scenario: local (Save)', (b) => {
-    scenario = scenario === 'local' ? 'conversation' : 'local';
-    b.textContent = 'Scenario: ' + (scenario === 'conversation' ? 'conversation (Send)' : 'local (Save)');
-    b.classList.toggle('on', scenario === 'conversation');
-    applyScenario();
-  });
-  mkBtn('Simulate a reply', (b) => {
-    const target = tb.listComments()[0];
-    if (!target) {   // nudge in place — never a modal dialog, which would block the page
-      b.textContent = 'Comment on something first ↑';
-      setTimeout(() => { b.textContent = 'Simulate a reply'; }, 2200);
-      return;
-    }
-    answerOn(target.id);
-  });
   // The simulated participant's answer. In `conversation` scenario this also fires ~1.2s after every
   // Send, which is the whole point of an interactive transport: you send, the Pane keeps the thread
   // open with a pending marker, and the answer lands in it without a reopen.
@@ -385,6 +349,39 @@
     if (!anchorEl || !anchorEl.__tbComments) return;
     for (const c of anchorEl.__tbComments) tb.setAnchorAttention(c.id, false);
   }, true);
+  // COLORS is one axis, not two: the panel's own `--tb-*` tokens and the participant colors move
+  // together, because to a reader they are one scheme.
+  mkBtn('Colors: default', (b) => {
+    altColors = !altColors;
+    b.textContent = 'Colors: ' + (altColors ? 'custom' : 'default');
+    b.classList.toggle('on', altColors);
+    attach();
+  });
+  mkBtn('Reactions: default 👍👎❓', (b) => {
+    useCustomReactions = !useCustomReactions;
+    b.textContent = 'Reactions: ' + (useCustomReactions ? 'custom 🚀🔁✂️💡🛑' : 'default 👍👎❓');
+    b.classList.toggle('on', useCustomReactions);
+    attach();
+  });
+  mkBtn('Language: EN', (b) => {
+    locale = locale === 'en' ? 'ja' : 'en';
+    b.textContent = 'Language: ' + locale.toUpperCase();
+    panel.setLocale(locale);
+  });
+  // WHICH CONTROLS SHOW is its own axis. The theme switch is the example: hiding a button never
+  // hides the data behind it — `panel.setTheme()` is still there.
+  mkBtn('Theme button: shown', (b) => {
+    showTheme = !showTheme;
+    b.textContent = 'Theme button: ' + (showTheme ? 'shown' : 'hidden');
+    b.classList.toggle('on', !showTheme);
+    attach();
+  });
+  mkBtn('Scenario: local (Save)', (b) => {
+    scenario = scenario === 'local' ? 'conversation' : 'local';
+    b.textContent = 'Scenario: ' + (scenario === 'conversation' ? 'conversation (Send)' : 'local (Save)');
+    b.classList.toggle('on', scenario === 'conversation');
+    applyScenario();
+  });
   document.body.appendChild(bar);
 
   // ── expose for verification drivers (folds in the old umd-harness smoke role) ────────────────────

@@ -172,9 +172,7 @@ export function attachPanel(core, options = {}) {
   applyTheme(currentTheme);
 
   // ---- panel chrome ----------------------------------------------------------------------------
-  // `controls` chooses which buttons appear. The theme switch is hidden by default — `auto`
-  // (live OS dark-mode follow, wired above) is the right default and rarely needs a manual toggle.
-  // Hiding a button never hides the DATA behind it, but the substitute differs by control:
+  // `controls` chooses which buttons appear. Hiding a button never hides the DATA behind it, but the substitute differs by control:
   // theme/marks/docThread have PanelInstance methods; author/export/import have core equivalents
   // (setAuthor / exportEnvelope / importEnvelope — the dialogs themselves are the panel's own); and
   // `clear` has none, because the button also confirms, closes an open Pane and drops an uncommitted
