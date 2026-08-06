@@ -63,6 +63,9 @@ export function parseEnvelope(json) {
     if (d.document) out.document = d.document;
     else if (d.doc) out.document = { id: String(d.doc), title: d.doc, revisionHash: d.source_sha256 ?? null, source: d.source_md ?? null };
     if (d.reactions) out.reactions = d.reactions;
+    // tombstones travel with the envelope, so they must survive a STRING envelope too — reading them
+    // off the caller's original argument silently lost them whenever the input was JSON text.
+    if (Array.isArray(d.deleted)) out.deleted = d.deleted;
     if (Array.isArray(d.surfaces)) out.surfaces = d.surfaces;   // REQ-507: carried through for (post-v1) replay
   }
   return out;

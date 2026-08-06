@@ -14,7 +14,7 @@ import { TackbackError } from './errors.js';
 
 // MUST equal package.json "version" (export envelope's generator.version comes from here);
 // export.test.js asserts they match so they can't drift.
-const LIB_VERSION = '0.9.5';
+const LIB_VERSION = '0.9.6';
 const nowIso = () => new Date().toISOString();
 
 /**
@@ -125,6 +125,36 @@ class TackbackInstance {
   }
 
   /**
+   * Delete several comments as ONE operation — what deleting a whole anchor, or clearing a document,
+   * actually is. Without it an integrator sees N indistinguishable deletions and cannot tell where
+   * one act ended.
+   *
+   * One `comment:delete` per removed comment is preserved, with the same payload. Everything else
+   * about a multi-comment deletion changes: it commits (and persists) ONCE rather than per comment,
+   * so there is one `change` carrying the whole removal, the per-comment events all follow it, and a
+   * `comment:delete` handler sees the collection as it is AFTER the whole act.
+   * @param {string[]} ids
+   * @returns {{ ids: string[], previous: Comment[] }} what was actually removed
+   */
+  deleteComments(ids) {
+    this._assertWritable();
+    const removed = [], previous = [];
+    let diff = { added: [], updated: [], removed: [] };
+    for (const id of ids || []) {
+      if (!this._store.has(id)) continue;
+      const r = this._store.delete(id);
+      this._attention.delete(id);
+      removed.push(id); previous.push(r.previous);
+      diff = { added: [], updated: [], removed: [...diff.removed, ...r.diff.removed] };
+    }
+    if (!removed.length) return { ids: [], previous: [] };
+    this._commit(diff, 'local');
+    for (let i = 0; i < removed.length; i++) this._emitter.emit('comment:delete', { id: removed[i], previous: previous[i] });
+    this._emitter.emit('comments:delete', { ids: removed, previous });
+    return { ids: removed, previous };
+  }
+
+  /**
    * Record a region move/resize: append an anchor-event {ts,type,before,after} to the region's
    * append-only history, advance the stored rect/fallback/capture, and route through the normal
    * update path so it persists + emits comment:update/change — NEVER a silent re-point
@@ -224,7 +254,7 @@ class TackbackInstance {
   /** @param {unknown} envelope @param {{mode?:'replace'|'merge',onConflict?:'skip'|'replace'|'keepBoth'}} [opts] */
   importEnvelope(envelope, opts = {}) {
     this._assertWritable();
-    const { comments, document: importedDoc } = parseEnvelope(envelope);
+    const { comments, document: importedDoc, deleted: incomingDeleted } = parseEnvelope(envelope);
     // REQ-204/304 (Z3): if the import names a revisionHash that disagrees with the doc we render
     // against, warn via rev:mismatch but DO NOT refuse — load in drift mode. Text anchors re-resolve
     // at render (DOM-side) and orphan what they cannot (REQ-004); never a silent mis-point. A legacy
@@ -244,9 +274,44 @@ class TackbackInstance {
     if (dropped > 0 && mode === 'replace' && !opts.allowPartial) {
       throw new TackbackError('IMPORT_INVALID', `replace import has ${dropped} invalid record(s); refusing to clear existing comments`);
     }
-    const { diff, result } = this._store.ingest(valid, mode, opts.onConflict || 'skip');
+    // Precedence is decided BEFORE the store is touched, and it belongs to the ENVELOPE, not to the
+    // mode the reader happens to pass: a producer emits one envelope, and its meaning cannot depend
+    // on an option chosen at the other end. An envelope that both lists an id and buries it is saying
+    // the server no longer has it — the only way the two can disagree is a torn read of an
+    // append-only ledger (comments projected, a delete lands, tombstones projected), and there the
+    // tombstone is strictly the fresher fact. So a buried id is never ingested, in either mode.
+    //
+    // Ingesting first and burying afterwards let one envelope contradict itself out loud: the id
+    // arrived in both `added` and `removed` of a single `change`, the return said `added: 1` and
+    // `deleted: 1` at once, and a `comment:delete` described a comment no listener had been shown.
+    const doomed = Array.isArray(incomingDeleted)
+      ? new Set(incomingDeleted.filter((id) => typeof id === 'string'))
+      : null;
+    const ingestible = doomed && doomed.size ? valid.filter((c) => !doomed.has(c.id)) : valid;
+    const { diff, result } = this._store.ingest(ingestible, mode, opts.onConflict || 'skip');
+    // A MERGE only ever added, so an integrator polling a server's envelope resurrected everything
+    // the server had deleted. The envelope can now say what is gone, and merge honours it. The
+    // CLIENT keeps no tombstones: the party that knows about a deletion is the one that recorded it,
+    // and a list that only grows is not something to make every mounted instance carry.
+    //
+    // Under REPLACE the filter above is the whole of it: the wipe already removes whatever the
+    // incoming set omits, so this loop finds nothing left to take and `deleted` comes back 0. The
+    // envelope is still honoured — a buried id simply cannot come back in through the front door.
+    // Everything removed below was ALREADY in the store, so the emitted diff is a true before/after.
+    const gone = [], gonePrev = [];
+    for (const id of (doomed || [])) {
+      if (!this._store.has(id)) continue;
+      const r = this._store.delete(id);
+      this._attention.delete(id);
+      gone.push(id); gonePrev.push(r.previous);
+      diff.removed.push(...r.diff.removed);
+    }
     this._commit(diff, 'import');
-    return { ...result, dropped };
+    // the same payload every other deletion carries — a listener reading `previous` must not find
+    // that an import is the one path that hands it nothing
+    for (let i = 0; i < gone.length; i++) this._emitter.emit('comment:delete', { id: gone[i], previous: gonePrev[i] });
+    if (gone.length) this._emitter.emit('comments:delete', { ids: gone, previous: gonePrev });
+    return { ...result, dropped, deleted: gone.length };
   }
 
   // ---- events / adapters / lifecycle ---------------------------------------------------------
