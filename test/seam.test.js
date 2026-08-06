@@ -157,3 +157,64 @@ test('setTransport announces a real change, and stays quiet when nothing changed
     'one event per change of DESCRIPTOR, not per change of representation');
   assert.equal(tb.getTransport(), null, 'and the descriptor itself still reads back');
 });
+
+// ---- the seams an integrator needs to know a thread was read, and that something was deleted -----
+
+test('deleteComments: one operation, one commit, one operation-level event', () => {
+  const tb = Tackback.mount({ document: { id: 'batch-delete' }, storage: memoryAdapter() });
+  const a = tb.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'one' });
+  const b = tb.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'two' });
+  tb.addComment({ anchor: { type: 'block', elementId: 'p2' }, body: 'elsewhere' });
+  const singles = [], batches = [], changes = [];
+  tb.on('comment:delete', (e) => singles.push(e.id));
+  tb.on('comments:delete', (e) => batches.push(e.ids));
+  tb.on('change', () => changes.push(1));
+  const res = tb.deleteComments([a.id, b.id]);
+  assert.deepEqual(res.ids, [a.id, b.id]);
+  assert.deepEqual(singles, [a.id, b.id], 'each comment still reports itself — existing listeners are unaffected');
+  assert.deepEqual(batches, [[a.id, b.id]], 'and the OPERATION reports once, which is what N events could not say');
+  assert.equal(changes.length, 1, 'one operation, one commit');
+  assert.equal(tb.listComments().length, 1, 'the comment on the other anchor is untouched');
+});
+
+test('deleteComments: unknown ids are skipped, and an all-unknown call is a silent no-op', () => {
+  const tb = Tackback.mount({ document: { id: 'batch-partial' }, storage: memoryAdapter() });
+  const a = tb.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'one' });
+  const seen = [];
+  tb.on('comments:delete', (e) => seen.push(e.ids));
+  assert.deepEqual(tb.deleteComments([a.id, 'never-existed']).ids, [a.id]);
+  assert.deepEqual(seen, [[a.id]], 'the event reports what actually went');
+  assert.deepEqual(tb.deleteComments(['nothing', 'here']).ids, []);
+  assert.deepEqual(seen.length, 1, 'and an operation that removed nothing announces nothing');
+});
+
+test('importEnvelope: a merge honours the incoming envelope\'s tombstones', () => {
+  // the bug this exists for: an integrator polling a server and merging its envelope resurrected
+  // every comment the server had deleted, because merge only ever added.
+  const tb = Tackback.mount({ document: { id: 'tombstones' }, storage: memoryAdapter() });
+  const gone = tb.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'deleted on the server' });
+  const kept = tb.addComment({ anchor: { type: 'block', elementId: 'p2' }, body: 'still there' });
+  const removed = [];
+  tb.on('comments:delete', (e) => removed.push(...e.ids));
+  const res = tb.importEnvelope({ schemaVersion: 1, document: { id: 'tombstones' }, comments: [], deleted: [gone.id] }, { mode: 'merge' });
+  assert.equal(res.deleted, 1, 'the import reports what it removed');
+  assert.deepEqual(tb.listComments().map((c) => c.id), [kept.id], 'and the server\'s deletion sticks');
+  assert.deepEqual(removed, [gone.id], 'reported on the same seam as any other deletion');
+});
+
+test('importEnvelope: tombstones for ids we never had, or of the wrong shape, change nothing', () => {
+  const tb = Tackback.mount({ document: { id: 'tombstones-noop' }, storage: memoryAdapter() });
+  const c = tb.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'here' });
+  const res = tb.importEnvelope({ comments: [], deleted: ['never-had-it', 42, null] }, { mode: 'merge' });
+  assert.equal(res.deleted, 0);
+  assert.equal(tb.listComments().length, 1);
+  assert.ok(c.id);
+});
+
+test('an envelope without `deleted` behaves exactly as it did before', () => {
+  const tb = Tackback.mount({ document: { id: 'no-tombstones' }, storage: memoryAdapter() });
+  tb.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'here' });
+  const res = tb.importEnvelope({ comments: [] }, { mode: 'merge' });
+  assert.equal(res.deleted, 0);
+  assert.equal(tb.listComments().length, 1, 'a merge with nothing to add and nothing to remove is a no-op');
+});

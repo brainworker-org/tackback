@@ -296,7 +296,7 @@ export function attachPanel(core, options = {}) {
     clearBtn.onclick = () => {
       if (!globalThis.confirm?.(t('confirm.clearAll'))) return;
       closePopup();   // also drops any in-progress pending region (which is never committed) — bug: it survived clear-all
-      for (const c of core.listComments()) core.deleteComment(c.id);
+      core.deleteComments(core.listComments().map((c) => c.id));   // one operation, not one per comment
       doc.querySelectorAll('.tb-pending,.tb-draw').forEach((e) => e.remove());   // belt-and-suspenders: no stray draft rect
     };
     panel.appendChild(clearBtn);
@@ -349,9 +349,13 @@ export function attachPanel(core, options = {}) {
   function toggleLane(force) {
     if (!lane) return false;
     const open = force === undefined ? !laneOpen() : !!force;
+    const was = lane.classList.contains('tb-open');
     lane.classList.toggle('tb-open', open);
     laneHead.setAttribute('aria-expanded', open ? 'true' : 'false');
     if (open) { laneConv.sync(); laneConv.focus(); }
+    // The lane's composer is always on screen; its THREAD is not. Expanding is what shows the
+    // utterances, so that is what a reader has actually been shown.
+    if (open !== was) (open ? core.reportThreadOpened : core.reportThreadClosed).call(core, laneConv.threadInfo());
     return open;
   }
   // The head is the lane's mark: the same utterance count a badge carries, and the same attention
@@ -548,6 +552,7 @@ export function attachPanel(core, options = {}) {
   // The pending region's lifetime IS the popup's: closing the popup (outside-click, Escape, Cancel,
   // empty save) removes the dashed rect, so no orphaned region ever lingers (Keisuke 2026-06-15).
   function closePopup() {
+    if (popupConv) core.reportThreadClosed(popupConv.threadInfo());
     popupCleanup?.(); popupCleanup = null; popupConv?.dispose(); popupConv = null; popup?.remove(); popup = null;
     if (pendingRegionEl) { pendingRegionEl.remove(); pendingRegionEl = null; }
     doc.documentElement.classList.remove('tb-popup-open');   // region affordances (resize grip / move cursor) re-enabled
@@ -780,8 +785,16 @@ export function attachPanel(core, options = {}) {
     });
     };
 
+    // what a `thread:*` listener is told. Read at emit time, not captured, because a brand-new
+    // region adopts its identity on first commit.
+    const threadInfo = () => ({
+      threadKey,
+      anchor: (existing && existing[0] && existing[0].anchor) || null,
+      comments: threadKey == null ? [] : core.listComments().filter((c) => threadKeyOf(c) === threadKey),
+    });
     const handle = {
       nodes: [anchorEl, ta, rwrap, exwrap, acts],
+      threadInfo,
       composer: [ta, rwrap, acts],   // the part a compact host keeps visible while collapsed
       timeline: exwrap,
       sync, relabel, retint: () => { for (const r of tinted) applyTint(r); },
@@ -806,6 +819,7 @@ export function attachPanel(core, options = {}) {
     popupConv = conv;
     popup.append(...conv.nodes);
     doc.body.appendChild(popup);
+    core.reportThreadOpened(conv.threadInfo());
     const vw = globalThis.innerWidth || 1024, vh = globalThis.innerHeight || 768;
     const pos = clampToViewport(ev?.clientX ?? 120, ev?.clientY ?? 120, popup.offsetWidth, popup.offsetHeight, vw, vh);
     Object.assign(popup.style, { left: pos.x + 'px', top: pos.y + 'px' });
@@ -892,7 +906,7 @@ export function attachPanel(core, options = {}) {
     closeAnchorMenu(); closePopup();
     anchorMenu = el(doc, 'div', 'tb-ctxmenu');
     const item = el(doc, 'div', 'tb-ctxitem'); item.textContent = t('menu.delete');
-    item.onclick = () => { for (const c of [...comments]) core.deleteComment(c.id); closeAnchorMenu(); };   // delete the whole anchor (all its comments)
+    item.onclick = () => { core.deleteComments(comments.map((c) => c.id)); closeAnchorMenu(); };   // ONE operation: the whole anchor
     anchorMenu.appendChild(item);
     doc.body.appendChild(anchorMenu);
     const vw = globalThis.innerWidth || 1024, vh = globalThis.innerHeight || 768;

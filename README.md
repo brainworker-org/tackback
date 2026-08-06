@@ -13,7 +13,7 @@ any HTML, including Markdown rendered to HTML.
 > multi-participant timeline, actor colors, attention, and the Save/Send scenarios — run
 > `demo/demo.html`: `npm run build`, serve the package root over http, and open it.
 
-> **Version 0.9.5 (staging).** Pre-1.0: the API is functional and tested but may still change before
+> **Version 0.9.6 (staging).** Pre-1.0: the API is functional and tested but may still change before
 > the 1.0 stable release. The public API is the **JavaScript** API called in the browser (not an HTTP API).
 
 ## Install
@@ -182,6 +182,27 @@ tb.setAnchorAttention(commentId, false);   // back to its normal actor tint
 tb.hasAttention(commentId);                // → boolean
 tb.on('attention:change', ({ id, on }) => {/* … */});
 ```
+
+### Knowing a thread was seen, and that something went
+
+```js
+tb.on('thread:open',  ({ threadKey, anchor, comments }) => {/* it is on screen */});
+tb.on('thread:close', ({ threadKey })                   => {/* it is not */});
+```
+
+Both surfaces report: an anchored thread opening as a Pane, and the document thread when its lane is
+expanded. The lane's *composer* being on screen is not the thread being open — expanding is. Whether
+having seen a thread means it has been **read** is yours to decide; the library only says it was shown.
+
+```js
+tb.deleteComments([id1, id2]);        // one act → one `comments:delete`, plus the usual per-comment ones
+tb.importEnvelope({ …, deleted: [id] }, { mode: 'merge' });   // a merge that also removes
+```
+
+Deleting a whole anchor is one operation, and says so — from a run of `comment:delete` events you
+cannot tell where one act ended. And a `merge` used to only ever add, so an integrator polling a
+server resurrected everything the server had deleted; an envelope can now carry what is gone. The
+client keeps no tombstones: the party that knows about a deletion is the one that recorded it.
 
 The flag is **session-only**: never persisted, never written into the export envelope, so a per-viewer
 UI state can't leak into a shared file. It lives as long as its comment — deleting or wiping the comment

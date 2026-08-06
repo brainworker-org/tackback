@@ -451,3 +451,66 @@ test('lane: a host\'s own right-side reservation is not overwritten by the panel
     assert.equal(style['--tb-lane-right'], undefined, '…and never as the host-facing property');
   } finally { f.restore(); }
 });
+
+// ---- thread:open / thread:close, from BOTH surfaces ---------------------------------------------
+
+test('thread events: the lane reports its thread when it expands, and when it collapses', () => {
+  // this is the seam that lets an integrator drop a MutationObserver watching for a popup element.
+  const f = mountPanel();
+  try {
+    const opened = [], closed = [];
+    f.core.on('thread:open', (e) => opened.push(e));
+    f.core.on('thread:close', (e) => closed.push(e));
+    const c = f.core.addComment({ anchor: { type: 'document' }, body: 'about all of it' });
+    f.laneHead().click();
+    assert.equal(opened.length, 1, 'expanding is when the utterances are actually shown');
+    assert.equal(opened[0].threadKey, 'document');
+    assert.deepEqual(opened[0].comments.map((x) => x.id), [c.id], 'and it carries what was on screen');
+    f.laneHead().click();
+    assert.equal(closed.length, 1);
+    assert.equal(closed[0].threadKey, 'document');
+  } finally { f.restore(); }
+});
+
+test('thread events: the composer being on screen is not the thread being open', () => {
+  // the lane's input is always visible; its thread is not. Reporting on attach would tell an
+  // integrator the reader had seen a conversation they had not opened.
+  const f = mountPanel();
+  try {
+    const opened = [];
+    f.core.on('thread:open', (e) => opened.push(e));
+    assert.ok(f.lane(), 'the lane and its composer exist');
+    assert.equal(opened.length, 0, 'but nothing has been shown yet');
+  } finally { f.restore(); }
+});
+
+test('thread events: the Pane reports too, so no thread is silently exempt', () => {
+  // naming these popup:* would have left exactly one thread — the document one — invisible to an
+  // integrator's read-tracking, since it opens in the lane rather than a popup.
+  const f = mountPanel({ controls: { docLane: false } });
+  try {
+    const opened = [], closed = [];
+    f.core.on('thread:open', (e) => opened.push(e));
+    f.core.on('thread:close', (e) => closed.push(e));
+    f.core.addComment({ anchor: { type: 'document' }, body: 'q' });
+    f.panel.openDocumentThread();
+    assert.equal(opened.length, 1, 'a Pane opening is a thread opening');
+    assert.equal(opened[0].threadKey, 'document');
+    f.doc.querySelector('.tb-cancel').click();
+    assert.equal(closed.length, 1, 'and dismissing it closes the thread');
+  } finally { f.restore(); }
+});
+
+test('thread events: repeated toggles do not double-report', () => {
+  const f = mountPanel();
+  try {
+    let open = 0, close = 0;
+    f.core.on('thread:open', () => open++);
+    f.core.on('thread:close', () => close++);
+    f.panel.toggleDocumentLane(true);
+    f.panel.toggleDocumentLane(true);   // already expanded — nothing changed, nothing to report
+    f.panel.toggleDocumentLane(false);
+    f.panel.toggleDocumentLane(false);
+    assert.equal(open, 1); assert.equal(close, 1);
+  } finally { f.restore(); }
+});

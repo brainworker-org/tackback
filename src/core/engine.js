@@ -14,7 +14,7 @@ import { TackbackError } from './errors.js';
 
 // MUST equal package.json "version" (export envelope's generator.version comes from here);
 // export.test.js asserts they match so they can't drift.
-const LIB_VERSION = '0.9.5';
+const LIB_VERSION = '0.9.6';
 const nowIso = () => new Date().toISOString();
 
 /**
@@ -122,6 +122,32 @@ class TackbackInstance {
     this._attention.delete(id);   // a deleted comment carries no live attention flag
     this._commit(diff, 'local');
     this._emitter.emit('comment:delete', { id, previous });
+  }
+
+  /**
+   * Delete several comments as ONE operation — what deleting a whole anchor, or clearing a document,
+   * actually is. Each comment still emits its own `comment:delete`, so nothing that listens today
+   * changes; the operation itself emits `comments:delete` once, and commits once. Without it an
+   * integrator sees N indistinguishable deletions and cannot tell where one act ended.
+   * @param {string[]} ids
+   * @returns {{ ids: string[], previous: Comment[] }} what was actually removed
+   */
+  deleteComments(ids) {
+    this._assertWritable();
+    const removed = [], previous = [];
+    let diff = { added: [], updated: [], removed: [] };
+    for (const id of ids || []) {
+      if (!this._store.has(id)) continue;
+      const r = this._store.delete(id);
+      this._attention.delete(id);
+      removed.push(id); previous.push(r.previous);
+      diff = { added: [], updated: [], removed: [...diff.removed, ...r.diff.removed] };
+    }
+    if (!removed.length) return { ids: [], previous: [] };
+    this._commit(diff, 'local');
+    for (let i = 0; i < removed.length; i++) this._emitter.emit('comment:delete', { id: removed[i], previous: previous[i] });
+    this._emitter.emit('comments:delete', { ids: removed, previous });
+    return { ids: removed, previous };
   }
 
   /**
@@ -245,8 +271,23 @@ class TackbackInstance {
       throw new TackbackError('IMPORT_INVALID', `replace import has ${dropped} invalid record(s); refusing to clear existing comments`);
     }
     const { diff, result } = this._store.ingest(valid, mode, opts.onConflict || 'skip');
+    // A merge only ever ADDED, so an integrator polling a server's envelope resurrected everything
+    // the server had deleted. The envelope can now say what is gone, and merge honours it. The
+    // CLIENT keeps no tombstones: the party that knows about a deletion is the one that recorded it,
+    // and a list that only grows is not something to make every mounted instance carry.
+    const tombstones = Array.isArray(envelope && envelope.deleted) ? envelope.deleted : [];
+    const gone = [];
+    for (const id of tombstones) {
+      if (typeof id !== 'string' || !this._store.has(id)) continue;
+      const r = this._store.delete(id);
+      this._attention.delete(id);
+      gone.push(id);
+      diff.removed.push(...r.diff.removed);
+    }
     this._commit(diff, 'import');
-    return { ...result, dropped };
+    for (const id of gone) this._emitter.emit('comment:delete', { id, previous: null });
+    if (gone.length) this._emitter.emit('comments:delete', { ids: gone, previous: [] });
+    return { ...result, dropped, deleted: gone.length };
   }
 
   // ---- events / adapters / lifecycle ---------------------------------------------------------
@@ -296,6 +337,27 @@ class TackbackInstance {
     this._commit(diff, 'local');
     return next;
   }
+
+  /**
+   * Report that a thread's surface opened or closed. The panel calls these; the core only emits, in
+   * the same shape as `reportOrphaned` — a DOM-side fact reaching the seam every integrator already
+   * listens on.
+   *
+   * They are `thread:*` rather than `popup:*` deliberately. A thread has more than one surface — an
+   * anchored thread opens as a Pane, the document thread lives in the lane — so naming the event
+   * after the popup would leave an integrator's "the reader has seen this" wiring silently blind to
+   * exactly one thread.
+   *
+   * The payload carries what a reader of the thread needs to act on it: which thread
+   * (`threadKey`), what it is about (`anchor`), and the utterances that were on screen
+   * (`comments`). Tackback attaches no meaning to the event — whether opening a thread means it has
+   * been read is the integrator's to decide.
+   * @param {{ threadKey: string|null, anchor: object|null, comments: Comment[] }} info
+   */
+  reportThreadOpened(info) { this._emitter.emit('thread:open', info); }
+
+  /** @param {{ threadKey: string|null, anchor: object|null, comments: Comment[] }} info */
+  reportThreadClosed(info) { this._emitter.emit('thread:close', info); }
 
   /**
    * Flag (or clear) an ATTENTION state on an anchor, keyed by one of its comment ids. This is a

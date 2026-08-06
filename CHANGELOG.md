@@ -6,6 +6,34 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
 
 ## [Unreleased]
 
+## [0.9.6] — 2026-08-06
+Two seams an integrator asked for, so it can stop reaching into the library's DOM and stop losing
+deletions. Mechanism only, as ever: the library reports what happened and attaches no meaning to it.
+
+### Added
+- **`thread:open` / `thread:close`** — a thread's surface became visible, or went away. Payload:
+  `{ threadKey, anchor, comments }`. Both surfaces report: an anchored thread opening as a Pane, and
+  the document thread when its lane is expanded. They are `thread:*` and not `popup:*` on purpose —
+  a thread has more than one surface now, and naming the event after the popup would leave exactly
+  one thread invisible to anything watching. Whether opening a thread means it has been *read* is the
+  integrator's to decide; the library only says it was shown. The lane's composer being on screen is
+  not the thread being open — expanding is.
+- **`core.deleteComments(ids)`** — deleting a whole anchor, or clearing a document, is one act.
+  Each comment still emits its own `comment:delete`, so nothing listening today changes, but the
+  operation emits **`comments:delete`** once and commits once. From N indistinguishable events an
+  integrator could not tell where one act ended.
+- **`importEnvelope` honours a `deleted[]` array in the incoming envelope.** A `merge` only ever
+  added, so an integrator polling a server resurrected everything the server had deleted on the next
+  sync. The envelope can now say what is gone. The client keeps **no tombstones** — the party that
+  knows about a deletion is the one that recorded it, and a list that only grows is not something to
+  make every mounted instance carry. Removals are reported on the same seam as any other deletion,
+  and `importEnvelope` returns how many it applied.
+
+### Compatibility
+Additive. An envelope without `deleted` behaves exactly as before, `deleteComment` is unchanged, and
+every existing event fires as it did.
+
+
 ## [0.9.5] — 2026-08-06
 Hands-on corrections, from using 0.9.4 rather than reviewing it.
 
