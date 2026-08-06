@@ -70,8 +70,8 @@ export function answersSend(items, ownKey = null) {
  * The fix is not to iterate but to measure each candidate UNDER ITS OWN STATE, so the host's answer
  * is already folded into both numbers. The decision is then a pure function of two measurements and
  * gives the same result every time it is asked. Beside wins when it is wide enough to type into;
- * otherwise above, which is also where an unusable-either-way viewport lands, because alternating
- * forever is worse than picking the state that is always at least as wide.
+ * otherwise above — including when neither fits, since removing the panel's reservation is the only
+ * lever there is. The two widths are not compared: `fits` reports whether the chosen one was enough.
  * @param {(stacked: boolean) => number} measure   width the lane would have in that state
  * @param {{ min?: number }} [opts]
  * @returns {{ stacked: boolean, width: number, fits: boolean }}

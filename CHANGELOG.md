@@ -6,6 +6,28 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
 
 ## [Unreleased]
 
+## [0.9.5] — 2026-08-06
+Hands-on corrections, from using 0.9.4 rather than reviewing it.
+
+### Fixed
+- **The lane's composer no longer carries a resize grip.** A bar fixed to the bottom of the viewport
+  has just measured its own place there; a corner the reader can drag is an invitation to fight that.
+
+### Docs / demo
+- The hosted demo loads **0.9.4**, so the lane is finally visible there — it had been pinned at 0.9.2.
+- The demo's Japanese reaction labels read like a dictionary rather than like a person: *Ship it* was
+  「出そう」, *Idea* 「案」, *Cut* 「削る」, *Blocker* 「障害」. They are now 「OK!!」「アイデア」「カット」
+  「ブロッカー」.
+- Two descriptions corrected: the stacked lane takes the *available* width, not the full width (it
+  keeps its maximum), and the placement decision does not compare the two candidate widths.
+
+### Note on 0.9.4
+The package published to npm as 0.9.4 was built from tag `v0.9.4` **plus** the resize fix above,
+which arrived minutes after the tag was cut. The published artifact is slightly ahead of its tag
+rather than behind it. 0.9.5 restores the invariant that a tag marks exactly the tree npm received —
+vendor 0.9.5, not 0.9.4, where byte-identity to a tag matters.
+
+
 ## [0.9.4] — 2026-08-06
 
 ### Added
@@ -239,7 +261,8 @@ Initial public-prep release (staging). Standalone extraction of the Tackback lib
 - [PolyForm Shield License 1.0.0](https://polyformproject.org/licenses/shield/1.0.0): free for any use
   including commercial, except to provide a product that competes with Tackback.
 
-[Unreleased]: https://github.com/brainworker-org/tackback/compare/v0.9.3...HEAD
+[Unreleased]: https://github.com/brainworker-org/tackback/compare/v0.9.4...HEAD
+[0.9.4]: https://github.com/brainworker-org/tackback/releases/tag/v0.9.4
 [0.9.3]: https://github.com/brainworker-org/tackback/releases/tag/v0.9.3
 [0.9.2]: https://github.com/brainworker-org/tackback/releases/tag/v0.9.2
 [0.9.1]: https://github.com/brainworker-org/tackback/releases/tag/v0.9.1
