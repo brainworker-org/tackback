@@ -201,6 +201,11 @@ A place can be addressed before anyone has spoken there, so a Pane over an untou
 so it is a *draft*, not a thread, and its open is reported when that comment commits. Abandon it and
 nothing is reported at all — a close for a thread that never opened is worse than silence.
 
+Both events are emitted once the surface has **settled**, so a handler may act on them immediately:
+reply into the thread that just opened, open another one from a close, or tear the panel down. A
+reply sent synchronously from `thread:open` is judged as part of the send it answers, exactly as one
+sent from `comment:add` is.
+
 ```js
 tb.deleteComments([id1, id2]);        // one act → one `comments:delete`, plus the usual per-comment ones
 tb.importEnvelope({ …, deleted: [id] }, { mode: 'merge' });   // a merge that also removes

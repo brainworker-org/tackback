@@ -632,3 +632,75 @@ test('thread events: a thread whose identity comes from its PLACE reports at onc
     assert.equal(closed[0].threadKey, 'block:fresh');
   } finally { f.restore(); }
 });
+
+test('thread events: a reply sent from the open handler settles the send it answered', () => {
+  // Announcing is a re-entry point, and the announcement for a new region lands in the middle of a
+  // commit. If it sits outside the batch that commit is capturing, a reply an integrator sends
+  // synchronously is drawn and then forgotten: the row is on screen, the pending marker goes up
+  // afterwards, and the batch that would have cleared it no longer holds the row that answered.
+  const f = mountPanel();
+  try {
+    f.core.setTransport({ interactive: true, label: 'Send' });
+    f.core.on('thread:open', ({ comments }) => {
+      if (!comments.length) return;
+      f.core.addReply(comments[0].id, { body: 'ack', author: { id: 'srv', kind: 'ai' } });
+    });
+    const p = f.doc.createElement('p'); p.id = 'para4'; p.textContent = 'content';
+    f.root.appendChild(p);
+    const fire = (type, x, y, buttons) =>
+      p.dispatchEvent({ type, button: 2, buttons, clientX: x, clientY: y, pointerId: 11 });
+    fire('pointerdown', 10, 10, 2); fire('pointermove', 90, 70, 2); fire('pointerup', 90, 70, 0);
+    const pop = f.doc.querySelector('.tb-popup');
+    const ta = pop.querySelector('textarea');
+    ta.value = 'about this area'; ta.dispatchEvent({ type: 'input' });
+    pop.querySelector('.tb-save').click();
+    assert.equal(pop.querySelectorAll('.tb-c-reply').length, 1, 'the answer is on screen');
+    assert.equal(pop.querySelectorAll('.tb-pending-note').length, 0,
+      'and nothing is still waiting for it');
+  } finally { f.restore(); }
+});
+
+test('thread events: a close handler may open the next thread, and it survives', () => {
+  // closePopup announces AFTER it has torn its popup down. Announcing first meant a listener that
+  // opened another Pane had it dismantled by the rest of the call that was still unwinding.
+  const f = mountPanel({ controls: { docLane: false } });
+  try {
+    f.core.addComment({ anchor: { type: 'document' }, body: 'q' });
+    let again = false;
+    f.core.on('thread:close', () => { if (!again) { again = true; f.panel.openDocumentThread(); } });
+    f.panel.openDocumentThread();
+    f.doc.querySelector('.tb-cancel').click();
+    assert.ok(f.doc.querySelector('.tb-popup'), 'the Pane the handler opened is still standing');
+  } finally { f.restore(); }
+});
+
+test('thread events: an open handler may tear the panel down', () => {
+  // the other direction of the same re-entry: announce last, so nothing is half-built when a
+  // listener acts on the announcement.
+  const f = mountPanel({ controls: { docLane: false } });
+  try {
+    f.core.addComment({ anchor: { type: 'document' }, body: 'q' });
+    f.core.on('thread:open', () => f.panel.destroy());
+    f.panel.openDocumentThread();   // must not throw on a half-built surface
+    assert.equal(f.doc.querySelector('.tb-panel'), null, 'and the teardown actually happened');
+  } finally { f.restore(); }
+});
+
+test('thread events: a close handler cannot re-expand a lane that has been destroyed', () => {
+  // The third face of the same re-entry. If destroy() announces while the lane is still wired, its
+  // handles outlive the surface: a handler that drives the lane through a state CHANGE emits an open
+  // on a detached element, and an integrator's "on screen" set never empties. Reaching it needs a
+  // collapse before the expand — which is the point. The fix is not that this gesture is likely, it
+  // is that after destroy there is nothing left to drive.
+  const f = mountPanel();
+  try {
+    let opened = 0;
+    f.core.on('thread:open', () => opened++);
+    f.panel.toggleDocumentLane(true);
+    assert.equal(opened, 1);
+    f.core.on('thread:close', () => { f.panel.toggleDocumentLane(false); f.panel.toggleDocumentLane(true); });
+    f.panel.destroy();
+    assert.equal(opened, 1, 'nothing was opened on the way out');
+    assert.equal(f.lane(), null);
+  } finally { f.restore(); }
+});

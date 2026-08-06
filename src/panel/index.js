@@ -553,9 +553,10 @@ export function attachPanel(core, options = {}) {
   // The pending region's lifetime IS the popup's: closing the popup (outside-click, Escape, Cancel,
   // empty save) removes the dashed rect, so no orphaned region ever lingers (Keisuke 2026-06-15).
   function closePopup() {
-    popupConv?.announceClose();
+    const closing = popupConv;   // …and announce only once it is gone (see openPopup: re-entry)
     popupCleanup?.(); popupCleanup = null; popupConv?.dispose(); popupConv = null; popup?.remove(); popup = null;
     if (pendingRegionEl) { pendingRegionEl.remove(); pendingRegionEl = null; }
+    closing?.announceClose();
     doc.documentElement.classList.remove('tb-popup-open');   // region affordances (resize grip / move cursor) re-enabled
   }
   // ---- the conversation view --------------------------------------------------------------------
@@ -752,14 +753,21 @@ export function attachPanel(core, options = {}) {
     // Clearing `ta.value` fires no `input` event, so the button state has to be recomputed too, or
     // it stays enabled over an empty box.
     resetComposer();
-    // A brand-new region's thread identity only exists once its first comment does — adopt it now,
-    // then sync. Until this point the thread had no identity to match against, so NOTHING committed
-    // during it was drawn: not the utterance itself, and not an answer an integrator sent
-    // synchronously. Syncing here catches both, into the same batch, so the settlement below judges
-    // them as if they had arrived like any other. draw() is keyed, so nothing is drawn twice.
-    if (created && threadKey == null) { threadKey = threadKeyOf(created); announceOpen(); }
+    // Re-open the SAME batch before anything else can draw. Everything that follows is a
+    // consequence of this commit, so it all has to be judged as part of it — including a reply an
+    // integrator sends synchronously from a `thread:open` handler. Announcing outside this window
+    // let such a reply be drawn and then forgotten: the marker went up, and the batch that would
+    // have settled it no longer contained the row that answered.
     inFlight = drawnDuringCommit;
-    try { sync(); } finally { inFlight = null; }
+    try {
+      // A brand-new region's thread identity only exists once its first comment does — adopt it now,
+      // then sync. Until this point the thread had no identity to match against, so NOTHING committed
+      // during it was drawn: not the utterance itself, and not an answer an integrator sent
+      // synchronously. Syncing here catches both, into the same batch, so the settlement below judges
+      // them as if they had arrived like any other. draw() is keyed, so nothing is drawn twice.
+      if (created && threadKey == null) { threadKey = threadKeyOf(created); announceOpen(); }
+      sync();
+    } finally { inFlight = null; }
     if (commit.closeOnCommit) return onClose();   // …and only now is dismissal the host's call
     markSent();
     // …and only now judge what landed during the commit. The utterance we just committed does not
@@ -830,11 +838,15 @@ export function attachPanel(core, options = {}) {
     popupConv = conv;
     popup.append(...conv.nodes);
     doc.body.appendChild(popup);
-    conv.announceOpen();
     const vw = globalThis.innerWidth || 1024, vh = globalThis.innerHeight || 768;
     const pos = clampToViewport(ev?.clientX ?? 120, ev?.clientY ?? 120, popup.offsetWidth, popup.offsetHeight, vw, vh);
     Object.assign(popup.style, { left: pos.x + 'px', top: pos.y + 'px' });
     conv.focus();
+    // Announcing is a RE-ENTRY point: a listener can add a reply, or tear the panel down, before this
+    // call returns. So it comes last, once the surface it is announcing is fully placed — otherwise
+    // the report says "on screen" while the popup is still unpositioned, and a listener acting on it
+    // races the code that was going to finish building it.
+    conv.announceOpen();
     // dismiss on click outside the popup or Escape. Block/range keep the unsaved draft (restorable on
     // reopen); a PENDING region is ephemeral — its rect is removed on close (REQ-012) and would never
     // recur, so its draft is DISCARDED too, per REQ-703 (Keisuke: a dismissed uncommitted region keeps
@@ -842,7 +854,8 @@ export function attachPanel(core, options = {}) {
     const dismissPreserve = () => { if (ephemeralDraft) conv.clearDraft(); else conv.preserveDraft(); closePopup(); };
     const onDocDown = (e) => { if (popup && !e.target.closest('.tb-popup')) dismissPreserve(); };
     const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); dismissPreserve(); } };
-    const register = () => { doc.addEventListener('mousedown', onDocDown, true); doc.addEventListener('keydown', onKey, true); };
+    // the same re-entry: a listener may have torn this popup down before the timer runs
+    const register = () => { if (!popup) return; doc.addEventListener('mousedown', onDocDown, true); doc.addEventListener('keydown', onKey, true); };
     (globalThis.setTimeout || ((f) => f()))(register, 0);   // defer so the opening event doesn't self-dismiss
     popupCleanup = () => { doc.removeEventListener('mousedown', onDocDown, true); doc.removeEventListener('keydown', onKey, true); };
   }
@@ -1269,7 +1282,14 @@ export function attachPanel(core, options = {}) {
       if (vv) { vv.removeEventListener('resize', queueRecalc); vv.removeEventListener('scroll', queueRecalc); vv.removeEventListener('resize', placeLane); vv.removeEventListener('scroll', placeLane); }
       win.removeEventListener?.('resize', queueRecalc); win.removeEventListener?.('resize', placeLane);
       if (mql && applyAutoTheme) mql.removeEventListener('change', applyAutoTheme);
-      closePopup(); closeAnchorMenu(); laneConv?.announceClose(); panel.remove(); lane?.remove(); doc.documentElement.classList.remove('tb-lane-stacked'); styleEl.remove(); themeStyleEl.remove();
+      closePopup(); closeAnchorMenu();
+      // Same order as closePopup: take the surface away, drop the handles that could still drive it,
+      // and only then announce. A close handler that reaches back for the lane must find nothing
+      // rather than re-expanding a detached element and leaving an open nobody will ever close.
+      const laneClosing = laneConv;
+      panel.remove(); lane?.remove(); lane = null; laneConv = null; laneHead = null;
+      doc.documentElement.classList.remove('tb-lane-stacked'); styleEl.remove(); themeStyleEl.remove();
+      laneClosing?.announceClose();
       clearHighlights(win);
       doc.querySelectorAll('.tb-badge,.tb-pin,.tb-region,.tb-pending,.tb-ctxmenu').forEach((e) => e.remove());
     },

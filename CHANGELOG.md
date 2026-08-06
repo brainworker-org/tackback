@@ -21,7 +21,9 @@ deletions. Mechanism only, as ever: the library reports what happened and attach
   `anchor` is always present and `threadKey` is never null. A place is addressable before anyone has
   spoken there, so a Pane over an untouched block opens with `comments: []`; a freshly drawn region,
   whose identity *is* its first comment, is a draft until that comment commits, and an abandoned one
-  reports nothing at all.
+  reports nothing at all. Both events fire once the surface has settled, so a handler may reply into
+  the thread, open another from a close, or destroy the panel; a reply sent synchronously from
+  `thread:open` settles the send it answers, as one from `comment:add` already did.
 - **`core.deleteComments(ids)`** — deleting a whole anchor, or clearing a document, is one act.
   Each comment still emits its own `comment:delete`, so nothing listening today changes, but the
   operation emits **`comments:delete`** once and commits once. From N indistinguishable events an
