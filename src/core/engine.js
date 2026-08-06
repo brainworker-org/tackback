@@ -166,7 +166,15 @@ class TackbackInstance {
    * is attached, send when one is) and whether to stay open after a commit (`interactive:true`).
    * @param {{ interactive?: boolean, label?: string } | null} transport
    */
-  setTransport(transport) { this._transport = transport || null; }
+  setTransport(transport) {
+    const next = transport || null;
+    const changed = JSON.stringify(this._transport) !== JSON.stringify(next);
+    this._transport = next;
+    // A UI that decides "Save or Send" once, when it opens, goes stale the moment this changes. A
+    // Pane's staleness is bounded by its own lifetime, but a persistent composer's is not — so the
+    // change is announced. Descriptor only: the core still transports nothing.
+    if (changed) this._emitter.emit('transport:change', next);
+  }
 
   /** @returns {{ interactive?: boolean, label?: string } | null} the attached transport descriptor */
   getTransport() { return this._transport ?? null; }

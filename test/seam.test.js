@@ -141,3 +141,17 @@ test('matching revision → no rev:mismatch; legacy envelope without a revision 
   tb2.importEnvelope({ document: { id: 'doc' }, comments: [] }, { mode: 'merge' });
   assert.equal(fired, 0, 'missing rev → comparison skipped');
 });
+
+test('setTransport announces a real change, and stays quiet when nothing changed', () => {
+  // a UI that decides "Save or Send" when it opens goes stale the moment this changes. A Pane's
+  // staleness is bounded by its own lifetime; a persistent composer's is not.
+  const tb = Tackback.mount({ document: { id: 'transport-events' }, storage: memoryAdapter() });
+  const seen = [];
+  tb.on('transport:change', (d) => seen.push(d));
+  tb.setTransport({ interactive: true });
+  tb.setTransport({ interactive: true });          // same descriptor — nothing to announce
+  tb.setTransport(null);
+  tb.setTransport(null);
+  assert.deepEqual(seen, [{ interactive: true }, null], 'one event per real change');
+  assert.equal(tb.getTransport(), null, 'and the descriptor itself still reads back');
+});

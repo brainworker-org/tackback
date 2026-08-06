@@ -475,7 +475,7 @@ export function attachPanel(core, options = {}) {
       b.onclick = () => { reactionId = reactionId === def.id ? '' : def.id; [...rwrap.children].forEach((x) => x.classList.toggle('on', x === b && !!reactionId)); updateSaveState(); };
       rwrap.appendChild(b);
     }
-    const commit = popupCommit(core.getTransport());   // save vs send + close vs stay-open (REQ-702/703)
+    let commit = popupCommit(core.getTransport());   // save vs send + close vs stay-open (REQ-702/703)
     const exwrap = el(doc, 'div', 'tb-existing');
     // Render the thread inline as ONE flat, TIME-ORDERED timeline (REQ-704): every utterance —
     // comment or reply — is its own row carrying its actor color + label, interleaved with the
@@ -666,6 +666,9 @@ export function attachPanel(core, options = {}) {
     popupRetint = () => { for (const r of tinted) applyTint(r); };
     // re-label the popup in place when the locale changes (input is preserved — no rebuild)
     popupRelabel = () => {
+      // re-derive rather than reuse what was captured at open: the transport can change under an
+      // open Pane, and then Save/Send and close-vs-stay-open must both follow it.
+      commit = popupCommit(core.getTransport());
       ta.placeholder = t('popup.placeholder');
       cancel.textContent = t('popup.cancel');
       save.textContent = commit.action === 'send' ? lbl('popup.send', 'Send') : t('popup.save');
@@ -1034,6 +1037,7 @@ export function attachPanel(core, options = {}) {
     refreshDocBtn();   // the document thread's "mark" is the panel control
   }
   const offAttention = core.on('attention:change', syncAttention);
+  const offTransport = core.on('transport:change', () => popupRelabel?.());   // Save ⇄ Send, live
   const offReady = core.on('ready', () => { hintEl.textContent = core.surfaces.size ? t('hint.pdf') : t('hint.html'); renderMarks(); });
   renderMarks();
 
@@ -1050,7 +1054,7 @@ export function attachPanel(core, options = {}) {
     /** Open the conversation about the document as a whole (the `docThread` control's action). */
     openDocumentThread() { openDocumentThread(); },
     destroy() {
-      offChange(); offRecalc(); offAttention(); offReady(); offDocSurface();
+      offChange(); offRecalc(); offAttention(); offTransport(); offReady(); offDocSurface();
       doc.removeEventListener('contextmenu', onContext); doc.removeEventListener('contextmenu', onCtxPdf);
       doc.removeEventListener('pointerdown', onPointerDown); doc.removeEventListener('pointermove', onMove); doc.removeEventListener('pointerup', onUp); doc.removeEventListener('pointercancel', onCancel);
       doc.removeEventListener('lostpointercapture', finalizeFromCaptureLoss); win.removeEventListener?.('blur', finalizeFromCaptureLoss);

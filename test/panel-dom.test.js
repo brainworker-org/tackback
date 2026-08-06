@@ -248,3 +248,17 @@ test('panel: a control click reaches a page-level listener, so a clear-on-open p
     assert.equal(f.docBtn().classList.contains('tb-attn'), false, 'and the control drops the tint');
   } finally { f.restore(); }
 });
+
+test('panel: an open Pane follows the transport when it changes underneath it', () => {
+  const f = mountPanel();
+  try {
+    f.core.addComment({ anchor: { type: 'document' }, body: 'q' });
+    f.docBtn().click();
+    const save = () => f.doc.querySelector('.tb-save');
+    assert.equal(save().textContent, 'Save', 'no transport attached yet');
+    f.core.setTransport({ interactive: true });
+    assert.equal(save().textContent, 'Send', 'the open Pane relabels rather than going stale');
+    f.core.setTransport(null);
+    assert.equal(save().textContent, 'Save');
+  } finally { f.restore(); }
+});
