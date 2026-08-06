@@ -48,6 +48,10 @@
   .callout { background: rgba(51,168,119,.1); border: 1px solid var(--tb-accent, #33a877);
     border-radius: 8px; padding: .8rem 1rem; margin: 1.2rem 0; font-size: .95rem; }
   .callout.warn { background: rgba(201,138,0,.12); border-color: #c98a00; }
+  #event-log-box summary { cursor: pointer; }
+  #event-log { max-height: 11em; overflow: auto; margin: .5em 0 0; padding: .5em .6em; font-size: 12px;
+    line-height: 1.5; background: rgba(0,0,0,.05); border-radius: 4px; }
+  @media (prefers-color-scheme: dark) { #event-log { background: rgba(255,255,255,.07); } }
   /* a right-draggable "surface" so a region anchor is demonstrable without any PDF */
   .demo-surface { position: relative; height: 200px; margin: 1rem 0; border: 1px dashed var(--tb-accent, #33a877);
     border-radius: 8px; display: flex; align-items: center; justify-content: center; text-align: center;
@@ -104,7 +108,15 @@
       about the whole document rather than any place in it: type straight into it, or open it to read. (This box is a text block too — try commenting it.)</p>
   </aside>
 
-  <h2>What it is</h2>
+  <details id="event-log-box" class="callout">
+  <summary><strong>Event log</strong> — everything the library reports, as it happens</summary>
+  <p>Tackback is a mechanism: it says what happened and attaches no meaning to it. Every event below is
+    a seam an integrator can build on. Add a comment, delete an anchor, or switch the scenario in the
+    bottom-left bar, and watch.</p>
+  <pre id="event-log">waiting for the first event…</pre>
+</details>
+
+<h2>What it is</h2>
   <p>Tackback attaches durable, anchored comments to a document without changing the document. Each
     comment remembers <em>where</em> it was placed — a block, a selected phrase, or a region drawn over
     an image, diagram or other non-text content — and re-finds that spot when the page is re-rendered.</p>
@@ -216,7 +228,7 @@
 
 <!-- The whole library: one classic script tag, one global. The module script below reads it. -->
 <!-- published bundle from CDN (jsdelivr mirrors npm). Pin keeps the hosted demo stable across releases. -->
-<script src="https://cdn.jsdelivr.net/npm/@brainworker/tackback@0.9.5/dist/tackback.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@brainworker/tackback@0.9.6/dist/tackback.umd.js"></script>
 <script type="module">
   // Test affordance (harmless in prod): pdf.js renders via requestAnimationFrame, which the browser
   // PAUSES while a tab is hidden — so a headless / background verification tab can stall mid-render.
@@ -328,6 +340,50 @@
     // MEANS (here: "unread") is this page's call; Tackback just paints --tb-attention on the anchor.
     tb.setAnchorAttention(commentId, true);
   }
+  // ---- the event log ---------------------------------------------------------------------------
+  // Every event the library emits, in one place. Until 0.9.6 this page listened to `comment:add` and
+  // `error` only, so most of what the library reports was invisible to anyone actually using the demo.
+  // A seam nobody can observe is a seam nobody can trust.
+  const EVENTS = ['ready', 'change', 'comment:add', 'comment:update', 'comment:delete', 'comments:delete',
+    'attention:change', 'transport:change', 'anchor:orphaned', 'recalculate', 'rev:mismatch',
+    'submit:batch', 'error'];
+  const logEl = document.getElementById('event-log');
+  const logLines = [];
+  const summarize = (name, e) => {
+    // `transport:change` hands over the descriptor itself, and `null` when the transport is cleared —
+    // so it is answered before the guard below, which would otherwise read a cleared transport as
+    // having nothing to say, and a set one as cleared.
+    if (name === 'transport:change') return e ? (e.label || (e.interactive ? 'interactive' : 'set')) : 'cleared';
+    if (!e || typeof e !== 'object') return '';
+    if (name === 'change') {
+      const d = e.changes || {};
+      const parts = [['added', d.added], ['updated', d.updated], ['removed', d.removed]]
+        .filter(([, v]) => v && v.length).map(([k, v]) => `${k} ${v.length}`);
+      return `${parts.join(', ') || 'no net change'} · source ${e.source}`;
+    }
+    if (name === 'comments:delete') return `${e.ids.length} in one act`;
+    if (name === 'comment:delete') return e.id;
+    if (name === 'attention:change') return `${e.id} → ${e.on ? 'on' : 'off'}`;
+    if (name === 'error') return String(e.message || e.code || e);
+    if (e.id) return e.id;
+    return '';
+  };
+  for (const name of EVENTS) {
+    tb.on(name, (e) => {
+      const t = new Date().toTimeString().slice(0, 8);
+      const detail = summarize(name, e);
+      const line = `${name}${detail ? '  — ' + detail : ''}`;
+      // `recalculate` fires on every scroll and resize. Left alone it floods the log and buries the
+      // events a reader came to see, so a repeat is counted rather than repeated.
+      const last = logLines[logLines.length - 1];
+      if (last && last.line === line) { last.n += 1; }
+      else { logLines.push({ t, line, n: 1 }); }
+      if (logLines.length > 80) logLines.shift();
+      logEl.textContent = logLines.map((l) => `${l.t}  ${l.line}${l.n > 1 ? `  ×${l.n}` : ''}`).join('\n');
+      logEl.scrollTop = logEl.scrollHeight;
+    });
+  }
+
   tb.on('comment:add', (c) => {
     if (scenario !== 'conversation') return;
     setTimeout(() => { if (scenario === 'conversation') answerOn(c.id); }, 1200);
