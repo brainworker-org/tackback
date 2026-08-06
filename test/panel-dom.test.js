@@ -262,3 +262,22 @@ test('panel: an open Pane follows the transport when it changes underneath it', 
     assert.equal(save().textContent, 'Save');
   } finally { f.restore(); }
 });
+
+test('panel: Cmd/Ctrl+Enter commits, and only when the button would', () => {
+  // this binding was silently dropped during the conversation-view extraction and no test noticed,
+  // which is the whole argument for pinning it here.
+  const f = mountPanel();
+  try {
+    f.docBtn().click();
+    const ta = f.doc.querySelector('.tb-popup').querySelector('textarea');   // the fixture matches simple selectors only
+    const send = (mods) => ta.dispatchEvent({ type: 'keydown', key: 'Enter', ...mods });
+    send({ metaKey: true });
+    assert.equal(f.core.listComments().length, 0, 'an empty box commits nothing');
+    ta.value = 'typed'; ta.dispatchEvent({ type: 'input' });
+    send({ metaKey: false, ctrlKey: false });
+    assert.equal(f.core.listComments().length, 0, 'plain Enter is a newline, not a commit');
+    send({ metaKey: true });
+    assert.equal(f.core.listComments().length, 1, 'Cmd+Enter commits');
+    assert.equal(f.core.listComments()[0].body, 'typed');
+  } finally { f.restore(); }
+});

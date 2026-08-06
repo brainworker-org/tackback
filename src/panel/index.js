@@ -454,230 +454,254 @@ export function attachPanel(core, options = {}) {
     if (pendingRegionEl) { pendingRegionEl.remove(); pendingRegionEl = null; }
     doc.documentElement.classList.remove('tb-popup-open');   // region affordances (resize grip / move cursor) re-enabled
   }
+  // ---- the conversation view --------------------------------------------------------------------
+  // One thread, rendered and composed: the timeline rows, the input, the reactions, the commit
+  // button, the send/pending state machine, and the reconciliation that keeps an OPEN thread up to
+  // date. It lives here rather than inside the popup because a thread is not a popup — the document
+  // thread gets a second surface, and both host the same conversation.
+  //
+  // The host supplies only what is genuinely its own: how to close, and what to clean up after a
+  // commit. Everything a conversation knows about itself stays in here.
+  function createConversation({ anchorLabel, existing, onSave, draftKey, threadKey: initialThreadKey = null,
+                                onClose = () => {}, afterCommit = () => {} }) {
+  // the thread this Pane belongs to (thread.js). A brand-new region has none until its first
+  // comment exists — it is adopted below, on commit.
+  let threadKey = initialThreadKey;
+  const draft = (draftKey != null && drafts.get(draftKey)) || null;
+  let reactionId = draft?.reaction || '';
+  const anchorEl = el(doc, 'div', 'tb-anchor'); anchorEl.textContent = '📍 ' + anchorLabel;
+  const ta = doc.createElement('textarea'); ta.placeholder = t('popup.placeholder');
+  if (draft?.body) ta.value = draft.body;          // restore preserved input
+  const rwrap = el(doc, 'div', 'tb-reactions');
+  for (const def of reactions) {
+    const b = doc.createElement('button');
+    const { icon, label } = resolveReaction(reactions, def.id, i18n.active);
+    b.textContent = `${icon} ${label}`; b.title = label;
+    if (def.id === reactionId) b.classList.add('on');   // restore preserved reaction
+    b.onclick = () => { reactionId = reactionId === def.id ? '' : def.id; [...rwrap.children].forEach((x) => x.classList.toggle('on', x === b && !!reactionId)); updateSaveState(); };
+    rwrap.appendChild(b);
+  }
+  let commit = popupCommit(core.getTransport());   // save vs send + close vs stay-open (REQ-702/703)
+  const exwrap = el(doc, 'div', 'tb-existing');
+  // Render the thread inline as ONE flat, TIME-ORDERED timeline (REQ-704): every utterance —
+  // comment or reply — is its own row carrying its actor color + label, interleaved with the
+  // region's move/resize history (REQ-009), which is an immutable record of how the anchor was
+  // repositioned (Keisuke 2026-06-15).
+  // NOTHING in the timeline is deletable from here (Keisuke 2026-08-05, hands-on): a per-row ✕ made
+  // "delete one utterance" look like the granularity of the model, when a reply belongs to its
+  // comment and goes with it — so removing a comment silently took a whole side of the conversation
+  // away. Deletion is an ANCHOR-level act: right-click the anchor → Delete anchor. The core
+  // deleteComment API is untouched; it is simply not an affordance the Pane offers.
+  // rows re-tint live when the injected category map changes (setActorColors), so an open popup
+  // never keeps showing colors from the previous map.
+  const tinted = [];
+  const applyTint = (r) => {
+    const col = actorColorOf(r.author);
+    r.row.style.borderLeft = col ? `3px solid ${col}` : '';
+    r.row.style.paddingLeft = col ? '6px' : '';
+    if (r.who) r.who.style.color = col || 'inherit';
+  };
+  const tintRow = (row, who, author) => { const r = { row, who, author }; tinted.push(r); applyTint(r); };
+  const whoLabel = (author) => {
+    const key = tbAuthorKey(author);
+    if (!key) return null;
+    const wl = el(doc, 'span', 'tb-who'); wl.textContent = `${key}: `;
+    return wl;
+  };
+  const commentRow = (c) => {
+    const row = el(doc, 'div', 'tb-c');
+    const { icon } = c.reaction ? resolveReaction(reactions, c.reaction, i18n.active) : { icon: '' };
+    const wl = whoLabel(c.author);
+    if (wl) row.appendChild(wl);
+    row.append(doc.createTextNode(`${icon ? icon + ' ' : ''}${c.body || t('popup.emojiOnly')}`));
+    tintRow(row, wl, c.author);
+    return row;
+  };
+  const replyRow = (rep) => {
+    const row = el(doc, 'div', 'tb-c-reply');
+    const wl = whoLabel(rep.author);
+    if (wl) row.appendChild(wl);
+    row.append(doc.createTextNode(rep.body || ''));
+    tintRow(row, wl, rep.author);
+    return row;
+  };
+  const eventRow = (evt) => { const er = el(doc, 'div', 'tb-ev'); er.textContent = t('event.' + evt.type); return er; };
+  const events = (existing && existing[0] && existing[0].anchor && existing[0].anchor.events) || [];
+  // ONE flat, time-ordered timeline (REQ-704): every comment AND every reply is its own row, appended
+  // in chronological order and interleaved with the region's move/resize history — replies are NO
+  // longer nested/indented under their comment; each row stands alone, attributed by actor color+label.
+  // The rows on screen, in display order — the state a re-render reconciles against (thread.js
+  // decides WHAT goes WHERE; this only performs the DOM insertion it asks for).
+  const rows = [];              // [{ key, t, el }] in display order
+  const rowByKey = new Map();
+  const buildRow = (item) => (item.kind === 'event' ? eventRow(item.evt)
+    : item.kind === 'reply' ? replyRow(item.rep) : commentRow(item.c));
+  // REQ-702: a sent utterance is PENDING until the conversation answers it. Exactly one marker
+  // exists at a time — it belongs to the latest send — and it is settled by the only resolution
+  // signal the panel can observe on its own: another utterance landing in this thread (the
+  // integrator can still drive its own, richer resolution through the seam).
+  //
+  // Timing is the whole difficulty. `addComment` delivers `change` and `comment:add` SYNCHRONOUSLY,
+  // so an integrator that answers inside its `comment:add` handler has already replied by the time
+  // the commit call returns — before the marker is raised. Rows drawn during a commit are therefore
+  // recorded and judged once the marker exists, instead of being missed for good.
+  let sendState = null;      // null | 'pending' | 'failed'
+  let pendingNote = null;
+  let inFlight = null;       // rows drawn while a commit is in progress
+  const markSent = () => {
+    pendingNote?.remove();
+    pendingNote = el(doc, 'div', 'tb-pending-note');
+    pendingNote.textContent = lbl('popup.pending', 'sent — awaiting reply…');
+    exwrap.appendChild(pendingNote);
+    sendState = 'pending';
+  };
+  const settleSend = (signal) => {
+    if (sendState !== 'pending') return;
+    sendState = nextSendState(sendState, signal);
+    if (sendState === 'ok') { pendingNote?.remove(); pendingNote = null; sendState = null; }
+  };
+  const draw = (items) => {
+    const plan = planInsertions(rows, items);
+    const drawn = plan.map((p) => p.item);
+    if (inFlight) inFlight.push(...drawn);            // judged after the marker is raised
+    else if (answersSend(drawn)) settleSend('reply');  // an utterance — not an anchor move — answers
+    for (const { item, beforeKey } of plan) {
+      const node = buildRow(item);
+      const beforeEl = beforeKey ? rowByKey.get(beforeKey) : null;
+      if (beforeEl) exwrap.insertBefore(node, beforeEl); else exwrap.appendChild(node);
+      rowByKey.set(item.key, node);
+      const at = rows.findIndex((r) => r.t.localeCompare(item.t) > 0);
+      const rec = { key: item.key, t: item.t, el: node };
+      if (at === -1) rows.push(rec); else rows.splice(at, 0, rec);
+    }
+    return plan.length;
+  };
+  draw(timelineItems(existing, events));
+  // An OPEN thread keeps up with the conversation. Utterances arriving while the Pane is showing —
+  // an answer from another participant through the addReply seam, a comment committed elsewhere in
+  // the same thread — are drawn in place, at their chronological position. Rows already on screen
+  // are matched by key, so this is safe to run on every change; the input box, its draft and the
+  // reaction selection are never touched.
+  const sync = () => {
+    if (threadKey == null) return;   // nothing to group by yet (an uncommitted region)
+    const group = core.listComments().filter((c) => threadKeyOf(c) === threadKey);
+    if (!group.length) return;
+    const evts = (group[0].anchor && group[0].anchor.events) || [];
+    if (draw(timelineItems(group, evts))) exwrap.scrollTop = exwrap.scrollHeight;
+  };
+  // NOTE: there is still no inline reply BOX (Keisuke 2026-06-15: "Reply はちょっと Too Much") — a
+  // reply enters through the seam (core.addReply), driven by the integrator. What changed in 0.9.1
+  // is the DISPLAY: replies now render as flat, actor-labeled rows in this timeline (REQ-704), for
+  // the multi-party conversation the Interplay track drives.
+  const acts = el(doc, 'div', 'tb-acts');
+  const cancel = btn(doc, t('popup.cancel'), 'tb-cancel');
+  const save = btn(doc, commit.action === 'send' ? lbl('popup.send', 'Send') : t('popup.save'), 'tb-save');
+  // The commit button greys out (disabled) whenever the input is empty — no body text AND no reaction
+  // — and re-enables the instant either is present. A commit needs at least one, so an empty commit is
+  // never offered (pure UX; no domain meaning). Hoisted so the reaction handlers above can call it.
+  function updateSaveState() { save.disabled = !canCommit(ta.value, reactionId); }
+  ta.addEventListener('input', updateSaveState);
+  updateSaveState();   // initial: reflects any restored draft (body/reaction)
+  // Cmd/Ctrl+Enter commits — but only when the button itself would: the keyboard path obeys the same
+  // empty-commit rule, and never dismisses its host as a side effect of an empty box.
+  ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !save.disabled) save.click(); });
+  const clearDraft = () => { if (draftKey != null) drafts.delete(draftKey); };
+  // preserve unsaved input on dismiss-by-outside-click / Escape; explicit Cancel discards it.
+  const preserveDraft = () => {
+    if (draftKey == null) return;
+    if (canCommit(ta.value, reactionId)) drafts.set(draftKey, { body: ta.value, reaction: reactionId });
+    else drafts.delete(draftKey);
+  };
+  cancel.onclick = () => { clearDraft(); onClose(); };
+  save.onclick = () => {
+    const body = ta.value.trim();
+    if (!canCommit(body, reactionId)) { clearDraft(); return onClose(); }
+    // watch what gets drawn while the commit runs: `addComment` delivers its events synchronously,
+    // so an answer can arrive before this call even returns.
+    inFlight = [];
+    let created, drawnDuringCommit;
+    try { created = onSave(body, reactionId); } finally { drawnDuringCommit = inFlight; inFlight = null; }
+    clearDraft();
+    afterCommit();
+    // local/fire-and-forget → close; interactive transport → stay open as a conversation with a
+    // pending indicator until the integrator reports ack/reply (REQ-702/703). No real transport in
+    // the standalone lib, so the integrator drives the resolution via its own UI/events.
+    if (commit.closeOnCommit) return onClose();
+    // staying open: reset the WHOLE input — text, reaction, and the button state. Clearing
+    // `ta.value` fires no `input` event, so without this the button would stay enabled over an
+    // empty box and the next click would fall into the empty-commit branch above and close the
+    // conversation. The reaction must clear too, or it would ride along on the next send.
+    ta.value = ''; reactionId = '';
+    [...rwrap.children].forEach((x) => x.classList.remove('on'));
+    updateSaveState();
+    // A brand-new region's thread identity only exists once its first comment does — adopt it now,
+    // then sync. Until this point the thread had no identity to match against, so NOTHING committed
+    // during it was drawn: not the utterance itself, and not an answer an integrator sent
+    // synchronously. Syncing here catches both, into the same batch, so the settlement below judges
+    // them as if they had arrived like any other. draw() is keyed, so nothing is drawn twice.
+    if (created && threadKey == null) threadKey = threadKeyOf(created);
+    inFlight = drawnDuringCommit;
+    try { sync(); } finally { inFlight = null; }
+    markSent();
+    // …and only now judge what landed during the commit. The utterance we just committed does not
+    // answer itself; anything else said in this thread does — including a reply an integrator sent
+    // synchronously from its `comment:add` handler, which would otherwise leave the marker waiting
+    // for an answer that had already arrived.
+    if (answersSend(drawnDuringCommit, created && created.id ? `c:${created.id}` : null)) settleSend('reply');
+    exwrap.scrollTop = exwrap.scrollHeight;   // the newest rows are at the bottom of a scrolling thread
+    ta.focus();
+  };
+  acts.append(cancel, save);
+  // re-label in place when the locale or the transport changes (input is preserved — no rebuild)
+  const relabel = () => {
+    // re-derive rather than reuse what was captured at open: the transport can change under an
+    // open Pane, and then Save/Send and close-vs-stay-open must both follow it.
+    commit = popupCommit(core.getTransport());
+    ta.placeholder = t('popup.placeholder');
+    cancel.textContent = t('popup.cancel');
+    save.textContent = commit.action === 'send' ? lbl('popup.send', 'Send') : t('popup.save');
+    [...rwrap.children].forEach((b, idx) => {
+      const def = reactions[idx]; if (!def) return;
+      const { icon, label } = resolveReaction(reactions, def.id, i18n.active);
+      b.textContent = `${icon} ${label}`; b.title = label;
+    });
+    };
+
+    return {
+      nodes: [anchorEl, ta, rwrap, exwrap, acts],
+      sync, relabel, retint: () => { for (const r of tinted) applyTint(r); },
+      preserveDraft, clearDraft,
+      focus: () => ta.focus(),
+    };
+  }
+
   function openPopup({ anchorLabel, existing, onSave, draftKey, threadKey: initialThreadKey = null, ephemeralDraft }, ev) {
     closePopup();
     popup = el(doc, 'div', 'tb-popup');
     doc.documentElement.classList.add('tb-popup-open');   // lock region affordances while editing (REQ-008): no resize grip on hover, no move cursor
-    // the thread this Pane belongs to (thread.js). A brand-new region has none until its first
-    // comment exists — it is adopted below, on commit.
-    let threadKey = initialThreadKey;
-    const draft = (draftKey != null && drafts.get(draftKey)) || null;
-    let reactionId = draft?.reaction || '';
-    const anchorEl = el(doc, 'div', 'tb-anchor'); anchorEl.textContent = '📍 ' + anchorLabel;
-    const ta = doc.createElement('textarea'); ta.placeholder = t('popup.placeholder');
-    if (draft?.body) ta.value = draft.body;          // restore preserved input
-    const rwrap = el(doc, 'div', 'tb-reactions');
-    for (const def of reactions) {
-      const b = doc.createElement('button');
-      const { icon, label } = resolveReaction(reactions, def.id, i18n.active);
-      b.textContent = `${icon} ${label}`; b.title = label;
-      if (def.id === reactionId) b.classList.add('on');   // restore preserved reaction
-      b.onclick = () => { reactionId = reactionId === def.id ? '' : def.id; [...rwrap.children].forEach((x) => x.classList.toggle('on', x === b && !!reactionId)); updateSaveState(); };
-      rwrap.appendChild(b);
-    }
-    let commit = popupCommit(core.getTransport());   // save vs send + close vs stay-open (REQ-702/703)
-    const exwrap = el(doc, 'div', 'tb-existing');
-    // Render the thread inline as ONE flat, TIME-ORDERED timeline (REQ-704): every utterance —
-    // comment or reply — is its own row carrying its actor color + label, interleaved with the
-    // region's move/resize history (REQ-009), which is an immutable record of how the anchor was
-    // repositioned (Keisuke 2026-06-15).
-    // NOTHING in the timeline is deletable from here (Keisuke 2026-08-05, hands-on): a per-row ✕ made
-    // "delete one utterance" look like the granularity of the model, when a reply belongs to its
-    // comment and goes with it — so removing a comment silently took a whole side of the conversation
-    // away. Deletion is an ANCHOR-level act: right-click the anchor → Delete anchor. The core
-    // deleteComment API is untouched; it is simply not an affordance the Pane offers.
-    // rows re-tint live when the injected category map changes (setActorColors), so an open popup
-    // never keeps showing colors from the previous map.
-    const tinted = [];
-    const applyTint = (r) => {
-      const col = actorColorOf(r.author);
-      r.row.style.borderLeft = col ? `3px solid ${col}` : '';
-      r.row.style.paddingLeft = col ? '6px' : '';
-      if (r.who) r.who.style.color = col || 'inherit';
-    };
-    const tintRow = (row, who, author) => { const r = { row, who, author }; tinted.push(r); applyTint(r); };
-    const whoLabel = (author) => {
-      const key = tbAuthorKey(author);
-      if (!key) return null;
-      const wl = el(doc, 'span', 'tb-who'); wl.textContent = `${key}: `;
-      return wl;
-    };
-    const commentRow = (c) => {
-      const row = el(doc, 'div', 'tb-c');
-      const { icon } = c.reaction ? resolveReaction(reactions, c.reaction, i18n.active) : { icon: '' };
-      const wl = whoLabel(c.author);
-      if (wl) row.appendChild(wl);
-      row.append(doc.createTextNode(`${icon ? icon + ' ' : ''}${c.body || t('popup.emojiOnly')}`));
-      tintRow(row, wl, c.author);
-      return row;
-    };
-    const replyRow = (rep) => {
-      const row = el(doc, 'div', 'tb-c-reply');
-      const wl = whoLabel(rep.author);
-      if (wl) row.appendChild(wl);
-      row.append(doc.createTextNode(rep.body || ''));
-      tintRow(row, wl, rep.author);
-      return row;
-    };
-    const eventRow = (evt) => { const er = el(doc, 'div', 'tb-ev'); er.textContent = t('event.' + evt.type); return er; };
-    const events = (existing && existing[0] && existing[0].anchor && existing[0].anchor.events) || [];
-    // ONE flat, time-ordered timeline (REQ-704): every comment AND every reply is its own row, appended
-    // in chronological order and interleaved with the region's move/resize history — replies are NO
-    // longer nested/indented under their comment; each row stands alone, attributed by actor color+label.
-    // The rows on screen, in display order — the state a re-render reconciles against (thread.js
-    // decides WHAT goes WHERE; this only performs the DOM insertion it asks for).
-    const rows = [];              // [{ key, t, el }] in display order
-    const rowByKey = new Map();
-    const buildRow = (item) => (item.kind === 'event' ? eventRow(item.evt)
-      : item.kind === 'reply' ? replyRow(item.rep) : commentRow(item.c));
-    // REQ-702: a sent utterance is PENDING until the conversation answers it. Exactly one marker
-    // exists at a time — it belongs to the latest send — and it is settled by the only resolution
-    // signal the panel can observe on its own: another utterance landing in this thread (the
-    // integrator can still drive its own, richer resolution through the seam).
-    //
-    // Timing is the whole difficulty. `addComment` delivers `change` and `comment:add` SYNCHRONOUSLY,
-    // so an integrator that answers inside its `comment:add` handler has already replied by the time
-    // the commit call returns — before the marker is raised. Rows drawn during a commit are therefore
-    // recorded and judged once the marker exists, instead of being missed for good.
-    let sendState = null;      // null | 'pending' | 'failed'
-    let pendingNote = null;
-    let inFlight = null;       // rows drawn while a commit is in progress
-    const markSent = () => {
-      pendingNote?.remove();
-      pendingNote = el(doc, 'div', 'tb-pending-note');
-      pendingNote.textContent = lbl('popup.pending', 'sent — awaiting reply…');
-      exwrap.appendChild(pendingNote);
-      sendState = 'pending';
-    };
-    const settleSend = (signal) => {
-      if (sendState !== 'pending') return;
-      sendState = nextSendState(sendState, signal);
-      if (sendState === 'ok') { pendingNote?.remove(); pendingNote = null; sendState = null; }
-    };
-    const draw = (items) => {
-      const plan = planInsertions(rows, items);
-      const drawn = plan.map((p) => p.item);
-      if (inFlight) inFlight.push(...drawn);            // judged after the marker is raised
-      else if (answersSend(drawn)) settleSend('reply');  // an utterance — not an anchor move — answers
-      for (const { item, beforeKey } of plan) {
-        const node = buildRow(item);
-        const beforeEl = beforeKey ? rowByKey.get(beforeKey) : null;
-        if (beforeEl) exwrap.insertBefore(node, beforeEl); else exwrap.appendChild(node);
-        rowByKey.set(item.key, node);
-        const at = rows.findIndex((r) => r.t.localeCompare(item.t) > 0);
-        const rec = { key: item.key, t: item.t, el: node };
-        if (at === -1) rows.push(rec); else rows.splice(at, 0, rec);
-      }
-      return plan.length;
-    };
-    draw(timelineItems(existing, events));
-    // An OPEN thread keeps up with the conversation. Utterances arriving while the Pane is showing —
-    // an answer from another participant through the addReply seam, a comment committed elsewhere in
-    // the same thread — are drawn in place, at their chronological position. Rows already on screen
-    // are matched by key, so this is safe to run on every change; the input box, its draft and the
-    // reaction selection are never touched.
-    popupSync = () => {
-      if (threadKey == null) return;   // nothing to group by yet (an uncommitted region)
-      const group = core.listComments().filter((c) => threadKeyOf(c) === threadKey);
-      if (!group.length) return;
-      const evts = (group[0].anchor && group[0].anchor.events) || [];
-      if (draw(timelineItems(group, evts))) exwrap.scrollTop = exwrap.scrollHeight;
-    };
-    // NOTE: there is still no inline reply BOX (Keisuke 2026-06-15: "Reply はちょっと Too Much") — a
-    // reply enters through the seam (core.addReply), driven by the integrator. What changed in 0.9.1
-    // is the DISPLAY: replies now render as flat, actor-labeled rows in this timeline (REQ-704), for
-    // the multi-party conversation the Interplay track drives.
-    const acts = el(doc, 'div', 'tb-acts');
-    const cancel = btn(doc, t('popup.cancel'), 'tb-cancel');
-    const save = btn(doc, commit.action === 'send' ? lbl('popup.send', 'Send') : t('popup.save'), 'tb-save');
-    // The commit button greys out (disabled) whenever the input is empty — no body text AND no reaction
-    // — and re-enables the instant either is present. A commit needs at least one, so an empty commit is
-    // never offered (pure UX; no domain meaning). Hoisted so the reaction handlers above can call it.
-    function updateSaveState() { save.disabled = !canCommit(ta.value, reactionId); }
-    ta.addEventListener('input', updateSaveState);
-    updateSaveState();   // initial: reflects any restored draft (body/reaction)
-    const clearDraft = () => { if (draftKey != null) drafts.delete(draftKey); };
-    // preserve unsaved input on dismiss-by-outside-click / Escape; explicit Cancel discards it.
-    const preserveDraft = () => {
-      if (draftKey == null) return;
-      if (canCommit(ta.value, reactionId)) drafts.set(draftKey, { body: ta.value, reaction: reactionId });
-      else drafts.delete(draftKey);
-    };
-    cancel.onclick = () => { clearDraft(); closePopup(); };   // closePopup removes the pending region too
-    save.onclick = () => {
-      const body = ta.value.trim();
-      if (!canCommit(body, reactionId)) { clearDraft(); return closePopup(); }
-      // watch what gets drawn while the commit runs: `addComment` delivers its events synchronously,
-      // so an answer can arrive before this call even returns.
-      inFlight = [];
-      let created, drawnDuringCommit;
-      try { created = onSave(body, reactionId); } finally { drawnDuringCommit = inFlight; inFlight = null; }
-      clearDraft();
-      // the saved region is now a committed overlay (rendered via `change`); drop the pending draft rect.
-      if (pendingRegionEl) { pendingRegionEl.remove(); pendingRegionEl = null; }
-      // local/fire-and-forget → close; interactive transport → stay open as a conversation with a
-      // pending indicator until the integrator reports ack/reply (REQ-702/703). No real transport in
-      // the standalone lib, so the integrator drives the resolution via its own UI/events.
-      if (commit.closeOnCommit) return closePopup();
-      // staying open: reset the WHOLE input — text, reaction, and the button state. Clearing
-      // `ta.value` fires no `input` event, so without this the button would stay enabled over an
-      // empty box and the next click would fall into the empty-commit branch above and close the
-      // conversation. The reaction must clear too, or it would ride along on the next send.
-      ta.value = ''; reactionId = '';
-      [...rwrap.children].forEach((x) => x.classList.remove('on'));
-      updateSaveState();
-      // A brand-new region's thread identity only exists once its first comment does — adopt it now,
-      // then sync. Until this point the thread had no identity to match against, so NOTHING committed
-      // during it was drawn: not the utterance itself, and not an answer an integrator sent
-      // synchronously. Syncing here catches both, into the same batch, so the settlement below judges
-      // them as if they had arrived like any other. draw() is keyed, so nothing is drawn twice.
-      if (created && threadKey == null) threadKey = threadKeyOf(created);
-      inFlight = drawnDuringCommit;
-      try { popupSync(); } finally { inFlight = null; }
-      markSent();
-      // …and only now judge what landed during the commit. The utterance we just committed does not
-      // answer itself; anything else said in this thread does — including a reply an integrator sent
-      // synchronously from its `comment:add` handler, which would otherwise leave the marker waiting
-      // for an answer that had already arrived.
-      if (answersSend(drawnDuringCommit, created && created.id ? `c:${created.id}` : null)) settleSend('reply');
-      exwrap.scrollTop = exwrap.scrollHeight;   // the newest rows are at the bottom of a scrolling thread
-      ta.focus();
-    };
-    acts.append(cancel, save);
-    popup.append(anchorEl, ta, rwrap, exwrap, acts);
+    const conv = createConversation({
+      anchorLabel, existing, onSave, draftKey, threadKey: initialThreadKey,
+      onClose: closePopup,
+      // the saved region is now a committed overlay (rendered via `change`); drop the pending draft rect
+      afterCommit: () => { if (pendingRegionEl) { pendingRegionEl.remove(); pendingRegionEl = null; } },
+    });
+    popupSync = conv.sync; popupRelabel = conv.relabel; popupRetint = conv.retint;
+    popup.append(...conv.nodes);
     doc.body.appendChild(popup);
     const vw = globalThis.innerWidth || 1024, vh = globalThis.innerHeight || 768;
     const pos = clampToViewport(ev?.clientX ?? 120, ev?.clientY ?? 120, popup.offsetWidth, popup.offsetHeight, vw, vh);
     Object.assign(popup.style, { left: pos.x + 'px', top: pos.y + 'px' });
-    ta.focus();
-    // Cmd/Ctrl+Enter commits — but only when the button itself would: the keyboard path must obey the
-    // same empty-commit rule, never dismiss the popup as a side effect of an empty box.
-    ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !save.disabled) save.click(); });
+    conv.focus();
     // dismiss on click outside the popup or Escape. Block/range keep the unsaved draft (restorable on
     // reopen); a PENDING region is ephemeral — its rect is removed on close (REQ-012) and would never
     // recur, so its draft is DISCARDED too, per REQ-703 (Keisuke: a dismissed uncommitted region keeps
     // nothing). §6 PR #132 gpt-5.5 finding.
-    const dismissPreserve = () => { if (ephemeralDraft) clearDraft(); else preserveDraft(); closePopup(); };
+    const dismissPreserve = () => { if (ephemeralDraft) conv.clearDraft(); else conv.preserveDraft(); closePopup(); };
     const onDocDown = (e) => { if (popup && !e.target.closest('.tb-popup')) dismissPreserve(); };
     const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); dismissPreserve(); } };
     const register = () => { doc.addEventListener('mousedown', onDocDown, true); doc.addEventListener('keydown', onKey, true); };
     (globalThis.setTimeout || ((f) => f()))(register, 0);   // defer so the opening event doesn't self-dismiss
     popupCleanup = () => { doc.removeEventListener('mousedown', onDocDown, true); doc.removeEventListener('keydown', onKey, true); };
-    popupRetint = () => { for (const r of tinted) applyTint(r); };
-    // re-label the popup in place when the locale changes (input is preserved — no rebuild)
-    popupRelabel = () => {
-      // re-derive rather than reuse what was captured at open: the transport can change under an
-      // open Pane, and then Save/Send and close-vs-stay-open must both follow it.
-      commit = popupCommit(core.getTransport());
-      ta.placeholder = t('popup.placeholder');
-      cancel.textContent = t('popup.cancel');
-      save.textContent = commit.action === 'send' ? lbl('popup.send', 'Send') : t('popup.save');
-      [...rwrap.children].forEach((b, idx) => {
-        const def = reactions[idx]; if (!def) return;
-        const { icon, label } = resolveReaction(reactions, def.id, i18n.active);
-        b.textContent = `${icon} ${label}`; b.title = label;
-      });
-    };
   }
   function openThread(comments, ev) {
     const a = comments[0].anchor;
