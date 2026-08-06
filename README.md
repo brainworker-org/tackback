@@ -76,10 +76,14 @@ attachPanel(tb, {
   re-points. Painted via the CSS Custom Highlight API (no DOM mutation).
 - **document** — the document *as a whole*, rather than any place inside it. It has no coordinates and
   no badge, because there is nowhere on the page that means "all of this". It lives in a **lane**: a bar
-  across the bottom of the viewport you can type straight into, or expand to read the thread
-  (`controls: { docLane }`, on by default; `panel.toggleDocumentLane()`). The lane floats — it never
-  shifts the host's layout — and is centred with a max-width so page corners stay free. With the lane
-  off, `panel.openDocumentThread()` opens the same thread as an ordinary Pane. One per instance.
+  across the bottom of the viewport with a composer you can type into without opening anything, which
+  expands to show the thread (`controls: { docLane }`, on by default; `panel.toggleDocumentLane()`).
+  The lane floats — it never shifts the host's layout. It sits beside the panel when there is room to
+  do so and still be worth typing into, and takes the full width above it when there is not; that is
+  decided by measuring, not by a breakpoint. A host with its own bottom chrome tells the lane where it
+  may sit with `--tb-lane-left` / `--tb-lane-right`, and can watch for the `tb-lane-stacked` class on
+  the root element to move out of the way. With the lane off, `panel.openDocumentThread()` opens the
+  same thread as an ordinary Pane. One per instance.
 - **region** — a rectangle over any non-text surface (an image/diagram in a `<figure>`, a marked
   `[data-tb-surface]` element, or a PDF page), stored as a normalized rect, so it is
   **zoom-independent** (overlay = normalized × current surface size). The surface set is configurable

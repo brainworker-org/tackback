@@ -10,12 +10,21 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
 
 ### Added
 - **The document lane** — the conversation about the document as a whole now lives in a bar across the
-  bottom of the viewport (`controls: { docLane }`, on by default) that you can type straight into, or
-  expand to read the thread. It is about no particular place, so it has no mark to hang on; the lane
-  doubles as its mark, carrying the utterance count and the attention tint on its head. It **floats** —
-  the library still never shifts the host's layout — and is centred with a max-width so the page's
-  corners stay free. `env(safe-area-inset-bottom)` and the visual viewport keep it clear of a home
-  indicator and above a software keyboard.
+  bottom of the viewport (`controls: { docLane }`, on by default). Its composer is there whether or not
+  the thread is expanded, so you can say something without opening anything; expanding adds the history
+  above it. It is about no particular place, so it has no mark to hang on: the lane doubles as its mark,
+  carrying the utterance count and the attention tint on its head, which is a real button and announces
+  whether it is expanded. It **floats** — the library still never shifts the host's layout — sitting
+  beside the panel when that leaves a lane worth typing into and taking the full width above it when it
+  does not, decided by measuring rather than by a breakpoint. A host with its own bottom chrome declares
+  it with `--tb-lane-left` / `--tb-lane-right` and can watch for `tb-lane-stacked` on the root element.
+  `env(safe-area-inset-bottom)` and the visual viewport keep it clear of a home indicator and above a
+  software keyboard.
+- Because a host that never dies has no death to hide behind, three things the popup relied on are now
+  explicit: committing **always** resets the composer and dismissal is the host's own decision;
+  reconciliation **removes** rows for utterances that left the thread, not only adds new ones; and every
+  conversation on screen — not just an open popup — follows a transport change, a locale change and a
+  new participant colour map.
 - **`panel.toggleDocumentLane(force?)`** — expand or collapse it; returns the resulting state.
 - **`transport:change`** — `setTransport` now announces a real change of descriptor. A UI that decides
   "Save or Send" when it opens went stale the moment the descriptor moved; an open Pane re-derives, so

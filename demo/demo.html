@@ -64,14 +64,22 @@
   .pdf-tools button { font: inherit; cursor: pointer; padding: .2rem .55rem; border: 1px solid var(--tb-border, #bbb);
     background: transparent; color: inherit; border-radius: 6px; }
   /* the "Try it" bar — these are DEMO-page controls, separate from the Tackback panel itself */
-  .trybar { position: fixed; left: 16px; bottom: 16px; z-index: 9997;   /* under the document lane */ display: flex; flex-wrap: wrap;
+  /* This page owns the bottom-left, so it tells the lane to keep clear of it (--tb-lane-left).
+     Stacking order is then irrelevant: neither covers the other. */
+  :root { --tb-lane-left: 460px; }
+  .trybar { position: fixed; left: 16px; bottom: 16px; z-index: 9998; display: flex; flex-wrap: wrap;
     gap: 6px; align-items: center; background: var(--tb-popup-bg, #fff); color: var(--tb-popup-fg, #111);
     border: 1px solid var(--tb-border, #ccc); border-radius: 10px; padding: 8px 10px;
-    box-shadow: 0 4px 16px rgba(0,0,0,.18); font: 12px system-ui; max-width: min(46vw, 420px); }
+    box-shadow: 0 4px 16px rgba(0,0,0,.18); font: 12px system-ui; width: 420px; box-sizing: border-box; }
   .trybar b { font-size: 11px; opacity: .7; margin-right: 2px; }
   .trybar button { font: inherit; cursor: pointer; border: 1px solid var(--tb-border, #bbb);
     background: transparent; color: inherit; border-radius: 6px; padding: 4px 8px; }
   .trybar button.on { background: var(--tb-accent, #33a877); color: #fff; border-color: transparent; }
+  /* The library sets `tb-lane-stacked` on the root when the lane could not fit beside the panel and
+     had to take the full width. This page owns the bottom-left, so that is its cue to get out of the
+     way — a fixed breakpoint of our own would disagree with the lane's measurement. */
+  :root.tb-lane-stacked { --tb-lane-left: 16px; }
+  :root.tb-lane-stacked .trybar { bottom: auto; top: 16px; max-width: calc(100vw - 32px); width: auto; }
 </style>
 </head>
 <body>

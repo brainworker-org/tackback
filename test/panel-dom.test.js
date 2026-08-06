@@ -38,7 +38,8 @@ function fakeElement(doc, tag) {
   const classes = new Set();
   let text = '';
   const el = {
-    tagName: tag.toUpperCase(), ownerDocument: doc, children, style: {}, parentNode: null,
+    tagName: tag.toUpperCase(), ownerDocument: doc, children, parentNode: null,
+    style: (() => { const st = {}; st.setProperty = (k, v) => { st[k] = v; }; st.getPropertyValue = (k) => st[k] ?? ''; return st; })(),
     listeners: {},
     classList: {
       add: (...c) => c.forEach((x) => classes.add(x)),
@@ -130,8 +131,9 @@ globalThis.getComputedStyle = () => ({ position: 'relative' });
 /** Mount a core + panel on a fresh fake document. Returns everything a test needs to drive it. */
 function mountPanel({ comments = [], controls } = {}) {
   const doc = fakeDoc();
-  const root = fakeElement(doc, 'div');
-  doc.body.appendChild(root);
+  // mount on the body, as a page with no explicit root does — that is what puts the lane INSIDE the
+  // gesture root, which is the only geometry in which the lane's gesture guard can be exercised.
+  const root = doc.body;
   // a storage adapter that seeds the store WITHOUT validation — the path a persisted comment takes
   const storage = { load: () => ({ comments }), save: () => {} };
   const core = Tackback.mount({ document: { id: 'panel-fixture' }, storage, root });
@@ -215,16 +217,35 @@ test('panel: the lane wears the attention tint, and drops it when cleared', () =
   } finally { f.restore(); }
 });
 
-test('panel: a right-press on the lane starts no gesture', () => {
-  // a bar fixed across the bottom of the viewport sits over the content root, so without an explicit
-  // guard a right-drag beginning on it would draw a region anchored to nothing anyone pointed at.
+test('panel: a right-DRAG beginning on the lane starts no gesture', () => {
+  // A bar fixed across the bottom sits over the content root, so without a guard a right-drag
+  // beginning on it draws a region anchored to nothing anyone pointed at. The drag must be complete:
+  // a lone pointerdown draws nothing regardless, so asserting on it proves nothing about the guard.
   const f = mountPanel();
   try {
-    let started = 0;
-    f.doc.listeners.pointerdown = (f.doc.listeners.pointerdown || []);
-    f.laneHead().dispatchEvent({ type: 'pointerdown', button: 2, buttons: 2, clientX: 10, clientY: 10 });
-    f.doc.querySelectorAll('.tb-draw,.tb-pending').forEach(() => { started += 1; });
-    assert.equal(started, 0, 'no draft rectangle was begun on Tackback\'s own chrome');
+    const fire = (type, over, x, y, buttons) =>
+      over.dispatchEvent({ type, button: 2, buttons, clientX: x, clientY: y, pointerId: 1 });
+    fire('pointerdown', f.laneHead(), 10, 10, 2);
+    fire('pointermove', f.doc.body, 90, 70, 2);     // well past the drag threshold
+    fire('pointerup', f.doc.body, 90, 70, 0);
+    assert.equal(f.doc.querySelectorAll('.tb-draw').length, 0, 'no draft rectangle');
+    assert.equal(f.doc.querySelector('.tb-popup'), null, 'and no popup was opened either');
+    assert.equal(f.core.listComments().length, 0, 'and nothing was committed');
+  } finally { f.restore(); }
+});
+
+test('panel: the same drag beginning on the CONTENT does start one', () => {
+  // the counterpart, so the test above is known to be measuring the guard rather than a fixture
+  // that could never have produced a draft in the first place.
+  const f = mountPanel();
+  try {
+    const p = f.doc.createElement('p'); p.id = 'para'; p.textContent = 'content';
+    f.root.appendChild(p);
+    const fire = (type, over, x, y, buttons) =>
+      over.dispatchEvent({ type, button: 2, buttons, clientX: x, clientY: y, pointerId: 2 });
+    fire('pointerdown', p, 10, 10, 2);
+    fire('pointermove', p, 90, 70, 2);
+    assert.equal(f.doc.querySelectorAll('.tb-draw').length, 1, 'a drag over content does draw one');
   } finally { f.restore(); }
 });
 
@@ -341,5 +362,81 @@ test('panel: Cmd/Ctrl+Enter commits, and only when the button would', () => {
     send({ metaKey: true });
     assert.equal(f.core.listComments().length, 1, 'Cmd+Enter commits');
     assert.equal(f.core.listComments()[0].body, 'typed');
+  } finally { f.restore(); }
+});
+
+// --- what a host that never dies needs, and the popup never did ---------------------------------
+
+test('lane: a local Save clears the composer instead of leaving it loaded', () => {
+  // the popup got away with skipping the reset because it was about to be destroyed. A host that
+  // stays kept the committed text in an enabled box, ready to be sent a second time.
+  const f = mountPanel();
+  try {
+    const ta = f.lane().querySelector('textarea');
+    const save = f.lane().querySelector('.tb-save');
+    ta.value = 'said once'; ta.dispatchEvent({ type: 'input' });
+    save.click();
+    assert.equal(f.core.listComments().length, 1);
+    assert.equal(ta.value, '', 'the composer is empty again');
+    assert.equal(save.disabled, true, 'and cannot re-send what was already sent');
+    save.click();
+    assert.equal(f.core.listComments().length, 1, 'so a second click commits nothing');
+  } finally { f.restore(); }
+});
+
+test('lane: a deleted comment loses its row, not just its place in the count', () => {
+  // reconciliation was insertion-only. The popup survived that because every destructive path
+  // closes it first; a persistent host would have shown the comment forever.
+  const f = mountPanel();
+  try {
+    const c = f.core.addComment({ anchor: { type: 'document' }, body: 'to be removed' });
+    f.laneHead().click();
+    assert.equal(f.lane().querySelectorAll('.tb-c').length, 1);
+    f.core.deleteComment(c.id);
+    assert.equal(f.lane().querySelectorAll('.tb-c').length, 0, 'the row goes with the comment');
+    assert.equal(f.laneCount(), '', 'and so does the count');
+  } finally { f.restore(); }
+});
+
+test('lane: it follows a transport change, like any other conversation on screen', () => {
+  // the panel used to fan out to a single slot that only an open popup ever filled, so a second
+  // host silently kept whatever policy it was built with.
+  const f = mountPanel();
+  try {
+    const save = () => f.lane().querySelector('.tb-save');
+    assert.equal(save().textContent, 'Save');
+    f.core.setTransport({ interactive: true });
+    assert.equal(save().textContent, 'Send', 'the lane relabels too, not just a popup');
+    f.core.setTransport(null);
+    assert.equal(save().textContent, 'Save');
+  } finally { f.restore(); }
+});
+
+test('lane: it re-tints when the participant colour map changes', () => {
+  const f = mountPanel();
+  try {
+    f.core.addComment({ anchor: { type: 'document' }, body: 'x', author: { id: 'a', kind: 'ai' } });
+    f.laneHead().click();
+    const row = () => f.lane().querySelector('.tb-c');
+    f.panel.setActorColors({ ai: '#123456' });
+    assert.match(row().style.borderLeft, /#123456/, 'existing rows follow the new map');
+    f.panel.setActorColors({ ai: '#654321' });
+    assert.match(row().style.borderLeft, /#654321/);
+  } finally { f.restore(); }
+});
+
+test('lane: its entry point is a real button, and announces whether it is expanded', () => {
+  // the control it replaced was a <button>; focusability, Enter/Space and the announced state come
+  // with the element rather than having to be rebuilt on a div.
+  const f = mountPanel();
+  try {
+    const head = f.laneHead();
+    assert.equal(head.tagName, 'BUTTON');
+    assert.equal(head.getAttribute('type'), 'button');
+    assert.equal(head.getAttribute('aria-expanded'), 'false');
+    head.click();
+    assert.equal(head.getAttribute('aria-expanded'), 'true');
+    head.click();
+    assert.equal(head.getAttribute('aria-expanded'), 'false');
   } finally { f.restore(); }
 });

@@ -71,16 +71,29 @@ const PANEL_CSS = `
    corner keep their space. Its z-index sits below the popup so an anchored thread still wins.
    env(safe-area-inset-bottom) and the visualViewport listener keep it off the home indicator and
    above a software keyboard; both are cheap now and awkward to retrofit. */
-.tb-lane { position: fixed; left: 50%; transform: translateX(-50%); z-index: 9998;
+/* Geometry, since this bar is now permanent chrome rather than something you summon. The panel
+   lives in the bottom-right corner; a centred bar wide enough to type into overlaps it on any
+   ordinary laptop width, and z-index only decides which one is unreachable. So the lane reserves
+   the corners instead of competing for them: it is centred within the space that remains, and on
+   narrow viewports it moves ABOVE the panel rather than under it.
+   Tackback can only reserve space for chrome it knows about — its own panel. A host with chrome of
+   its own at the bottom sets --tb-lane-left / --tb-lane-right to tell the lane where it may sit. */
+.tb-lane { position: fixed; z-index: 9998;
+  left: var(--tb-lane-left, 16px); right: var(--tb-lane-right, 232px);   /* measured from the panel — see placeLane */
   bottom: calc(16px + env(safe-area-inset-bottom, 0px));
-  width: min(680px, calc(100vw - 32px)); box-sizing: border-box;
+  margin-inline: auto; max-width: 680px;
+  box-sizing: border-box;
   background: var(--tb-popup-bg); color: var(--tb-popup-fg);
   border: 1px solid var(--tb-border); border-radius: 14px; box-shadow: 0 6px 24px rgba(0,0,0,.18);
   font: 13px -apple-system, system-ui, sans-serif; padding: 8px 10px; }
-.tb-lane .tb-lane-head { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.tb-lane .tb-lane-head { display: flex; align-items: center; gap: 8px; cursor: pointer; width: 100%;
+  font: inherit; color: inherit; background: none; border: 0; padding: 0; text-align: left; }
 .tb-lane .tb-lane-title { font-weight: 600; flex: 1; }
 .tb-lane .tb-lane-count { font-size: 11px; opacity: .75; }
 .tb-lane.tb-attn .tb-lane-count { background: var(--tb-attention); color: #fff; border-radius: 9px; padding: 0 7px; opacity: 1; }
+.tb-lane .tb-lane-composer { margin-top: 8px; }
+/* Collapsed is not "closed": the composer stays, because the point of a lane rather than a button
+   is that you can type into it without opening anything. Expanding adds the history above it. */
 .tb-lane .tb-lane-body { display: none; margin-top: 8px; }
 .tb-lane.tb-open .tb-lane-body { display: block; }
 /* the lane hosts the same conversation the Pane does, so its rows reuse the popup's own styles */
@@ -88,6 +101,11 @@ const PANEL_CSS = `
 .tb-lane textarea { width: 100%; box-sizing: border-box; min-height: 44px; font: inherit;
   border: 1px solid var(--tb-border); border-radius: 8px; padding: 7px; background: transparent; color: inherit; }
 .tb-lane .tb-anchor { display: none; }   /* the lane's own title already says what it is about */
+/* When there is not enough width to sit BESIDE the panel, the lane goes above it and takes the full
+   width. Which of the two applies is decided by measurement in placeLane, not by a guessed
+   breakpoint — the panel's width follows its labels, so no fixed number is right for long. A host
+   with its own bottom chrome can watch for the tb-lane-stacked class on the root element. */
+.tb-lane.tb-stacked { left: 16px; right: 16px; }
 .tb-popup { position: fixed; z-index: 10000; width: 320px; background: var(--tb-popup-bg); color: var(--tb-popup-fg);
   border: 1px solid var(--tb-border); border-radius: 10px; box-shadow: 0 8px 28px rgba(0,0,0,.35); padding: 11px; font: 13px -apple-system, system-ui, sans-serif; }
 .tb-popup .tb-anchor { font-size: 11px; color: var(--tb-muted); margin-bottom: 4px; }
@@ -285,37 +303,47 @@ export function attachPanel(core, options = {}) {
   // Every other thread is reached from a mark on the thing it is about. This one is about the whole
   // document, so it has no such thing — it gets a bar of its own across the bottom, which doubles as
   // its mark: the count and the attention tint live on the head, visible without opening anything.
-  let lane = null, laneHead = null, laneTitle = null, laneCount = null, laneBody = null, laneConv = null;
+  let lane = null, laneHead = null, laneTitle = null, laneCount = null, laneBody = null, laneComposer = null, laneConv = null;
   if (controls.docLane) {
     lane = el(doc, 'div', 'tb-lane');
-    laneHead = el(doc, 'div', 'tb-lane-head');
+    // a real <button>: the thing it replaced was one, and focusability, Enter/Space and the
+    // announced expanded state come with the element rather than having to be re-created on a div.
+    laneHead = el(doc, 'button', 'tb-lane-head');
+    laneHead.setAttribute('type', 'button');
+    laneHead.setAttribute('aria-expanded', 'false');
     laneTitle = el(doc, 'span', 'tb-lane-title'); laneTitle.textContent = t('panel.docLane');
     laneCount = el(doc, 'span', 'tb-lane-count');
     laneHead.append(laneTitle, laneCount);
-    laneBody = el(doc, 'div', 'tb-lane-body');
+    laneBody = el(doc, 'div', 'tb-lane-body');           // the thread, revealed on expand
+    laneComposer = el(doc, 'div', 'tb-lane-composer');   // …and the input, which never hides
     laneHead.onclick = () => toggleLane();
-    lane.append(laneHead, laneBody);
+    lane.append(laneHead, laneBody, laneComposer);
     target.appendChild(lane);
   }
-  // The lane's conversation is built on first open, not on attach: building it eagerly would focus
-  // nothing but would still bind listeners for a thread the reader may never look at.
+  // The conversation is built with the lane, not on first expand: its composer is visible from the
+  // start, so it must exist from the start. The timeline it also owns simply stays hidden until
+  // asked for.
+  function buildLaneConversation() {
+    laneConv = createConversation({
+      anchorLabel: anchorLabelOf({ type: 'document' }),
+      // built before the first render, so it starts empty and is filled by the sync that every
+      // renderMarks performs — the same path that keeps it current afterwards
+      existing: [],
+      draftKey: anchorKey({ type: 'document' }),
+      threadKey: 'document',
+      // the lane is not a popup: committing never dismisses it, so "close" is a no-op here
+      onClose: () => {},
+      onSave: (body, reaction) => core.addComment({ anchor: { type: 'document' }, body, reaction }),
+    });
+    laneBody.appendChild(laneConv.timeline);
+    laneComposer.append(...laneConv.composer);
+  }
   function laneOpen() { return !!lane && lane.classList.contains('tb-open'); }
   function toggleLane(force) {
     if (!lane) return false;
     const open = force === undefined ? !laneOpen() : !!force;
-    if (open && !laneConv) {
-      laneConv = createConversation({
-        anchorLabel: anchorLabelOf({ type: 'document' }),
-        existing: docComments,
-        draftKey: anchorKey({ type: 'document' }),
-        threadKey: 'document',
-        // the lane is not a popup: committing never dismisses it, so "close" is a no-op here
-        onClose: () => {},
-        onSave: (body, reaction) => core.addComment({ anchor: { type: 'document' }, body, reaction }),
-      });
-      laneBody.append(...laneConv.nodes);
-    }
     lane.classList.toggle('tb-open', open);
+    laneHead.setAttribute('aria-expanded', open ? 'true' : 'false');
     if (open) { laneConv.sync(); laneConv.focus(); }
     return open;
   }
@@ -494,9 +522,13 @@ export function attachPanel(core, options = {}) {
   // ---- popup -----------------------------------------------------------------------------------
   let popup = null;
   let popupCleanup = null;
-  let popupRelabel = null;    // re-labels the open popup in place when the locale changes (preserves input)
-  let popupRetint = null;     // re-tints the open popup's rows when the actor color map changes
-  let popupSync = null;       // appends utterances that arrive while the thread is open
+  let popupConv = null;    // the conversation the open Pane hosts, if any
+  // Every conversation currently on screen. It used to be three singleton slots, which encoded
+  // "at most one, and it dies" — so adding a second, persistent host meant hand-editing every
+  // broadcast site, and two of the four were missed. A registry makes the next host correct by
+  // construction: hosts register, broadcasts iterate.
+  const conversations = new Set();
+  const broadcast = (fn) => { for (const c of [...conversations]) fn(c); };
   const drafts = new Map();   // anchor key -> { body, reaction } — unsaved input preserved across dismiss
   function anchorKey(a) {
     if (!a) return null;
@@ -509,7 +541,7 @@ export function attachPanel(core, options = {}) {
   // The pending region's lifetime IS the popup's: closing the popup (outside-click, Escape, Cancel,
   // empty save) removes the dashed rect, so no orphaned region ever lingers (Keisuke 2026-06-15).
   function closePopup() {
-    popupCleanup?.(); popupCleanup = null; popupRelabel = null; popupRetint = null; popupSync = null; popup?.remove(); popup = null;
+    popupCleanup?.(); popupCleanup = null; popupConv?.dispose(); popupConv = null; popup?.remove(); popup = null;
     if (pendingRegionEl) { pendingRegionEl.remove(); pendingRegionEl = null; }
     doc.documentElement.classList.remove('tb-popup-open');   // region affordances (resize grip / move cursor) re-enabled
   }
@@ -619,7 +651,20 @@ export function attachPanel(core, options = {}) {
     sendState = nextSendState(sendState, signal);
     if (sendState === 'ok') { pendingNote?.remove(); pendingNote = null; sendState = null; }
   };
+  // Rows for utterances that are no longer in the thread have to GO. Reconciliation was
+  // insertion-only, which the popup survived because both destructive paths close it first; a
+  // host that persists would have shown a deleted comment forever.
+  const prune = (items) => {
+    const live = new Set(items.map((i) => i.key));
+    for (let i = rows.length - 1; i >= 0; i--) {
+      if (live.has(rows[i].key)) continue;
+      rows[i].el.remove();
+      rowByKey.delete(rows[i].key);
+      rows.splice(i, 1);
+    }
+  };
   const draw = (items) => {
+    prune(items);
     const plan = planInsertions(rows, items);
     const drawn = plan.map((p) => p.item);
     if (inFlight) inFlight.push(...drawn);            // judged after the marker is raised
@@ -644,8 +689,8 @@ export function attachPanel(core, options = {}) {
   const sync = () => {
     if (threadKey == null) return;   // nothing to group by yet (an uncommitted region)
     const group = core.listComments().filter((c) => threadKeyOf(c) === threadKey);
-    if (!group.length) return;
-    const evts = (group[0].anchor && group[0].anchor.events) || [];
+    const evts = (group[0] && group[0].anchor && group[0].anchor.events) || [];
+    // an emptied thread means "remove everything", not "there is nothing to do"
     if (draw(timelineItems(group, evts))) exwrap.scrollTop = exwrap.scrollHeight;
   };
   // NOTE: there is still no inline reply BOX (Keisuke 2026-06-15: "Reply はちょっと Too Much") — a
@@ -659,6 +704,15 @@ export function attachPanel(core, options = {}) {
   // — and re-enables the instant either is present. A commit needs at least one, so an empty commit is
   // never offered (pure UX; no domain meaning). Hoisted so the reaction handlers above can call it.
   function updateSaveState() { save.disabled = !canCommit(ta.value, reactionId); }
+  // Clearing what was just committed is the conversation's business. Whether the HOST then goes
+  // away is the host's. These used to be one step, which was only correct while every host died on
+  // commit: a host that stays kept the committed text sitting in an enabled box, ready to be sent
+  // again.
+  const resetComposer = () => {
+    ta.value = ''; reactionId = '';
+    [...rwrap.children].forEach((x) => x.classList.remove('on'));
+    updateSaveState();
+  };
   ta.addEventListener('input', updateSaveState);
   updateSaveState();   // initial: reflects any restored draft (body/reaction)
   // Cmd/Ctrl+Enter commits — but only when the button itself would: the keyboard path obeys the same
@@ -682,17 +736,9 @@ export function attachPanel(core, options = {}) {
     try { created = onSave(body, reactionId); } finally { drawnDuringCommit = inFlight; inFlight = null; }
     clearDraft();
     afterCommit();
-    // local/fire-and-forget → close; interactive transport → stay open as a conversation with a
-    // pending indicator until the integrator reports ack/reply (REQ-702/703). No real transport in
-    // the standalone lib, so the integrator drives the resolution via its own UI/events.
-    if (commit.closeOnCommit) return onClose();
-    // staying open: reset the WHOLE input — text, reaction, and the button state. Clearing
-    // `ta.value` fires no `input` event, so without this the button would stay enabled over an
-    // empty box and the next click would fall into the empty-commit branch above and close the
-    // conversation. The reaction must clear too, or it would ride along on the next send.
-    ta.value = ''; reactionId = '';
-    [...rwrap.children].forEach((x) => x.classList.remove('on'));
-    updateSaveState();
+    // Clearing `ta.value` fires no `input` event, so the button state has to be recomputed too, or
+    // it stays enabled over an empty box.
+    resetComposer();
     // A brand-new region's thread identity only exists once its first comment does — adopt it now,
     // then sync. Until this point the thread had no identity to match against, so NOTHING committed
     // during it was drawn: not the utterance itself, and not an answer an integrator sent
@@ -701,6 +747,7 @@ export function attachPanel(core, options = {}) {
     if (created && threadKey == null) threadKey = threadKeyOf(created);
     inFlight = drawnDuringCommit;
     try { sync(); } finally { inFlight = null; }
+    if (commit.closeOnCommit) return onClose();   // …and only now is dismissal the host's call
     markSent();
     // …and only now judge what landed during the commit. The utterance we just committed does not
     // answer itself; anything else said in this thread does — including a reply an integrator sent
@@ -726,12 +773,17 @@ export function attachPanel(core, options = {}) {
     });
     };
 
-    return {
+    const handle = {
       nodes: [anchorEl, ta, rwrap, exwrap, acts],
+      composer: [ta, rwrap, acts],   // the part a compact host keeps visible while collapsed
+      timeline: exwrap,
       sync, relabel, retint: () => { for (const r of tinted) applyTint(r); },
       preserveDraft, clearDraft,
       focus: () => ta.focus(),
+      dispose: () => conversations.delete(handle),
     };
+    conversations.add(handle);
+    return handle;
   }
 
   function openPopup({ anchorLabel, existing, onSave, draftKey, threadKey: initialThreadKey = null, ephemeralDraft }, ev) {
@@ -744,7 +796,7 @@ export function attachPanel(core, options = {}) {
       // the saved region is now a committed overlay (rendered via `change`); drop the pending draft rect
       afterCommit: () => { if (pendingRegionEl) { pendingRegionEl.remove(); pendingRegionEl = null; } },
     });
-    popupSync = conv.sync; popupRelabel = conv.relabel; popupRetint = conv.retint;
+    popupConv = conv;
     popup.append(...conv.nodes);
     doc.body.appendChild(popup);
     const vw = globalThis.innerWidth || 1024, vh = globalThis.innerHeight || 768;
@@ -1098,19 +1150,46 @@ export function attachPanel(core, options = {}) {
   // A software keyboard shrinks the visual viewport without moving the layout viewport, so a fixed
   // bar would sit behind it. Follow the visual viewport's bottom edge instead.
   const placeLane = () => {
-    if (!lane || !vv) return;
+    if (!lane) return;
+    // MEASURE the panel rather than guessing at it: its width follows its labels, so a fixed
+    // reservation is wrong the moment the locale changes or a control is toggled. The panel is
+    // Tackback's own chrome, so measuring it is fair game; anything the HOST puts down there is the
+    // host's to declare, via --tb-lane-left / --tb-lane-right.
+    const panelBox = panel.getBoundingClientRect();
+    const panelW = Math.ceil(panelBox.width) || 200;
+    // Would sitting beside the panel leave a lane worth typing into? Don't compute it — the host's
+    // own reservation (--tb-lane-left) is part of the answer and this code cannot know it. Lay it
+    // out beside, MEASURE, and step above only if what came back is too narrow to use. A 22px
+    // composer is not a smaller version of the feature; it is a broken one.
+    lane.classList.remove('tb-stacked');
+    lane.style.setProperty('--tb-lane-right', `${panelW + 32}px`);
+    const beside = lane.getBoundingClientRect().width;
+    const stacked = beside < 320;
+    lane.classList.toggle('tb-stacked', stacked);
+    doc.documentElement.classList.toggle('tb-lane-stacked', stacked);
+    if (stacked) {
+      // clear OUR chrome by measuring it; anything the host puts down there is the host's to move,
+      // which the root class above lets it notice.
+      const lift = Math.ceil((globalThis.innerHeight || 768) - panelBox.top) + 8;
+      lane.style.setProperty('--tb-lane-lift', `${Math.max(0, lift)}px`);
+    } else {
+      lane.style.setProperty('--tb-lane-lift', '0px');
+    }
+    if (!vv) { lane.style.bottom = `calc(16px + env(safe-area-inset-bottom, 0px) + var(--tb-lane-lift, 0px))`; return; }
+    // a software keyboard shrinks the visual viewport without moving the layout viewport
     const hidden = Math.max(0, (globalThis.innerHeight || 0) - (vv.height + vv.offsetTop));
-    lane.style.bottom = `calc(16px + env(safe-area-inset-bottom, 0px) + ${Math.round(hidden)}px)`;
+    lane.style.bottom = `calc(16px + env(safe-area-inset-bottom, 0px) + var(--tb-lane-lift, 0px) + ${Math.round(hidden)}px)`;
   };
   if (vv) {
     vv.addEventListener('resize', queueRecalc); vv.addEventListener('scroll', queueRecalc);
     vv.addEventListener('resize', placeLane); vv.addEventListener('scroll', placeLane);
   }
   win.addEventListener?.('resize', queueRecalc);
+  win.addEventListener?.('resize', placeLane);
 
   // ---- wire to core + initial render -----------------------------------------------------------
   // one change → re-place the anchors, then let an open thread catch up with what was just said
-  const onChange = () => { renderMarks(); popupSync?.(); };
+  const onChange = () => { renderMarks(); broadcast((c) => c.sync()); };
   const offChange = core.on('change', onChange);
   const offRecalc = core.on('recalculate', renderMarks);
   // Flipping an attention flag changes exactly ONE class on the affected anchors. A full renderMarks
@@ -1125,7 +1204,9 @@ export function attachPanel(core, options = {}) {
     refreshLane();   // the document thread's "mark" is the panel control
   }
   const offAttention = core.on('attention:change', syncAttention);
-  const offTransport = core.on('transport:change', () => popupRelabel?.());   // Save ⇄ Send, live
+  const offTransport = core.on('transport:change', () => broadcast((c) => c.relabel()));   // Save ⇄ Send, live, on every host
+  if (lane) buildLaneConversation();   // late: the factory closes over drafts/reactions declared above
+  if (lane) placeLane();
   const offReady = core.on('ready', () => { hintEl.textContent = core.surfaces.size ? t('hint.pdf') : t('hint.html'); renderMarks(); });
   renderMarks();
 
@@ -1135,7 +1216,7 @@ export function attachPanel(core, options = {}) {
     setReactions(defs) { reactions.length = 0; reactions.push(...defs); },
     // Update the injected category→color map live (the integrator owns the mapping; Tackback just
     // applies it to the last-speaker tint). Pass `{}` to clear back to the generic per-identity hues.
-    setActorColors(map) { actorColors = { ...(map || {}) }; claimed = claimedColors(actorColors); renderMarks(); popupRetint?.(); },
+    setActorColors(map) { actorColors = { ...(map || {}) }; claimed = claimedColors(actorColors); renderMarks(); broadcast((c) => c.retint()); },
     setLocale(lang) { const ok = i18n.setLocale(lang); relabel(); return ok; },
     registerLocale(lang, bundle) { i18n.register(lang, bundle); },
     toggleMarks() { doc.documentElement.classList.toggle('tb-hide'); },
@@ -1150,9 +1231,9 @@ export function attachPanel(core, options = {}) {
       doc.removeEventListener('lostpointercapture', finalizeFromCaptureLoss); win.removeEventListener?.('blur', finalizeFromCaptureLoss);
       if (ro) try { ro.disconnect(); } catch { /* ignore */ }
       if (vv) { vv.removeEventListener('resize', queueRecalc); vv.removeEventListener('scroll', queueRecalc); vv.removeEventListener('resize', placeLane); vv.removeEventListener('scroll', placeLane); }
-      win.removeEventListener?.('resize', queueRecalc);
+      win.removeEventListener?.('resize', queueRecalc); win.removeEventListener?.('resize', placeLane);
       if (mql && applyAutoTheme) mql.removeEventListener('change', applyAutoTheme);
-      closePopup(); closeAnchorMenu(); panel.remove(); lane?.remove(); styleEl.remove(); themeStyleEl.remove();
+      closePopup(); closeAnchorMenu(); panel.remove(); lane?.remove(); doc.documentElement.classList.remove('tb-lane-stacked'); styleEl.remove(); themeStyleEl.remove();
       clearHighlights(win);
       doc.querySelectorAll('.tb-badge,.tb-pin,.tb-region,.tb-pending,.tb-ctxmenu').forEach((e) => e.remove());
     },
@@ -1164,11 +1245,11 @@ export function attachPanel(core, options = {}) {
     if (marksBtn) marksBtn.textContent = t('panel.toggleMarks');
     if (clearBtn) clearBtn.textContent = t('panel.clearAll');
     if (laneTitle) laneTitle.textContent = t('panel.docLane');
-    laneConv?.relabel();
+    placeLane();   // labels changed width, so the reservation did too
     refreshLane();
     if (themeBtn) themeBtn.textContent = themeLabel();
     hintEl.textContent = core.surfaces.size ? t('hint.pdf') : t('hint.html');
-    popupRelabel?.();   // an open popup follows the locale change live
+    broadcast((c) => c.relabel());   // every conversation on screen follows the locale change
     renderMarks();
   }
 }
