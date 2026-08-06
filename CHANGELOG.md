@@ -6,6 +6,54 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
 
 ## [Unreleased]
 
+## [0.9.6] — 2026-08-07
+One seam an integrator asked for, so it can stop losing deletions. Mechanism only, as ever: the
+library reports what happened and attaches no meaning to it.
+
+### Added
+- **`core.deleteComments(ids)`** — deleting a whole anchor, or clearing a document, is one act.
+  What is preserved is narrow and exact: one `comment:delete` per removed comment, with the same
+  payload. The operation additionally emits **`comments:delete`** once and commits once — see
+  **Changed** for what else an existing subscriber will see differently. From N indistinguishable
+  events an integrator could not tell where one act ended. `comments:delete` carries
+  `{ ids, previous }`, with `ids[i]` describing `previous[i]`; each `comment:delete` carries
+  `{ id, previous }` as before. The panel's "delete anchor" and "clear all" now use it.
+- **`importEnvelope` honours a `deleted[]` array in the incoming envelope.** A `merge` only ever
+  added, so an integrator polling a server resurrected everything the server had deleted on the next
+  sync. The envelope can now say what is gone. The client keeps **no tombstones** — the party that
+  knows about a deletion is the one that recorded it, and a list that only grows is not something to
+  make every mounted instance carry. **How a removal is reported depends on the mode**: under `merge`
+  the tombstone does the removing, so it arrives on the ordinary deletion seam — a `comment:delete`
+  carrying `{ id, previous }`, a `comments:delete` carrying `{ ids, previous }`, and a `deleted`
+  count. Under `replace` the
+  wipe has already removed it before tombstones are examined, so there are no per-comment deletion
+  events and `deleted` is `0`; the removal appears only in the aggregate `removed` of the `change`.
+  **An id present in both `comments` and `deleted` resolves to the tombstone, in either mode** —
+  precedence belongs to the envelope, not to the mode the reader passes, and a buried id is never
+  taken in, so it appears in no count and triggers no event unless the store already held it.
+  Envelopes given as a JSON string carry `deleted` exactly as object ones do.
+
+### Changed
+- **The panel's "delete anchor" and "clear all" are now one atomic act.** They looped
+  `deleteComment`, so removing an anchor with three comments ran
+  `change → comment:delete → change → comment:delete → …` and persisted after every removal.
+  The order is now `change → comment:delete × N → comments:delete`, committed and persisted **once**.
+  Four things change for an existing subscriber:
+  - the number of `change` events (N → 1) and of persistence writes (N → 1);
+  - the `changes` diff of that event now describes the whole removal rather than one comment;
+  - the ordering above;
+  - **the collection visible inside a `comment:delete` handler**, which now already reflects every
+    removal in the act instead of a partially deleted state.
+
+  What is preserved: an existing `comment:delete` subscription still receives exactly one event per
+  removed comment, with the same payload.
+
+### Compatibility
+`deleteComment` itself is unchanged, and an envelope without `deleted` behaves exactly as before.
+The behavioural change is the one described under **Changed** — it is not a purely additive release
+for anyone observing deletions through `change` or through state read inside a `comment:delete`
+handler.
+
 ## [0.9.5] — 2026-08-06
 Hands-on corrections, from using 0.9.4 rather than reviewing it.
 
@@ -255,7 +303,7 @@ Initial public-prep release (staging). Standalone extraction of the Tackback lib
 - **PDF / raster surfaces are post-v1**: v1 region surfaces are DOM-rendered content (images, figures,
   SVG, diagrams). The `pdf` adapter ships as an optional sample, not a v1 focus.
 - Reply threads, connected-transport / AI-in-the-loop, and multi-author import/replay are present in
-  the codebase but are post-v1 (the Interplay track) and not part of the v1 product surface.
+  the codebase but are post-v1 and not part of the v1 product surface.
 
 ### License
 - [PolyForm Shield License 1.0.0](https://polyformproject.org/licenses/shield/1.0.0): free for any use

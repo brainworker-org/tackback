@@ -87,7 +87,10 @@ function bubble(el, ev) {
   const e = { ...ev, stopPropagation() { stopped = true; } };
   let node = el;
   while (node && !stopped) {
-    node.onclick?.(e);
+    // `onclick` is a CLICK handler. Firing it for every event type meant a right-click on a mark ran
+    // the mark's left-click handler, whose `stopPropagation()` then kept the event from ever reaching
+    // the document — so the anchor menu could not be opened from a test at all.
+    if (e.type === 'click') node.onclick?.(e);
     (node.listeners?.[e.type] || []).forEach((f) => f(e));
     node = node.parentNode;
   }
@@ -449,5 +452,63 @@ test('lane: a host\'s own right-side reservation is not overwritten by the panel
     const style = f.lane().style;
     assert.ok(style['--tb-panel-reserve'], 'the panel measurement is published…');
     assert.equal(style['--tb-lane-right'], undefined, '…and never as the host-facing property');
+  } finally { f.restore(); }
+});
+
+// ---- deleting a whole anchor, and clearing the document, are each ONE act ----------------------
+
+test('panel: deleting an anchor removes all its comments as one operation', () => {
+  // The panel used to loop `deleteComment` per comment, so an integrator watching the seam saw N
+  // indistinguishable deletions and could not tell where one act ended — which is what the anchor
+  // menu is: one act. This is the panel half of the `deleteComments` claim; without it the changelog
+  // sentence "the panel's delete anchor and clear all now use it" has nothing behind it.
+  const f = mountPanel();
+  try {
+    const p = f.doc.createElement('p'); p.id = 'para'; p.textContent = 'content';
+    p.setAttribute('data-tb-anchor', '');
+    f.root.appendChild(p);
+    const a = f.core.addComment({ anchor: { type: 'block', elementId: 'para' }, body: 'first' });
+    const b = f.core.addComment({ anchor: { type: 'block', elementId: 'para' }, body: 'second' });
+    const batches = [], singles = [], changes = [];
+    f.core.on('comments:delete', (e) => batches.push(e));
+    f.core.on('comment:delete', (e) => singles.push(e.id));
+    f.core.on('change', () => changes.push(1));
+
+    const badge = f.badges()[0];
+    assert.ok(badge, 'the anchor has a mark to right-click');
+    assert.ok(badge.__tbComments, 'and the mark carries its thread');
+    badge.dispatchEvent({ type: 'contextmenu', clientX: 10, clientY: 10, preventDefault() {} });
+    const item = f.doc.querySelector('.tb-ctxitem');
+    assert.ok(item, 'right-clicking a mark opens the anchor menu');
+    item.click();
+
+    assert.equal(batches.length, 1, 'one act, one batch event');
+    assert.deepEqual(batches[0].ids.slice().sort(), [a.id, b.id].sort());
+    assert.deepEqual(batches[0].previous.map((c) => c.body).slice().sort(), ['first', 'second']);
+    assert.deepEqual(singles.slice().sort(), [a.id, b.id].sort(), 'per-comment events still fire');
+    assert.equal(changes.length, 1, 'and the store settles once, not once per comment');
+    assert.equal(f.core.listComments().length, 0);
+  } finally { f.restore(); }
+});
+
+test('panel: clearing the document is one operation too', () => {
+  const f = mountPanel({ controls: { clear: true } });
+  try {
+    const prevConfirm = globalThis.confirm;
+    globalThis.confirm = () => true;
+    try {
+      f.core.addComment({ anchor: { type: 'document' }, body: 'one' });
+      f.core.addComment({ anchor: { type: 'document' }, body: 'two' });
+      const batches = [], changes = [];
+      f.core.on('comments:delete', (e) => batches.push(e));
+      f.core.on('change', () => changes.push(1));
+      const clear = f.doc.querySelectorAll('.tb-sec').filter((b) => /clear/i.test(b.textContent))[0];
+      assert.ok(clear, 'the clear control is on the panel');
+      clear.click();
+      assert.equal(batches.length, 1, 'clearing a document is one act, not one per comment');
+      assert.equal(batches[0].ids.length, 2);
+      assert.equal(changes.length, 1, 'and it settles once');
+      assert.equal(f.core.listComments().length, 0);
+    } finally { globalThis.confirm = prevConfirm; }
   } finally { f.restore(); }
 });

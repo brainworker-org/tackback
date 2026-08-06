@@ -296,7 +296,7 @@ export function attachPanel(core, options = {}) {
     clearBtn.onclick = () => {
       if (!globalThis.confirm?.(t('confirm.clearAll'))) return;
       closePopup();   // also drops any in-progress pending region (which is never committed) — bug: it survived clear-all
-      for (const c of core.listComments()) core.deleteComment(c.id);
+      core.deleteComments(core.listComments().map((c) => c.id));   // one operation, not one per comment
       doc.querySelectorAll('.tb-pending,.tb-draw').forEach((e) => e.remove());   // belt-and-suspenders: no stray draft rect
     };
     panel.appendChild(clearBtn);
@@ -892,7 +892,7 @@ export function attachPanel(core, options = {}) {
     closeAnchorMenu(); closePopup();
     anchorMenu = el(doc, 'div', 'tb-ctxmenu');
     const item = el(doc, 'div', 'tb-ctxitem'); item.textContent = t('menu.delete');
-    item.onclick = () => { for (const c of [...comments]) core.deleteComment(c.id); closeAnchorMenu(); };   // delete the whole anchor (all its comments)
+    item.onclick = () => { core.deleteComments(comments.map((c) => c.id)); closeAnchorMenu(); };   // ONE operation: the whole anchor
     anchorMenu.appendChild(item);
     doc.body.appendChild(anchorMenu);
     const vw = globalThis.innerWidth || 1024, vh = globalThis.innerHeight || 768;

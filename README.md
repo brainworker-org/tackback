@@ -13,7 +13,7 @@ any HTML, including Markdown rendered to HTML.
 > multi-participant timeline, actor colors, attention, and the Save/Send scenarios — run
 > `demo/demo.html`: `npm run build`, serve the package root over http, and open it.
 
-> **Version 0.9.5 (staging).** Pre-1.0: the API is functional and tested but may still change before
+> **Version 0.9.6 (staging).** Pre-1.0: the API is functional and tested but may still change before
 > the 1.0 stable release. The public API is the **JavaScript** API called in the browser (not an HTTP API).
 
 ## Install
@@ -186,6 +186,47 @@ tb.on('attention:change', ({ id, on }) => {/* … */});
 The flag is **session-only**: never persisted, never written into the export envelope, so a per-viewer
 UI state can't leak into a shared file. It lives as long as its comment — deleting or wiping the comment
 drops it, and re-importing that comment id starts unflagged. Restyle it via the `--tb-attention` token.
+
+### Deleting as one act, and a merge that can remove
+
+```js
+tb.deleteComments([id1, id2]);   // one act → one `comments:delete`, plus the usual per-comment ones
+tb.importEnvelope({ /* … */ comments: [], deleted: [id] }, { mode: 'merge' });
+```
+
+Deleting a whole anchor is **one operation**, and now says so. The act commits once and then
+narrates: `change` → one `comment:delete` per comment → `comments:delete`. Each `comment:delete`
+carries `{ id, previous }` as it always has; the act carries `{ ids, previous }`, with `ids[i]`
+describing `previous[i]`.
+
+Because it is atomic, a `comment:delete` handler now sees the collection **after the whole act**, not
+midway through it, and the store is persisted once rather than once per comment. An existing
+`comment:delete` subscription still gets exactly one event per removed comment. The panel's *delete
+anchor* and *clear all* previously looped `deleteComment`, so from a run of N indistinguishable
+events you could not tell where one act ended.
+
+A `merge` used to only ever **add**, so an integrator polling a server resurrected everything the
+server had deleted on the next sync. An incoming envelope can now say what is gone, and merge honours
+it. The client keeps **no tombstones**: the party that knows about a deletion is the one that recorded
+it, and a list that only grows is not something to make every mounted instance carry.
+
+A JSON-string envelope carries `deleted` exactly as an object one does.
+
+**If an id appears in both `comments` and `deleted`, the tombstone wins** — in either mode. A
+producer emits one envelope, so its meaning must not depend on which mode the reader passes, and the
+only way the two arrays realistically disagree is a torn read of an append-only log (the comments
+projected, a deletion lands, the tombstones projected), where the tombstone is the fresher fact. A
+buried id is therefore never taken in: it is not added, not updated, and contributes to none of the
+ingestion counts (`added`, `updated`, `skipped`, `conflicts`). If the
+store already held it, it goes — but **how that removal is reported depends on the mode**. Under
+`merge` the tombstone does the removing, so it arrives on the ordinary deletion seam:
+`comment:delete`, `comments:delete`, and a `deleted` count. Under `replace` the wipe has already
+removed it before tombstones are examined, so there are no per-comment deletion events and `deleted`
+is `0`; the removal appears only in the aggregate `removed` of the `change`.
+
+`importEnvelope` returns how many tombstones it applied as `deleted`. Under `replace` this is `0`
+even when tombstones were honoured — the wipe already accounts for everything the incoming set
+omits, so there is nothing left for a tombstone to take.
 
 ## Modules
 | import | responsibility |
