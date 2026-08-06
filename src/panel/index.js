@@ -828,6 +828,7 @@ export function attachPanel(core, options = {}) {
   function openPopup({ anchorLabel, anchor, existing, onSave, draftKey, threadKey: initialThreadKey = null, ephemeralDraft }, ev) {
     closePopup();
     popup = el(doc, 'div', 'tb-popup');
+    const mine = popup;   // identity, so a handler that replaces this popup cannot be mistaken for it
     doc.documentElement.classList.add('tb-popup-open');   // lock region affordances while editing (REQ-008): no resize grip on hover, no move cursor
     const conv = createConversation({
       anchorLabel, anchor, existing, onSave, draftKey, threadKey: initialThreadKey,
@@ -847,6 +848,10 @@ export function attachPanel(core, options = {}) {
     // the report says "on screen" while the popup is still unpositioned, and a listener acting on it
     // races the code that was going to finish building it.
     conv.announceOpen();
+    // A handler may have closed this popup, or opened another one, before that call returned. Either
+    // way the surface we were about to wire is no longer the current one, and wiring it would leave
+    // dismiss listeners on the document that nothing can remove — `popupCleanup` only ever holds one.
+    if (popup !== mine) return;
     // dismiss on click outside the popup or Escape. Block/range keep the unsaved draft (restorable on
     // reopen); a PENDING region is ephemeral — its rect is removed on close (REQ-012) and would never
     // recur, so its draft is DISCARDED too, per REQ-703 (Keisuke: a dismissed uncommitted region keeps
@@ -854,8 +859,8 @@ export function attachPanel(core, options = {}) {
     const dismissPreserve = () => { if (ephemeralDraft) conv.clearDraft(); else conv.preserveDraft(); closePopup(); };
     const onDocDown = (e) => { if (popup && !e.target.closest('.tb-popup')) dismissPreserve(); };
     const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); dismissPreserve(); } };
-    // the same re-entry: a listener may have torn this popup down before the timer runs
-    const register = () => { if (!popup) return; doc.addEventListener('mousedown', onDocDown, true); doc.addEventListener('keydown', onKey, true); };
+    // …and the same again from the timer's side: this popup may be gone, or superseded, by now
+    const register = () => { if (popup !== mine) return; doc.addEventListener('mousedown', onDocDown, true); doc.addEventListener('keydown', onKey, true); };
     (globalThis.setTimeout || ((f) => f()))(register, 0);   // defer so the opening event doesn't self-dismiss
     popupCleanup = () => { doc.removeEventListener('mousedown', onDocDown, true); doc.removeEventListener('keydown', onKey, true); };
   }

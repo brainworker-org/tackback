@@ -704,3 +704,68 @@ test('thread events: a close handler cannot re-expand a lane that has been destr
     assert.equal(f.lane(), null);
   } finally { f.restore(); }
 });
+
+test('panel: a Pane torn down from its own open handler leaves no listeners on the document', async () => {
+  // The dismiss handlers register on a timer, so they can outlive the popup they belong to.
+  // `popupCleanup` holds exactly one remover, so anything registered for a popup that is already
+  // gone — or superseded — can never be removed again.
+  const f = mountPanel({ controls: { docLane: false } });
+  try {
+    f.core.addComment({ anchor: { type: 'document' }, body: 'q' });
+    f.core.on('thread:open', () => f.panel.destroy());
+    f.panel.openDocumentThread();
+    await new Promise((r) => setTimeout(r, 0));
+    assert.deepEqual(f.doc.listeners.mousedown || [], [], 'nothing left watching for a dismiss');
+    assert.deepEqual(f.doc.listeners.keydown || [], []);
+  } finally { f.restore(); }
+});
+
+test('panel: a Pane closed before its timer fires registers nothing', async () => {
+  // the same hole entered from the ordinary direction: closed within the same tick it opened in.
+  const f = mountPanel({ controls: { docLane: false } });
+  try {
+    f.core.addComment({ anchor: { type: 'document' }, body: 'q' });
+    f.panel.openDocumentThread();
+    f.doc.querySelector('.tb-cancel').click();
+    await new Promise((r) => setTimeout(r, 0));
+    assert.deepEqual(f.doc.listeners.mousedown || [], []);
+  } finally { f.restore(); }
+});
+
+test('panel: a Pane that opens another from its open handler leaves nothing behind', async () => {
+  // The case the two identity guards exist for, and the one `!popup` cannot see: the popup is not
+  // GONE, it has been SUPERSEDED. The outer call resumes after the inner one has already claimed the
+  // single `popupCleanup` slot, so whichever set of dismiss listeners loses that race can never be
+  // removed — a document-level leak that outlives every popup on the page.
+  const f = mountPanel({ controls: { docLane: false } });
+  try {
+    f.core.addComment({ anchor: { type: 'document' }, body: 'q' });
+    let once = false;
+    f.core.on('thread:open', () => { if (once) return; once = true; f.panel.openDocumentThread(); });
+    f.panel.openDocumentThread();
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(f.doc.querySelectorAll('.tb-popup').length, 1, 'one surface, the one that won');
+    f.doc.querySelector('.tb-cancel').click();
+    await new Promise((r) => setTimeout(r, 0));
+    assert.deepEqual(f.doc.listeners.mousedown || [], [], 'and closing it takes every listener with it');
+    assert.deepEqual(f.doc.listeners.keydown || [], []);
+  } finally { f.restore(); }
+});
+
+test('panel: a Pane replaced within the same tick takes its pending registration with it', async () => {
+  // The dismiss handlers are scheduled on a timer, so BOTH popups' registrations are still pending
+  // when the second one replaces the first. Asking "is there a popup?" answers yes — there is, it is
+  // just not this one. Only identity can tell them apart, and the loser's listeners are the ones
+  // `popupCleanup` no longer holds a remover for.
+  const f = mountPanel({ controls: { docLane: false } });
+  try {
+    f.core.addComment({ anchor: { type: 'document' }, body: 'q' });
+    f.panel.openDocumentThread();
+    f.panel.openDocumentThread();   // replaces the first, before either has registered
+    await new Promise((r) => setTimeout(r, 0));
+    f.doc.querySelector('.tb-cancel').click();
+    await new Promise((r) => setTimeout(r, 0));
+    assert.deepEqual(f.doc.listeners.mousedown || [], [], 'the replaced Pane registered nothing');
+    assert.deepEqual(f.doc.listeners.keydown || [], []);
+  } finally { f.restore(); }
+});
