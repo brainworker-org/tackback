@@ -76,7 +76,7 @@
     background: transparent; color: inherit; border-radius: 6px; padding: 4px 8px; }
   .trybar button.on { background: var(--tb-accent, #33a877); color: #fff; border-color: transparent; }
   /* The library sets `tb-lane-stacked` on the root when the lane could not fit beside the panel and
-     had to take the full width. This page owns the bottom-left, so that is its cue to get out of the
+     had to take the available width. This page owns the bottom-left, so that is its cue to get out of the
      way — a fixed breakpoint of our own would disagree with the lane's measurement. */
   :root.tb-lane-stacked { --tb-lane-left: 16px; }
   :root.tb-lane-stacked .trybar { bottom: auto; top: 16px; max-width: calc(100vw - 32px); width: auto; }
@@ -244,11 +244,11 @@
   // yours: its size, its ids, its icons and its per-locale labels. Comments store the `id`, so an
   // integrator can swap icons freely without touching stored data.
   const REVIEW_REACTIONS = [
-    { id: 'ship',   icon: '🚀', label: { en: 'Ship it',   ja: '出そう' } },
-    { id: 'rework',  icon: '🔁', label: { en: 'Rework',    ja: '要再考' } },
-    { id: 'cut',     icon: '✂️', label: { en: 'Cut',       ja: '削る' } },
-    { id: 'idea',    icon: '💡', label: { en: 'Idea',      ja: '案' } },
-    { id: 'blocker', icon: '🛑', label: { en: 'Blocker',   ja: '障害' } },
+    { id: 'ship',    icon: '🚀', label: { en: 'Ship it', ja: 'OK!!' } },
+    { id: 'rework',  icon: '🔁', label: { en: 'Rework',  ja: '要再考' } },
+    { id: 'cut',     icon: '✂️', label: { en: 'Cut',     ja: 'カット' } },
+    { id: 'idea',    icon: '💡', label: { en: 'Idea',    ja: 'アイデア' } },
+    { id: 'blocker', icon: '🛑', label: { en: 'Blocker', ja: 'ブロッカー' } },
   ];
 
   // …and a replacement COLOR scheme: the participant colors (by author.kind) plus the panel's own

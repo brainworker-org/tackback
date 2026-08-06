@@ -146,9 +146,12 @@ test('resolveLaneLayout: it asks about beside first, and only asks about above w
   assert.deepEqual(asked, [false, true], 'and each candidate is measured exactly once');
 });
 
-test('resolveLaneLayout: when nothing fits, it says so and takes the wider state anyway', () => {
+test('resolveLaneLayout: when neither candidate fits, it stacks and says it did not fit', () => {
+  // it does NOT compare the two widths — beside is simply the preferred state, and failing that it
+  // stacks, because removing the panel's reservation is the only lever there is. In real geometry
+  // that never yields less room; the function does not assert it, so neither does this.
   const cramped = () => 100;
   const r = resolveLaneLayout(cramped, { min: 320 });
-  assert.equal(r.stacked, true, 'above is never narrower than beside');
-  assert.equal(r.fits, false, 'and the caller is told it did not fit');
+  assert.equal(r.stacked, true, 'beside was not wide enough, so it stacks');
+  assert.equal(r.fits, false, 'and the caller is told neither candidate fitted');
 });

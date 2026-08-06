@@ -103,7 +103,10 @@ const PANEL_CSS = `
 /* the lane hosts the same conversation the Pane does, so its rows reuse the popup's own styles */
 .tb-lane .tb-existing { max-height: 40vh; overscroll-behavior: contain; }
 .tb-lane textarea { width: 100%; box-sizing: border-box; min-height: 44px; font: inherit;
-  border: 1px solid var(--tb-border); border-radius: 8px; padding: 7px; background: transparent; color: inherit; }
+  border: 1px solid var(--tb-border); border-radius: 8px; padding: 7px; background: transparent; color: inherit;
+  /* no resize grip: this bar has just measured its own place in the viewport, and a corner the
+     reader can drag is an invitation to fight that (Keisuke, hands-on 2026-08-06). */
+  resize: none; }
 .tb-lane .tb-anchor { display: none; }   /* the lane's own title already says what it is about */
 /* When there is not enough width to sit BESIDE the panel, the lane goes above it and takes the
    available width, up to its own maximum. Which of the two applies is decided by measurement in placeLane, not by a guessed
