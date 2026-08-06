@@ -248,3 +248,57 @@ test('panel: a control click reaches a page-level listener, so a clear-on-open p
     assert.equal(f.docBtn().classList.contains('tb-attn'), false, 'and the control drops the tint');
   } finally { f.restore(); }
 });
+
+test('panel: an open Pane follows the transport when it changes underneath it', () => {
+  const f = mountPanel();
+  try {
+    f.core.addComment({ anchor: { type: 'document' }, body: 'q' });
+    f.docBtn().click();
+    const save = () => f.doc.querySelector('.tb-save');
+    assert.equal(save().textContent, 'Save', 'no transport attached yet');
+    f.core.setTransport({ interactive: true });
+    assert.equal(save().textContent, 'Send', 'the open Pane relabels rather than going stale');
+    f.core.setTransport(null);
+    assert.equal(save().textContent, 'Save');
+  } finally { f.restore(); }
+});
+
+test('panel: a transport change moves close-vs-stay-open too, not just the label', () => {
+  // relabelling alone would pass the test above while the commit still closed a conversation, or
+  // left a note-taking Pane open — the label is the visible half of one policy.
+  const f = mountPanel();
+  try {
+    f.core.addComment({ anchor: { type: 'document' }, body: 'seed' });
+    f.docBtn().click();                                  // opened with NO transport → Save + close
+    f.core.setTransport({ interactive: true });          // …now a conversation
+    const ta = f.doc.querySelector('.tb-popup').querySelector('textarea');
+    ta.value = 'first'; ta.dispatchEvent({ type: 'input' });
+    f.doc.querySelector('.tb-save').click();
+    assert.ok(f.doc.querySelector('.tb-popup'), 'commit now STAYS open, following the new descriptor');
+    // and back the other way
+    f.core.setTransport(null);
+    const ta2 = f.doc.querySelector('.tb-popup').querySelector('textarea');
+    ta2.value = 'second'; ta2.dispatchEvent({ type: 'input' });
+    f.doc.querySelector('.tb-save').click();
+    assert.equal(f.doc.querySelector('.tb-popup'), null, 'and closes again once the transport is gone');
+  } finally { f.restore(); }
+});
+
+test('panel: Cmd/Ctrl+Enter commits, and only when the button would', () => {
+  // this binding was silently dropped during the conversation-view extraction and no test noticed,
+  // which is the whole argument for pinning it here.
+  const f = mountPanel();
+  try {
+    f.docBtn().click();
+    const ta = f.doc.querySelector('.tb-popup').querySelector('textarea');   // the fixture matches simple selectors only
+    const send = (mods) => ta.dispatchEvent({ type: 'keydown', key: 'Enter', ...mods });
+    send({ metaKey: true });
+    assert.equal(f.core.listComments().length, 0, 'an empty box commits nothing');
+    ta.value = 'typed'; ta.dispatchEvent({ type: 'input' });
+    send({ metaKey: false, ctrlKey: false });
+    assert.equal(f.core.listComments().length, 0, 'plain Enter is a newline, not a commit');
+    send({ metaKey: true });
+    assert.equal(f.core.listComments().length, 1, 'Cmd+Enter commits');
+    assert.equal(f.core.listComments()[0].body, 'typed');
+  } finally { f.restore(); }
+});

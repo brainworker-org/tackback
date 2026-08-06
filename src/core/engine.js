@@ -14,7 +14,7 @@ import { TackbackError } from './errors.js';
 
 // MUST equal package.json "version" (export envelope's generator.version comes from here);
 // export.test.js asserts they match so they can't drift.
-const LIB_VERSION = '0.9.3';
+const LIB_VERSION = '0.9.4';
 const nowIso = () => new Date().toISOString();
 
 /**
@@ -166,7 +166,19 @@ class TackbackInstance {
    * is attached, send when one is) and whether to stay open after a commit (`interactive:true`).
    * @param {{ interactive?: boolean, label?: string } | null} transport
    */
-  setTransport(transport) { this._transport = transport || null; }
+  setTransport(transport) {
+    const next = transport || null;
+    // Compare the descriptor's FIELDS, not its serialized text: `{interactive, label}` and
+    // `{label, interactive}` are the same descriptor, and a UI that reacts once per change must not
+    // be woken by a change of representation.
+    const same = (a, b) => (a === b) || !!(a && b && a.interactive === b.interactive && a.label === b.label);
+    const changed = !same(this._transport, next);
+    this._transport = next;
+    // A UI that decides "Save or Send" once, when it opens, goes stale the moment this changes. A
+    // Pane's staleness is bounded by its own lifetime, but a persistent composer's is not — so the
+    // change is announced. Descriptor only: the core still transports nothing.
+    if (changed) this._emitter.emit('transport:change', next);
+  }
 
   /** @returns {{ interactive?: boolean, label?: string } | null} the attached transport descriptor */
   getTransport() { return this._transport ?? null; }

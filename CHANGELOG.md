@@ -6,6 +6,36 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
 
 ## [Unreleased]
 
+## [0.9.4] — 2026-08-06
+
+### Added
+- **`transport:change`** — `setTransport` now announces a real change of descriptor. A UI that decides
+  "Save or Send" when it opens went stale the moment the descriptor moved; an open Pane re-derives, so
+  both the button and close-vs-stay-open follow. Equality is by descriptor *field*, so re-setting the
+  same descriptor — in any property order — stays quiet. The core still transports nothing.
+
+### Fixed
+- **`popup.send` / `popup.pending` were in neither label bundle.** They reached the screen through
+  literal fallbacks, so a Japanese reader saw "Send" and "sent — awaiting reply…" in English from the
+  moment the transport seam shipped.
+
+### Internal
+- The conversation — timeline rows, input, reactions, commit button, send/pending state machine, and
+  the reconciliation that keeps an open thread current — moved out of the popup's closure into a
+  factory the popup merely hosts. A thread is not a popup, and a second surface is coming. No
+  behaviour change; the suite passed unchanged, which is the signal that refactor is meant to give.
+
+### Demo
+- Both demo pages present the bottom-left bar as **the customization axes an integrator drives**,
+  rather than a pile of toggles: colours, reactions, language, which panel controls show, and whether
+  a transport is attached.
+- **Colour is one axis.** It read as two — one control changed colours, the other changed whether the
+  theme *button* was shown. Panel tokens and participant colours now move together; the button's
+  visibility belongs to the axis about which controls show.
+- **"Simulate a reply" is gone.** With the scenario toggle carrying Save vs Send, the simulated
+  participant already answers every send; the button only did anything in local mode, where a reply
+  implies the backend that local mode is defined as not having.
+
 ## [0.9.3] — 2026-08-06
 The second Interaction shape: a conversation about the **document as a whole**, alongside the
 per-anchor threads that were already there. Still mechanism only — the library supplies the thread
