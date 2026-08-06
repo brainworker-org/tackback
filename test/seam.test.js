@@ -148,10 +148,12 @@ test('setTransport announces a real change, and stays quiet when nothing changed
   const tb = Tackback.mount({ document: { id: 'transport-events' }, storage: memoryAdapter() });
   const seen = [];
   tb.on('transport:change', (d) => seen.push(d));
-  tb.setTransport({ interactive: true });
-  tb.setTransport({ interactive: true });          // same descriptor — nothing to announce
+  tb.setTransport({ interactive: true, label: 'Send' });
+  tb.setTransport({ interactive: true, label: 'Send' });   // same descriptor — nothing to announce
+  tb.setTransport({ label: 'Send', interactive: true });   // …and the same one written differently
   tb.setTransport(null);
   tb.setTransport(null);
-  assert.deepEqual(seen, [{ interactive: true }, null], 'one event per real change');
+  assert.deepEqual(seen, [{ interactive: true, label: 'Send' }, null],
+    'one event per change of DESCRIPTOR, not per change of representation');
   assert.equal(tb.getTransport(), null, 'and the descriptor itself still reads back');
 });

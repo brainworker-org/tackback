@@ -13,7 +13,7 @@ any HTML, including Markdown rendered to HTML.
 > multi-participant timeline, actor colors, attention, and the Save/Send scenarios — run
 > `demo/demo.html`: `npm run build`, serve the package root over http, and open it.
 
-> **Version 0.9.3 (staging).** Pre-1.0: the API is functional and tested but may still change before
+> **Version 0.9.4 (staging).** Pre-1.0: the API is functional and tested but may still change before
 > the 1.0 stable release. The public API is the **JavaScript** API called in the browser (not an HTTP API).
 
 ## Install

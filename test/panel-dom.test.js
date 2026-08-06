@@ -263,6 +263,27 @@ test('panel: an open Pane follows the transport when it changes underneath it', 
   } finally { f.restore(); }
 });
 
+test('panel: a transport change moves close-vs-stay-open too, not just the label', () => {
+  // relabelling alone would pass the test above while the commit still closed a conversation, or
+  // left a note-taking Pane open — the label is the visible half of one policy.
+  const f = mountPanel();
+  try {
+    f.core.addComment({ anchor: { type: 'document' }, body: 'seed' });
+    f.docBtn().click();                                  // opened with NO transport → Save + close
+    f.core.setTransport({ interactive: true });          // …now a conversation
+    const ta = f.doc.querySelector('.tb-popup').querySelector('textarea');
+    ta.value = 'first'; ta.dispatchEvent({ type: 'input' });
+    f.doc.querySelector('.tb-save').click();
+    assert.ok(f.doc.querySelector('.tb-popup'), 'commit now STAYS open, following the new descriptor');
+    // and back the other way
+    f.core.setTransport(null);
+    const ta2 = f.doc.querySelector('.tb-popup').querySelector('textarea');
+    ta2.value = 'second'; ta2.dispatchEvent({ type: 'input' });
+    f.doc.querySelector('.tb-save').click();
+    assert.equal(f.doc.querySelector('.tb-popup'), null, 'and closes again once the transport is gone');
+  } finally { f.restore(); }
+});
+
 test('panel: Cmd/Ctrl+Enter commits, and only when the button would', () => {
   // this binding was silently dropped during the conversation-view extraction and no test noticed,
   // which is the whole argument for pinning it here.

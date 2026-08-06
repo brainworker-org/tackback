@@ -15,7 +15,8 @@
   What it shows:
     • the three v1 anchor kinds — block, range (phrase), region (rect) — over DOM-rendered content
       (text, an inline <svg> diagram, an <img>, and a marked panel surface);
-    • the bottom-LEFT "Try it" bar: UI display language (EN/JA), theme switch, reaction set;
+    • the bottom-LEFT bar: the customization axes an integrator drives (colours, reactions,
+      language, which panel controls show, and whether a transport is attached);
     • the bottom-RIGHT Tackback panel: comment list, reactions, JSON export / import, theme, marks;
     • a clearly-labelled POST-V1 PREVIEW: a region over a real PDF page (pdf.js from a CDN).
 
@@ -151,15 +152,17 @@
   <table>
     <thead><tr><th>Axis</th><th>How</th><th>Default</th></tr></thead>
     <tbody>
-      <tr><td>Theming</td><td><code>--tb-*</code> CSS tokens; <code>theme: 'auto'</code> follows the OS live</td><td>auto (light/dark)</td></tr>
+      <tr><td>Colors</td><td><code>--tb-*</code> tokens (a partial map layers on the OS base) + <code>actorColors</code> per participant category</td><td>auto light/dark, no categories</td></tr>
       <tr><td>Reactions</td><td>id + icon + per-locale label, fully replaceable set</td><td>question / agree / …</td></tr>
       <tr><td>Language</td><td><code>setLocale()</code> at runtime; bring your own bundle</td><td>English, ja shipped</td></tr>
       <tr><td>Panel controls</td><td><code>controls: { author, export, import, theme, marks, clear, docThread }</code> chooses visible buttons</td><td>all shown except <code>import</code></td></tr>
     </tbody>
   </table>
-  <p>Use the <b>Language</b> button in the bottom-left "Try it" bar to switch the panel UI between
-    English and Japanese; the annotation data is untouched. The <b>Theme switch</b> button re-attaches
-    the panel with a manual light/dark/accent toggle shown.</p>
+  <p>The bottom-left bar drives all of it live, one axis at a time: <b>Colors</b> re-skins the
+    participants and the panel together, <b>Reactions</b> swaps in a set with its own ids and icons,
+    <b>Language</b> switches the panel's own labels between English and Japanese without touching the
+    annotation data, and <b>Theme button</b> shows or hides one of the panel's controls — hiding a
+    button never hides the data behind it.</p>
 
   <h2>PDF page region <span style="font-weight:400">— post-v1 preview, optional sample</span></h2>
   <aside class="callout warn">
