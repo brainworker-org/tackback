@@ -64,9 +64,30 @@ const PANEL_CSS = `
    flag is cleared. The MEANING of the flag (e.g. "unread") is the integrator's — Tackback only paints
    and clears it; it attaches no semantics of its own. */
 .tb-badge.tb-attn, .tb-pin.tb-attn { background: var(--tb-attention) !important; color: #fff !important; }
-/* the document thread has no mark on the page — the panel control is its mark, so it carries the
-   same attention tint. */
-.tb-panel button.tb-docbtn.tb-attn { background: var(--tb-attention); color: #fff; }
+/* The document lane: the conversation about the document as a whole, composed from a bar across the
+   bottom of the viewport rather than reached from a mark, because it is about no particular place.
+   It FLOATS — the library never shifts the host's layout (same reason badges are overlay-positioned)
+   — and it is centred with a max-width so the panel (bottom-right) and any host chrome in the other
+   corner keep their space. Its z-index sits below the popup so an anchored thread still wins.
+   env(safe-area-inset-bottom) and the visualViewport listener keep it off the home indicator and
+   above a software keyboard; both are cheap now and awkward to retrofit. */
+.tb-lane { position: fixed; left: 50%; transform: translateX(-50%); z-index: 9998;
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  width: min(680px, calc(100vw - 32px)); box-sizing: border-box;
+  background: var(--tb-popup-bg); color: var(--tb-popup-fg);
+  border: 1px solid var(--tb-border); border-radius: 14px; box-shadow: 0 6px 24px rgba(0,0,0,.18);
+  font: 13px -apple-system, system-ui, sans-serif; padding: 8px 10px; }
+.tb-lane .tb-lane-head { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.tb-lane .tb-lane-title { font-weight: 600; flex: 1; }
+.tb-lane .tb-lane-count { font-size: 11px; opacity: .75; }
+.tb-lane.tb-attn .tb-lane-count { background: var(--tb-attention); color: #fff; border-radius: 9px; padding: 0 7px; opacity: 1; }
+.tb-lane .tb-lane-body { display: none; margin-top: 8px; }
+.tb-lane.tb-open .tb-lane-body { display: block; }
+/* the lane hosts the same conversation the Pane does, so its rows reuse the popup's own styles */
+.tb-lane .tb-existing { max-height: 40vh; overscroll-behavior: contain; }
+.tb-lane textarea { width: 100%; box-sizing: border-box; min-height: 44px; font: inherit;
+  border: 1px solid var(--tb-border); border-radius: 8px; padding: 7px; background: transparent; color: inherit; }
+.tb-lane .tb-anchor { display: none; }   /* the lane's own title already says what it is about */
 .tb-popup { position: fixed; z-index: 10000; width: 320px; background: var(--tb-popup-bg); color: var(--tb-popup-fg);
   border: 1px solid var(--tb-border); border-radius: 10px; box-shadow: 0 8px 28px rgba(0,0,0,.35); padding: 11px; font: 13px -apple-system, system-ui, sans-serif; }
 .tb-popup .tb-anchor { font-size: 11px; color: var(--tb-muted); margin-bottom: 4px; }
@@ -105,11 +126,11 @@ const PANEL_CSS = `
  *   `{ ai: '#2563eb', human: '#db2777' }`; an anchor is tinted by its last speaker's category. With
  *   no map, authors fall back to a generic per-identity hue. Tackback ships no categories or colors.
  *   `controls` selects which panel buttons are shown (the rest still work via the API). Defaults:
- *   `{ author: true, export: true, import: false, theme: true, marks: true, clear: true, docThread: true }`.
- *   `docThread` opens the conversation about the document AS A WHOLE — it is the only thread with no
- *   mark on the page, so the control is its mark (utterance count + attention tint). Hiding it does
- *   not remove the capability: `panel.openDocumentThread()` is the same action. (`clear` is the one
- *   control with no API equivalent — see the README.)
+ *   `{ author: true, export: true, import: false, theme: true, marks: true, clear: true, docLane: true }`.
+ *   `docLane` is the conversation about the document AS A WHOLE, composed from a bar across the
+ *   bottom of the viewport — it is about no particular place, so it has no mark to hang on. With the
+ *   lane off, `panel.openDocumentThread()` opens that same thread as an ordinary Pane. (`clear` is
+ *   the one control with no API equivalent — see the README.)
  */
 export function attachPanel(core, options = {}) {
   const doc = (options.root && options.root.ownerDocument) || globalThis.document;
@@ -173,7 +194,7 @@ export function attachPanel(core, options = {}) {
 
   // ---- panel chrome ----------------------------------------------------------------------------
   // `controls` chooses which buttons appear. Hiding a button never hides the DATA behind it, but the substitute differs by control:
-  // theme/marks/docThread have PanelInstance methods; author/export/import have core equivalents
+  // theme/marks/docLane have PanelInstance methods; author/export/import have core equivalents
   // (setAuthor / exportEnvelope / importEnvelope — the dialogs themselves are the panel's own); and
   // `clear` has none, because the button also confirms, closes an open Pane and drops an uncommitted
   // region rect. See the README table.
@@ -182,7 +203,7 @@ export function attachPanel(core, options = {}) {
   // `import` is OFF by default — it is the receiver / AI-participant path (STORY-02/04), which is
   // post-v1 scope; enable it explicitly with `controls: { import: true }`. Every control is config-
   // toggleable here, so an integrator can show/hide any menu item (Keisuke 2026-06-15).
-  const CONTROL_DEFAULTS = { author: true, export: true, import: false, theme: true, marks: true, clear: true, docThread: true };
+  const CONTROL_DEFAULTS = { author: true, export: true, import: false, theme: true, marks: true, clear: true, docLane: true };
   const controls = { ...CONTROL_DEFAULTS, ...(options.controls || {}) };
 
   // The theme switch (when shown) cycles named "play" themes: default (OS auto) → ocean → passion.
@@ -244,16 +265,6 @@ export function attachPanel(core, options = {}) {
     marksBtn.onclick = () => doc.documentElement.classList.toggle('tb-hide');
     panel.appendChild(marksBtn);
   }
-  // The document thread's entry point. Every other thread advertises itself with a badge on the
-  // thing it is about; this one is about the whole document, so the panel is where it lives. The
-  // button carries the same utterance count a badge would, and wears the same attention tint.
-  let docBtn = null;
-  if (controls.docThread) {
-    docBtn = btn(doc, t('panel.docThread'), 'tb-sec');
-    docBtn.classList.add('tb-docbtn');
-    docBtn.onclick = (ev) => openDocumentThread(ev);
-    panel.appendChild(docBtn);
-  }
   let clearBtn = null;
   if (controls.clear) {
     clearBtn = btn(doc, t('panel.clearAll'), 'tb-sec');
@@ -269,6 +280,54 @@ export function attachPanel(core, options = {}) {
   hintEl.textContent = t('hint.html');
   panel.appendChild(hintEl);
   target.appendChild(panel);
+
+  // ---- the document lane -------------------------------------------------------------------------
+  // Every other thread is reached from a mark on the thing it is about. This one is about the whole
+  // document, so it has no such thing — it gets a bar of its own across the bottom, which doubles as
+  // its mark: the count and the attention tint live on the head, visible without opening anything.
+  let lane = null, laneHead = null, laneTitle = null, laneCount = null, laneBody = null, laneConv = null;
+  if (controls.docLane) {
+    lane = el(doc, 'div', 'tb-lane');
+    laneHead = el(doc, 'div', 'tb-lane-head');
+    laneTitle = el(doc, 'span', 'tb-lane-title'); laneTitle.textContent = t('panel.docLane');
+    laneCount = el(doc, 'span', 'tb-lane-count');
+    laneHead.append(laneTitle, laneCount);
+    laneBody = el(doc, 'div', 'tb-lane-body');
+    laneHead.onclick = () => toggleLane();
+    lane.append(laneHead, laneBody);
+    target.appendChild(lane);
+  }
+  // The lane's conversation is built on first open, not on attach: building it eagerly would focus
+  // nothing but would still bind listeners for a thread the reader may never look at.
+  function laneOpen() { return !!lane && lane.classList.contains('tb-open'); }
+  function toggleLane(force) {
+    if (!lane) return false;
+    const open = force === undefined ? !laneOpen() : !!force;
+    if (open && !laneConv) {
+      laneConv = createConversation({
+        anchorLabel: anchorLabelOf({ type: 'document' }),
+        existing: docComments,
+        draftKey: anchorKey({ type: 'document' }),
+        threadKey: 'document',
+        // the lane is not a popup: committing never dismisses it, so "close" is a no-op here
+        onClose: () => {},
+        onSave: (body, reaction) => core.addComment({ anchor: { type: 'document' }, body, reaction }),
+      });
+      laneBody.append(...laneConv.nodes);
+    }
+    lane.classList.toggle('tb-open', open);
+    if (open) { laneConv.sync(); laneConv.focus(); }
+    return open;
+  }
+  // The head is the lane's mark: the same utterance count a badge carries, and the same attention
+  // tint. Both are read from where the marks read them, so they cannot drift apart.
+  function refreshLane() {
+    if (!lane) return;
+    const n = utteranceCount(docComments);
+    laneCount.textContent = n ? `💬${n}` : '';
+    lane.classList.toggle('tb-attn', docComments.some((c) => core.hasAttention(c.id)));
+    laneConv?.sync();
+  }
 
   // ---- marks / overlays ------------------------------------------------------------------------
   // the document thread's comments, refreshed by every renderMarks. It has no mark on the page, so
@@ -423,7 +482,7 @@ export function attachPanel(core, options = {}) {
       regionOverlays.push({ box, pin, surfaceEl: r.element, comments: group.comments });
     }
     countEl.textContent = t('panel.count', { n: utteranceCount(core.listComments()) });   // utterances, so the panel total agrees with the badges
-    refreshDocBtn();
+    refreshLane();
     orphanedIds.clear(); for (const id of currentOrphans) orphanedIds.add(id);   // transition set for the next render (all kinds)
     // apply the collected orphan/resolve mutations AFTER the render pass (no mid-iteration re-entry).
     // reportOrphaned is idempotent + transition-guarded; markResolved is a no-op on a non-orphan — so the
@@ -711,6 +770,7 @@ export function attachPanel(core, options = {}) {
   // integrator that hides the control can still reach the thread — the panel's standing rule is that
   // a hidden control never means a lost capability.
   function openDocumentThread(ev) {
+    if (lane) return void toggleLane(true);   // the lane IS the document thread's surface
     const a = { type: 'document' };
     const existing = core.listComments().filter((c) => c.anchor && c.anchor.type === 'document');
     openPopup({
@@ -720,14 +780,6 @@ export function attachPanel(core, options = {}) {
       threadKey: 'document',
       onSave: (body, reaction) => core.addComment({ anchor: a, body, reaction }),
     }, ev);
-  }
-  // The control shows what a badge would: how many utterances the document thread holds, and whether
-  // it carries an attention flag. Both are read from the same places the marks read them.
-  function refreshDocBtn() {
-    if (!docBtn) return;
-    const n = utteranceCount(docComments);
-    docBtn.textContent = n ? `${t('panel.docThread')} 💬${n}` : t('panel.docThread');
-    docBtn.classList.toggle('tb-attn', docComments.some((c) => core.hasAttention(c.id)));
   }
 
   function anchorLabelOf(a) {
@@ -747,7 +799,7 @@ export function attachPanel(core, options = {}) {
   // the popup there made it appear mid-drag and block the gesture (Keisuke 2026-06-15). The contextmenu
   // listener now only SUPPRESSES the native menu over content; onUp decides block/range vs region.
   const openCtxPopup = (e) => {
-    if (e.target.closest('.tb-popup,.tb-panel')) return;
+    if (e.target.closest('.tb-popup,.tb-panel,.tb-lane')) return;
     const elx = e.target.closest('[data-tb-anchor]');
     if (!elx) return;
     // text selected within this element → pin the phrase (range); else comment the block.
@@ -763,7 +815,7 @@ export function attachPanel(core, options = {}) {
     openPopup({ anchorLabel: anchorLabelOf(anchor), existing: [], draftKey: anchorKey(anchor), threadKey: threadKeyOf({ anchor }), onSave: (body, reaction) => core.addComment({ anchor, body, reaction, snapshot }) }, e);
   };
   const onContext = (e) => {
-    if (e.target.closest('.tb-popup,.tb-panel')) return;
+    if (e.target.closest('.tb-popup,.tb-panel,.tb-lane')) return;
     // right-click ON an anchor (badge / region pin) → the anchor context menu (Delete anchor), not a new
     // comment gesture. The anchor carries its comments via `__tbComments` (set in renderMarks).
     const anchorEl = e.target.closest('.tb-badge,.tb-pin');
@@ -890,7 +942,7 @@ export function attachPanel(core, options = {}) {
 
   const onPointerDown = (e) => {
     // never start a gesture on Tackback's own UI (popup/panel).
-    if (e.target.closest('.tb-popup,.tb-panel')) return;
+    if (e.target.closest('.tb-popup,.tb-panel,.tb-lane')) return;
     // LEFT button on a region's anchor pin → move; on its hover-revealed NW grip → resize (REQ-008).
     // Right-drag is reserved for CREATING a region, so move/resize is left-only. A left-click that does
     // NOT drag falls through to the pin/box onclick → open thread (a no-movement handleDrag is a no-op).
@@ -927,9 +979,11 @@ export function attachPanel(core, options = {}) {
     const firstCovered = (capture.covered || []).find((c) => c.in);
     let aEl = (firstCovered && doc.getElementById(firstCovered.in)) || null;
     if (!aEl || !aEl.id) {
+      // elementFromPoint can land on Tackback's own fixed chrome (panel, popup, lane) rather than on
+      // the content the region is over; anchoring a region to the chrome would be nonsense.
       const p = doc.elementFromPoint(Math.max(0, Math.min(ctlx, (doc.documentElement.clientWidth || ctlx) - 1)),
                                      Math.max(0, Math.min(ctly, (doc.documentElement.clientHeight || ctly) - 1)));
-      aEl = (p && p.closest('[id]')) || aEl;
+      aEl = (p && !p.closest('.tb-panel,.tb-popup,.tb-lane') && p.closest('[id]')) || aEl;
     }
     if (!aEl || !aEl.id) return null;
     const eR = aEl.getBoundingClientRect();
@@ -1041,7 +1095,17 @@ export function attachPanel(core, options = {}) {
   let ro = null;
   if (typeof globalThis.ResizeObserver === 'function') { ro = new globalThis.ResizeObserver(queueRecalc); try { ro.observe(root); } catch { /* ignore */ } }
   const vv = globalThis.visualViewport || null;
-  if (vv) { vv.addEventListener('resize', queueRecalc); vv.addEventListener('scroll', queueRecalc); }
+  // A software keyboard shrinks the visual viewport without moving the layout viewport, so a fixed
+  // bar would sit behind it. Follow the visual viewport's bottom edge instead.
+  const placeLane = () => {
+    if (!lane || !vv) return;
+    const hidden = Math.max(0, (globalThis.innerHeight || 0) - (vv.height + vv.offsetTop));
+    lane.style.bottom = `calc(16px + env(safe-area-inset-bottom, 0px) + ${Math.round(hidden)}px)`;
+  };
+  if (vv) {
+    vv.addEventListener('resize', queueRecalc); vv.addEventListener('scroll', queueRecalc);
+    vv.addEventListener('resize', placeLane); vv.addEventListener('scroll', placeLane);
+  }
   win.addEventListener?.('resize', queueRecalc);
 
   // ---- wire to core + initial render -----------------------------------------------------------
@@ -1058,7 +1122,7 @@ export function attachPanel(core, options = {}) {
       const cs = node.__tbComments;
       if (cs) node.classList.toggle('tb-attn', cs.some((c) => core.hasAttention(c.id)));
     });
-    refreshDocBtn();   // the document thread's "mark" is the panel control
+    refreshLane();   // the document thread's "mark" is the panel control
   }
   const offAttention = core.on('attention:change', syncAttention);
   const offTransport = core.on('transport:change', () => popupRelabel?.());   // Save ⇄ Send, live
@@ -1075,18 +1139,20 @@ export function attachPanel(core, options = {}) {
     setLocale(lang) { const ok = i18n.setLocale(lang); relabel(); return ok; },
     registerLocale(lang, bundle) { i18n.register(lang, bundle); },
     toggleMarks() { doc.documentElement.classList.toggle('tb-hide'); },
-    /** Open the conversation about the document as a whole (the `docThread` control's action). */
+    /** Open the conversation about the document as a whole — the lane when it is on, else a Pane. */
     openDocumentThread() { openDocumentThread(); },
+    /** Expand or collapse the document lane. Returns its resulting state (false when it is off). */
+    toggleDocumentLane(force) { return toggleLane(force); },
     destroy() {
       offChange(); offRecalc(); offAttention(); offTransport(); offReady(); offDocSurface();
       doc.removeEventListener('contextmenu', onContext); doc.removeEventListener('contextmenu', onCtxPdf);
       doc.removeEventListener('pointerdown', onPointerDown); doc.removeEventListener('pointermove', onMove); doc.removeEventListener('pointerup', onUp); doc.removeEventListener('pointercancel', onCancel);
       doc.removeEventListener('lostpointercapture', finalizeFromCaptureLoss); win.removeEventListener?.('blur', finalizeFromCaptureLoss);
       if (ro) try { ro.disconnect(); } catch { /* ignore */ }
-      if (vv) { vv.removeEventListener('resize', queueRecalc); vv.removeEventListener('scroll', queueRecalc); }
+      if (vv) { vv.removeEventListener('resize', queueRecalc); vv.removeEventListener('scroll', queueRecalc); vv.removeEventListener('resize', placeLane); vv.removeEventListener('scroll', placeLane); }
       win.removeEventListener?.('resize', queueRecalc);
       if (mql && applyAutoTheme) mql.removeEventListener('change', applyAutoTheme);
-      closePopup(); closeAnchorMenu(); panel.remove(); styleEl.remove(); themeStyleEl.remove();
+      closePopup(); closeAnchorMenu(); panel.remove(); lane?.remove(); styleEl.remove(); themeStyleEl.remove();
       clearHighlights(win);
       doc.querySelectorAll('.tb-badge,.tb-pin,.tb-region,.tb-pending,.tb-ctxmenu').forEach((e) => e.remove());
     },
@@ -1097,7 +1163,9 @@ export function attachPanel(core, options = {}) {
     if (exportBtn) exportBtn.textContent = t('panel.export');
     if (marksBtn) marksBtn.textContent = t('panel.toggleMarks');
     if (clearBtn) clearBtn.textContent = t('panel.clearAll');
-    refreshDocBtn();
+    if (laneTitle) laneTitle.textContent = t('panel.docLane');
+    laneConv?.relabel();
+    refreshLane();
     if (themeBtn) themeBtn.textContent = themeLabel();
     hintEl.textContent = core.surfaces.size ? t('hint.pdf') : t('hint.html');
     popupRelabel?.();   // an open popup follows the locale change live

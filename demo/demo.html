@@ -64,7 +64,7 @@
   .pdf-tools button { font: inherit; cursor: pointer; padding: .2rem .55rem; border: 1px solid var(--tb-border, #bbb);
     background: transparent; color: inherit; border-radius: 6px; }
   /* the "Try it" bar — these are DEMO-page controls, separate from the Tackback panel itself */
-  .trybar { position: fixed; left: 16px; bottom: 16px; z-index: 9998; display: flex; flex-wrap: wrap;
+  .trybar { position: fixed; left: 16px; bottom: 16px; z-index: 9997;   /* under the document lane */ display: flex; flex-wrap: wrap;
     gap: 6px; align-items: center; background: var(--tb-popup-bg, #fff); color: var(--tb-popup-fg, #111);
     border: 1px solid var(--tb-border, #ccc); border-radius: 10px; padding: 8px 10px;
     box-shadow: 0 4px 16px rgba(0,0,0,.18); font: 12px system-ui; max-width: min(46vw, 420px); }
@@ -91,8 +91,8 @@
       is not part of Tackback: it drives the <strong>options an integrator passes in</strong>, so you can
       see what is customizable and what each one changes — the colour scheme, the reaction set, the
       language, which panel buttons are shown, and whether a transport is attached (<em>Save</em> vs
-      <em>Send</em>). The panel also has <strong>🗒 About this document</strong>: a thread about the whole
-      document rather than any place in it. (This box is a text block too — try commenting it.)</p>
+      <em>Send</em>). The bar across the <strong>bottom</strong> — <strong>🗒 About this document</strong> — is a thread
+      about the whole document rather than any place in it: type straight into it, or open it to read. (This box is a text block too — try commenting it.)</p>
   </aside>
 
   <h2>What it is</h2>
@@ -155,7 +155,7 @@
       <tr><td>Colors</td><td><code>--tb-*</code> tokens (a partial map layers on the OS base) + <code>actorColors</code> per participant category</td><td>auto light/dark, no categories</td></tr>
       <tr><td>Reactions</td><td>id + icon + per-locale label, fully replaceable set</td><td>question / agree / …</td></tr>
       <tr><td>Language</td><td><code>setLocale()</code> at runtime; bring your own bundle</td><td>English, ja shipped</td></tr>
-      <tr><td>Panel controls</td><td><code>controls: { author, export, import, theme, marks, clear, docThread }</code> chooses visible buttons</td><td>all shown except <code>import</code></td></tr>
+      <tr><td>Panel controls</td><td><code>controls: { author, export, import, theme, marks, clear, docLane }</code> chooses what renders</td><td>all shown except <code>import</code></td></tr>
     </tbody>
   </table>
   <p>The bottom-left bar drives all of it live, one axis at a time: <b>Colors</b> re-skins the
@@ -342,9 +342,9 @@
   // …and clear that flag when the thread is actually opened. Again: the library has no notion of
   // "read" — the integrator decides when the notice has served its purpose.
   document.addEventListener('click', (e) => {
-    // the document thread has no mark on the page — its mark is the panel control, so opening it
-    // has to clear the notice the same way opening an anchored thread does.
-    if (e.target.closest?.('.tb-docbtn')) {
+    // the document thread's mark is the lane itself, so expanding it has to clear the notice the
+    // same way opening an anchored thread does.
+    if (e.target.closest?.('.tb-lane')) {
       tb.listComments().forEach((c) => { if (c.anchor.type === 'document') tb.setAnchorAttention(c.id, false); });
       return;
     }
