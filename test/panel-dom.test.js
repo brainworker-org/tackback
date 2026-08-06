@@ -38,7 +38,8 @@ function fakeElement(doc, tag) {
   const classes = new Set();
   let text = '';
   const el = {
-    tagName: tag.toUpperCase(), ownerDocument: doc, children, style: {}, parentNode: null,
+    tagName: tag.toUpperCase(), ownerDocument: doc, children, parentNode: null,
+    style: (() => { const st = {}; st.setProperty = (k, v) => { st[k] = v; }; st.getPropertyValue = (k) => st[k] ?? ''; return st; })(),
     listeners: {},
     classList: {
       add: (...c) => c.forEach((x) => classes.add(x)),
@@ -130,16 +131,20 @@ globalThis.getComputedStyle = () => ({ position: 'relative' });
 /** Mount a core + panel on a fresh fake document. Returns everything a test needs to drive it. */
 function mountPanel({ comments = [], controls } = {}) {
   const doc = fakeDoc();
-  const root = fakeElement(doc, 'div');
-  doc.body.appendChild(root);
+  // mount on the body, as a page with no explicit root does — that is what puts the lane INSIDE the
+  // gesture root, which is the only geometry in which the lane's gesture guard can be exercised.
+  const root = doc.body;
   // a storage adapter that seeds the store WITHOUT validation — the path a persisted comment takes
   const storage = { load: () => ({ comments }), save: () => {} };
   const core = Tackback.mount({ document: { id: 'panel-fixture' }, storage, root });
   const panel = attachPanel(core, { root, target: doc.body, ...(controls ? { controls } : {}) });
   const restore = () => {};
-  const docBtn = () => doc.querySelector('.tb-docbtn');
+  const lane = () => doc.querySelector('.tb-lane');
+  const laneHead = () => lane()?.querySelector('.tb-lane-head') || null;
+  const laneCount = () => lane()?.querySelector('.tb-lane-count')?.textContent ?? null;
+  const laneOpen = () => !!lane()?.classList.contains('tb-open');
   const badges = () => doc.querySelectorAll('.tb-badge,.tb-pin');
-  return { doc, root, core, panel, docBtn, badges, restore };
+  return { doc, root, core, panel, lane, laneHead, laneCount, laneOpen, badges, restore };
 }
 
 const docComment = (over = {}) => ({
@@ -149,50 +154,107 @@ const docComment = (over = {}) => ({
 
 // ---- the document thread's entry point ---------------------------------------------------------
 
-test('panel: the document thread control is shown by default and opens the thread', () => {
+test('panel: the document lane is present by default and expands to the thread', () => {
   const f = mountPanel();
   try {
-    assert.ok(f.docBtn(), 'a thread with no mark on the page must still be reachable');
+    assert.ok(f.lane(), 'a thread about no particular place still needs somewhere to live');
+    assert.equal(f.laneOpen(), false, 'collapsed until asked for');
     f.core.addComment({ anchor: { type: 'document' }, body: 'hello' });
-    f.docBtn().click();
-    const popup = f.doc.querySelector('.tb-popup');
-    assert.ok(popup, 'the control opens the Pane');
-    assert.match(popup.querySelector('.tb-anchor').textContent, /this document/);
-    assert.equal(popup.querySelectorAll('.tb-c').length, 1, 'and it shows the document thread');
+    f.laneHead().click();
+    assert.equal(f.laneOpen(), true);
+    assert.equal(f.lane().querySelectorAll('.tb-c').length, 1, 'and it holds the document thread');
+    f.laneHead().click();
+    assert.equal(f.laneOpen(), false, 'and collapses again');
   } finally { f.restore(); }
 });
 
-test('panel: hiding the control does not remove the capability', () => {
-  const f = mountPanel({ controls: { docThread: false } });
+test('panel: the lane composes into the document thread, no popup involved', () => {
+  const f = mountPanel();
   try {
-    assert.equal(f.docBtn(), null, 'the control is gone');
+    f.laneHead().click();
+    const ta = f.lane().querySelector('textarea');
+    ta.value = 'about the whole thing'; ta.dispatchEvent({ type: 'input' });
+    f.lane().querySelector('.tb-save').click();
+    assert.equal(f.core.listComments().length, 1);
+    assert.equal(f.core.listComments()[0].anchor.type, 'document');
+    assert.equal(f.doc.querySelector('.tb-popup'), null, 'the lane is its own surface');
+    assert.equal(f.laneOpen(), true, 'and committing does not dismiss it');
+  } finally { f.restore(); }
+});
+
+test('panel: with the lane off the thread is still reachable, as a Pane', () => {
+  const f = mountPanel({ controls: { docLane: false } });
+  try {
+    assert.equal(f.lane(), null, 'the lane is gone');
     f.core.addComment({ anchor: { type: 'document' }, body: 'still reachable' });
     f.panel.openDocumentThread();
-    assert.ok(f.doc.querySelector('.tb-popup'), 'openDocumentThread() still opens it');
+    const popup = f.doc.querySelector('.tb-popup');
+    assert.ok(popup, 'openDocumentThread() falls back to an ordinary Pane');
+    assert.equal(popup.querySelectorAll('.tb-c').length, 1);
   } finally { f.restore(); }
 });
 
-test('panel: the control carries the count a badge would — replies included', () => {
+test('panel: the lane head carries the count a badge would — replies included', () => {
   const f = mountPanel();
   try {
-    const before = f.docBtn().textContent;
-    assert.ok(!before.includes('💬'), 'no count while the thread is empty');
+    assert.equal(f.laneCount(), '', 'no count while the thread is empty');
     const c = f.core.addComment({ anchor: { type: 'document' }, body: 'q' });
-    assert.match(f.docBtn().textContent, /💬1/);
+    assert.equal(f.laneCount(), '💬1');
     f.core.addReply(c.id, { body: 'a', author: { id: 'other', kind: 'ai' } });
-    assert.match(f.docBtn().textContent, /💬2/, 'an answer moves the number, as it does on a badge');
+    assert.equal(f.laneCount(), '💬2', 'an answer moves the number, as it does on a badge');
   } finally { f.restore(); }
 });
 
-test('panel: the control wears the attention tint, and drops it when cleared', () => {
+test('panel: the lane wears the attention tint, and drops it when cleared', () => {
   const f = mountPanel();
   try {
     const c = f.core.addComment({ anchor: { type: 'document' }, body: 'q' });
-    assert.equal(f.docBtn().classList.contains('tb-attn'), false);
+    assert.equal(f.lane().classList.contains('tb-attn'), false);
     f.core.setAnchorAttention(c.id, true);
-    assert.equal(f.docBtn().classList.contains('tb-attn'), true, 'the control is this thread\'s mark');
+    assert.equal(f.lane().classList.contains('tb-attn'), true, 'the lane is this thread\'s mark');
     f.core.setAnchorAttention(c.id, false);
-    assert.equal(f.docBtn().classList.contains('tb-attn'), false);
+    assert.equal(f.lane().classList.contains('tb-attn'), false);
+  } finally { f.restore(); }
+});
+
+test('panel: a right-DRAG beginning on the lane starts no gesture', () => {
+  // A bar fixed across the bottom sits over the content root, so without a guard a right-drag
+  // beginning on it draws a region anchored to nothing anyone pointed at. The drag must be complete:
+  // a lone pointerdown draws nothing regardless, so asserting on it proves nothing about the guard.
+  const f = mountPanel();
+  try {
+    const fire = (type, over, x, y, buttons) =>
+      over.dispatchEvent({ type, button: 2, buttons, clientX: x, clientY: y, pointerId: 1 });
+    fire('pointerdown', f.laneHead(), 10, 10, 2);
+    fire('pointermove', f.doc.body, 90, 70, 2);     // well past the drag threshold
+    fire('pointerup', f.doc.body, 90, 70, 0);
+    assert.equal(f.doc.querySelectorAll('.tb-draw').length, 0, 'no draft rectangle');
+    assert.equal(f.doc.querySelector('.tb-popup'), null, 'and no popup was opened either');
+    assert.equal(f.core.listComments().length, 0, 'and nothing was committed');
+  } finally { f.restore(); }
+});
+
+test('panel: the same drag beginning on the CONTENT does start one', () => {
+  // the counterpart, so the test above is known to be measuring the guard rather than a fixture
+  // that could never have produced a draft in the first place.
+  const f = mountPanel();
+  try {
+    const p = f.doc.createElement('p'); p.id = 'para'; p.textContent = 'content';
+    f.root.appendChild(p);
+    const fire = (type, over, x, y, buttons) =>
+      over.dispatchEvent({ type, button: 2, buttons, clientX: x, clientY: y, pointerId: 2 });
+    fire('pointerdown', p, 10, 10, 2);
+    fire('pointermove', p, 90, 70, 2);
+    assert.equal(f.doc.querySelectorAll('.tb-draw').length, 1, 'a drag over content does draw one');
+  } finally { f.restore(); }
+});
+
+test('panel: destroy() takes the lane with it', () => {
+  const f = mountPanel();
+  try {
+    assert.ok(f.lane());
+    f.panel.destroy();
+    assert.equal(f.lane(), null, 'no chrome outlives the panel that owns it');
   } finally { f.restore(); }
 });
 
@@ -237,23 +299,23 @@ test('panel: a control click reaches a page-level listener, so a clear-on-open p
     f.core.setAnchorAttention(c.id, true);
     let sawControlClick = false;
     f.doc.addEventListener('click', (e) => {
-      if (e.target.closest?.('.tb-docbtn')) {
+      if (e.target.closest?.('.tb-lane')) {
         sawControlClick = true;
         f.core.listComments().forEach((x) => { if (x.anchor.type === 'document') f.core.setAnchorAttention(x.id, false); });
       }
     });
-    f.docBtn().click();
+    f.laneHead().click();
     assert.equal(sawControlClick, true, 'the click reached the page-level listener');
     assert.equal(f.core.hasAttention(c.id), false, 'so the page could clear its own notice');
-    assert.equal(f.docBtn().classList.contains('tb-attn'), false, 'and the control drops the tint');
+    assert.equal(f.lane().classList.contains('tb-attn'), false, 'and the lane drops the tint');
   } finally { f.restore(); }
 });
 
 test('panel: an open Pane follows the transport when it changes underneath it', () => {
-  const f = mountPanel();
+  const f = mountPanel({ controls: { docLane: false } });
   try {
     f.core.addComment({ anchor: { type: 'document' }, body: 'q' });
-    f.docBtn().click();
+    f.panel.openDocumentThread();
     const save = () => f.doc.querySelector('.tb-save');
     assert.equal(save().textContent, 'Save', 'no transport attached yet');
     f.core.setTransport({ interactive: true });
@@ -266,10 +328,10 @@ test('panel: an open Pane follows the transport when it changes underneath it', 
 test('panel: a transport change moves close-vs-stay-open too, not just the label', () => {
   // relabelling alone would pass the test above while the commit still closed a conversation, or
   // left a note-taking Pane open — the label is the visible half of one policy.
-  const f = mountPanel();
+  const f = mountPanel({ controls: { docLane: false } });
   try {
     f.core.addComment({ anchor: { type: 'document' }, body: 'seed' });
-    f.docBtn().click();                                  // opened with NO transport → Save + close
+    f.panel.openDocumentThread();                        // opened with NO transport → Save + close
     f.core.setTransport({ interactive: true });          // …now a conversation
     const ta = f.doc.querySelector('.tb-popup').querySelector('textarea');
     ta.value = 'first'; ta.dispatchEvent({ type: 'input' });
@@ -287,9 +349,9 @@ test('panel: a transport change moves close-vs-stay-open too, not just the label
 test('panel: Cmd/Ctrl+Enter commits, and only when the button would', () => {
   // this binding was silently dropped during the conversation-view extraction and no test noticed,
   // which is the whole argument for pinning it here.
-  const f = mountPanel();
+  const f = mountPanel({ controls: { docLane: false } });
   try {
-    f.docBtn().click();
+    f.panel.openDocumentThread();
     const ta = f.doc.querySelector('.tb-popup').querySelector('textarea');   // the fixture matches simple selectors only
     const send = (mods) => ta.dispatchEvent({ type: 'keydown', key: 'Enter', ...mods });
     send({ metaKey: true });
@@ -300,5 +362,92 @@ test('panel: Cmd/Ctrl+Enter commits, and only when the button would', () => {
     send({ metaKey: true });
     assert.equal(f.core.listComments().length, 1, 'Cmd+Enter commits');
     assert.equal(f.core.listComments()[0].body, 'typed');
+  } finally { f.restore(); }
+});
+
+// --- what a host that never dies needs, and the popup never did ---------------------------------
+
+test('lane: a local Save clears the composer instead of leaving it loaded', () => {
+  // the popup got away with skipping the reset because it was about to be destroyed. A host that
+  // stays kept the committed text in an enabled box, ready to be sent a second time.
+  const f = mountPanel();
+  try {
+    const ta = f.lane().querySelector('textarea');
+    const save = f.lane().querySelector('.tb-save');
+    ta.value = 'said once'; ta.dispatchEvent({ type: 'input' });
+    save.click();
+    assert.equal(f.core.listComments().length, 1);
+    assert.equal(ta.value, '', 'the composer is empty again');
+    assert.equal(save.disabled, true, 'and cannot re-send what was already sent');
+    save.click();
+    assert.equal(f.core.listComments().length, 1, 'so a second click commits nothing');
+  } finally { f.restore(); }
+});
+
+test('lane: a deleted comment loses its row, not just its place in the count', () => {
+  // reconciliation was insertion-only. The popup survived that because every destructive path
+  // closes it first; a persistent host would have shown the comment forever.
+  const f = mountPanel();
+  try {
+    const c = f.core.addComment({ anchor: { type: 'document' }, body: 'to be removed' });
+    f.laneHead().click();
+    assert.equal(f.lane().querySelectorAll('.tb-c').length, 1);
+    f.core.deleteComment(c.id);
+    assert.equal(f.lane().querySelectorAll('.tb-c').length, 0, 'the row goes with the comment');
+    assert.equal(f.laneCount(), '', 'and so does the count');
+  } finally { f.restore(); }
+});
+
+test('lane: it follows a transport change, like any other conversation on screen', () => {
+  // the panel used to fan out to a single slot that only an open popup ever filled, so a second
+  // host silently kept whatever policy it was built with.
+  const f = mountPanel();
+  try {
+    const save = () => f.lane().querySelector('.tb-save');
+    assert.equal(save().textContent, 'Save');
+    f.core.setTransport({ interactive: true });
+    assert.equal(save().textContent, 'Send', 'the lane relabels too, not just a popup');
+    f.core.setTransport(null);
+    assert.equal(save().textContent, 'Save');
+  } finally { f.restore(); }
+});
+
+test('lane: it re-tints when the participant colour map changes', () => {
+  const f = mountPanel();
+  try {
+    f.core.addComment({ anchor: { type: 'document' }, body: 'x', author: { id: 'a', kind: 'ai' } });
+    f.laneHead().click();
+    const row = () => f.lane().querySelector('.tb-c');
+    f.panel.setActorColors({ ai: '#123456' });
+    assert.match(row().style.borderLeft, /#123456/, 'existing rows follow the new map');
+    f.panel.setActorColors({ ai: '#654321' });
+    assert.match(row().style.borderLeft, /#654321/);
+  } finally { f.restore(); }
+});
+
+test('lane: its entry point is a real button, and announces whether it is expanded', () => {
+  // the control it replaced was a <button>; focusability, Enter/Space and the announced state come
+  // with the element rather than having to be rebuilt on a div.
+  const f = mountPanel();
+  try {
+    const head = f.laneHead();
+    assert.equal(head.tagName, 'BUTTON');
+    assert.equal(head.getAttribute('type'), 'button');
+    assert.equal(head.getAttribute('aria-expanded'), 'false');
+    head.click();
+    assert.equal(head.getAttribute('aria-expanded'), 'true');
+    head.click();
+    assert.equal(head.getAttribute('aria-expanded'), 'false');
+  } finally { f.restore(); }
+});
+
+test('lane: a host\'s own right-side reservation is not overwritten by the panel measurement', () => {
+  // the two reservations are added, not merged: writing the measured panel width into the PUBLIC
+  // property would silently discard whatever the host declared, while the docs promise it works.
+  const f = mountPanel();
+  try {
+    const style = f.lane().style;
+    assert.ok(style['--tb-panel-reserve'], 'the panel measurement is published…');
+    assert.equal(style['--tb-lane-right'], undefined, '…and never as the host-facing property');
   } finally { f.restore(); }
 });

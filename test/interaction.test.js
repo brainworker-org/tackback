@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { classifyGesture, popupCommit, canCommit, nextSendState, answersSend, handleAt, applyHandleDrag } from '../src/panel/interaction.js';
+import { classifyGesture, popupCommit, canCommit, nextSendState, answersSend, handleAt, applyHandleDrag, resolveLaneLayout } from '../src/panel/interaction.js';
 
 // ---- REQ-006: gesture = right-drag>threshold → region; below → selection→range / none→block --------
 
@@ -115,4 +115,40 @@ test('applyHandleDrag: a resize below min-size (toward zero area) is REJECTED (n
   assert.equal(applyHandleDrag(rect, 'se', -0.4, -0.4, 0.01), null);
   // a legitimate small-but-above-min resize is allowed
   assert.ok(applyHandleDrag(rect, 'se', -0.35, -0.35, 0.01));
+});
+
+// ---- the document lane's placement, which has to survive a host that answers back ---------------
+
+test('resolveLaneLayout: beside when it is wide enough to type into, above when it is not', () => {
+  assert.deepEqual(resolveLaneLayout(() => 600), { stacked: false, width: 600, fits: true });
+  const roomyAbove = (stacked) => (stacked ? 680 : 120);
+  assert.deepEqual(resolveLaneLayout(roomyAbove), { stacked: true, width: 680, fits: true });
+});
+
+test('resolveLaneLayout: a host that answers back cannot make it flicker', () => {
+  // the reason each candidate is measured under its OWN state: a host moves its bottom chrome out
+  // of the way when told the lane stacked, so "beside" is narrow while the host is there and roomy
+  // once it has gone. Deciding from a single measurement gives a good frame and a flicker after it.
+  const answersBack = (stacked) => (stacked ? 700 : 120);
+  const a = resolveLaneLayout(answersBack);
+  const b = resolveLaneLayout(answersBack);
+  const c = resolveLaneLayout(answersBack);
+  assert.deepEqual(a, b); assert.deepEqual(b, c);
+  assert.equal(a.stacked, true, 'and it settles on the state that is actually usable');
+});
+
+test('resolveLaneLayout: it asks about beside first, and only asks about above when it has to', () => {
+  const asked = [];
+  resolveLaneLayout((stacked) => { asked.push(stacked); return 600; });
+  assert.deepEqual(asked, [false], 'a roomy beside is not second-guessed');
+  asked.length = 0;
+  resolveLaneLayout((stacked) => { asked.push(stacked); return stacked ? 600 : 100; });
+  assert.deepEqual(asked, [false, true], 'and each candidate is measured exactly once');
+});
+
+test('resolveLaneLayout: when nothing fits, it says so and takes the wider state anyway', () => {
+  const cramped = () => 100;
+  const r = resolveLaneLayout(cramped, { min: 320 });
+  assert.equal(r.stacked, true, 'above is never narrower than beside');
+  assert.equal(r.fits, false, 'and the caller is told it did not fit');
 });

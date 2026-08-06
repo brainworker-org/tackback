@@ -51,7 +51,7 @@ import { attachPanel } from '@brainworker/tackback/panel';
 const tb = Tackback.mount({ document: { id: 'my-doc', title: 'Design notes' } });
 attachPanel(tb, {
   theme: 'auto', locale: 'en',        // theming / reactions / i18n are all customizable
-  controls: { docThread: true },      // pick which panel buttons show; all but `import` are on by default
+  controls: { docLane: true },        // pick which controls show; all but `import` are on by default
 });
 ```
 
@@ -74,10 +74,16 @@ attachPanel(tb, {
 - **range** — a text phrase, stored as a W3C `TextQuoteSelector` (exact + prefix/suffix + offset).
   Re-resolves across edits/reflow; on drift it **fails loud** (`anchor:orphaned`) and never silently
   re-points. Painted via the CSS Custom Highlight API (no DOM mutation).
-- **document** — the document *as a whole*, rather than any place inside it. It has no coordinates
-  and no badge on the page: it is opened from the panel (`controls: { docThread }`, on by default, or
-  `panel.openDocumentThread()`), and behaves like every other thread once open — same timeline, same
-  participants, same Save/Send. One per instance.
+- **document** — the document *as a whole*, rather than any place inside it. It has no coordinates and
+  no badge, because there is nowhere on the page that means "all of this". It lives in a **lane**: a bar
+  across the bottom of the viewport with a composer you can type into without opening anything, which
+  expands to show the thread (`controls: { docLane }`, on by default; `panel.toggleDocumentLane()`).
+  The lane floats — it never shifts the host's layout. It sits beside the panel when there is room to
+  do so and still be worth typing into, and moving above it and taking the available width — up to its own
+  maximum — when there is not. Which of the two applies is measured, not guessed at a breakpoint. A host with its own bottom chrome tells the lane where it
+  may sit with `--tb-lane-left` / `--tb-lane-right`, and can watch for the `tb-lane-stacked` class on
+  the root element to move out of the way. With the lane off, `panel.openDocumentThread()` opens the
+  same thread as an ordinary Pane. One per instance.
 - **region** — a rectangle over any non-text surface (an image/diagram in a `<figure>`, a marked
   `[data-tb-surface]` element, or a PDF page), stored as a normalized rect, so it is
   **zoom-independent** (overlay = normalized × current surface size). The surface set is configurable
@@ -95,16 +101,16 @@ re-skins and re-labels Tackback without forking it or overriding its CSS:
 - **Colors** — `--tb-*` theme tokens (a partial map layers over the OS light/dark base), plus
   `actorColors` for the participant tints.
 - **Language** — `setLocale()` at runtime; English and Japanese ship, bring your own bundle.
-- **Panel controls** — `controls: { author, export, import, theme, marks, clear, docThread }` chooses
-  which buttons render; every one except `import` is on by default. `docThread` opens the conversation
-  about the document as a whole — the only thread with no mark on the page, so the control is its mark
-  (utterance count + attention tint).
+- **Controls** — `controls: { author, export, import, theme, marks, clear, docLane }` chooses what
+  renders; every one except `import` is on by default. `docLane` is the document thread's own bar
+  across the bottom of the viewport, and doubles as its mark: the utterance count and the attention
+  tint sit on its head, visible without expanding it.
 
-Hiding a button does not hide the *data* behind it, but what remains reachable differs by control:
+Hiding a control does not hide the *data* behind it, but what remains reachable differs:
 
 | control | with the button hidden |
 |---|---|
-| `theme` / `marks` / `docThread` | `panel.setTheme()` / `panel.toggleMarks()` / `panel.openDocumentThread()` |
+| `theme` / `marks` / `docLane` | `panel.setTheme()` / `panel.toggleMarks()` / `panel.openDocumentThread()` (a Pane when the lane is off) |
 | `author` | `core.setAuthor()` — the same state the field edits |
 | `export` / `import` | `core.exportEnvelope()` / `core.importEnvelope()` — the data path; the paste-and-load *dialogs* are the panel's own and have no API form |
 | `clear` | no equivalent. The button is more than a loop over `deleteComment`: it confirms first, closes an open Pane and drops an uncommitted region rect. Drive `core.deleteComment()` yourself and decide those for your UI. |

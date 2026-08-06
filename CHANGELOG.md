@@ -9,10 +9,38 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
 ## [0.9.4] — 2026-08-06
 
 ### Added
+- **The document lane** — the conversation about the document as a whole now lives in a bar across the
+  bottom of the viewport (`controls: { docLane }`, on by default). Its composer is there whether or not
+  the thread is expanded, so you can say something without opening anything; expanding adds the history
+  above it. It is about no particular place, so it has no mark to hang on: the lane doubles as its mark,
+  carrying the utterance count and the attention tint on its head, which is a real button and announces
+  whether it is expanded. It **floats** — the library still never shifts the host's layout — sitting
+  beside the panel when that leaves a lane worth typing into and moving above it and taking the available width, up to its own maximum,
+  when it does not — measured rather than guessed at a breakpoint. A host with its own bottom chrome declares
+  it with `--tb-lane-left` / `--tb-lane-right` and can watch for `tb-lane-stacked` on the root element.
+  `env(safe-area-inset-bottom)` and the visual viewport keep it clear of a home indicator and above a
+  software keyboard.
+- Because a host that never dies has no death to hide behind, three things the popup relied on are now
+  explicit: committing **always** resets the composer and dismissal is the host's own decision;
+  reconciliation **removes** rows for utterances that left the thread, not only adds new ones; and every
+  conversation on screen — not just an open popup — follows a transport change, a locale change and a
+  new participant colour map.
+- **`panel.toggleDocumentLane(force?)`** — expand or collapse it; returns the resulting state.
 - **`transport:change`** — `setTransport` now announces a real change of descriptor. A UI that decides
   "Save or Send" when it opens went stale the moment the descriptor moved; an open Pane re-derives, so
   both the button and close-vs-stay-open follow. Equality is by descriptor *field*, so re-setting the
   same descriptor — in any property order — stays quiet. The core still transports nothing.
+
+### Changed
+- **`controls.docThread` is replaced by `controls.docLane`.** 0.9.3 reached the document thread from a
+  button in the panel; hands-on use said it belongs at the bottom of the screen instead, so the button
+  is gone rather than duplicated. `panel.openDocumentThread()` remains, and opens the thread as an
+  ordinary Pane when the lane is switched off. A 0.9.3 integrator passing `docThread: false` now
+  silently has no effect — pass `docLane: false`. The label key `panel.docThread` is likewise
+  `panel.docLane`.
+- Tackback's own chrome is now excluded from region anchoring: a right-press starting on the lane (or
+  the panel, or a popup) begins no gesture, and a document region no longer anchors itself to the
+  chrome its top-left corner happens to land on.
 
 ### Fixed
 - **`popup.send` / `popup.pending` were in neither label bundle.** They reached the screen through
