@@ -15,8 +15,8 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
   above it. It is about no particular place, so it has no mark to hang on: the lane doubles as its mark,
   carrying the utterance count and the attention tint on its head, which is a real button and announces
   whether it is expanded. It **floats** — the library still never shifts the host's layout — sitting
-  beside the panel when that leaves a lane worth typing into and taking the full width above it when it
-  does not, decided by measuring rather than by a breakpoint. A host with its own bottom chrome declares
+  beside the panel when that leaves a lane worth typing into and moving above it and taking the available width, up to its own maximum,
+  when it does not — measured rather than guessed at a breakpoint. A host with its own bottom chrome declares
   it with `--tb-lane-left` / `--tb-lane-right` and can watch for `tb-lane-stacked` on the root element.
   `env(safe-area-inset-bottom)` and the visual viewport keep it clear of a home indicator and above a
   software keyboard.

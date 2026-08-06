@@ -79,8 +79,8 @@ attachPanel(tb, {
   across the bottom of the viewport with a composer you can type into without opening anything, which
   expands to show the thread (`controls: { docLane }`, on by default; `panel.toggleDocumentLane()`).
   The lane floats — it never shifts the host's layout. It sits beside the panel when there is room to
-  do so and still be worth typing into, and takes the full width above it when there is not; that is
-  decided by measuring, not by a breakpoint. A host with its own bottom chrome tells the lane where it
+  do so and still be worth typing into, and moving above it and taking the available width — up to its own
+  maximum — when there is not. Which of the two applies is measured, not guessed at a breakpoint. A host with its own bottom chrome tells the lane where it
   may sit with `--tb-lane-left` / `--tb-lane-right`, and can watch for the `tb-lane-stacked` class on
   the root element to move out of the way. With the lane off, `panel.openDocumentThread()` opens the
   same thread as an ordinary Pane. One per instance.

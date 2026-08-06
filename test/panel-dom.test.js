@@ -440,3 +440,14 @@ test('lane: its entry point is a real button, and announces whether it is expand
     assert.equal(head.getAttribute('aria-expanded'), 'false');
   } finally { f.restore(); }
 });
+
+test('lane: a host\'s own right-side reservation is not overwritten by the panel measurement', () => {
+  // the two reservations are added, not merged: writing the measured panel width into the PUBLIC
+  // property would silently discard whatever the host declared, while the docs promise it works.
+  const f = mountPanel();
+  try {
+    const style = f.lane().style;
+    assert.ok(style['--tb-panel-reserve'], 'the panel measurement is published…');
+    assert.equal(style['--tb-lane-right'], undefined, '…and never as the host-facing property');
+  } finally { f.restore(); }
+});

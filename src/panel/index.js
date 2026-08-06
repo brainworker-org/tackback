@@ -8,7 +8,7 @@ import { DEFAULT_REACTIONS, resolveReaction } from './reactions.js';
 import { LocaleRegistry } from './i18n.js';
 import { indexAnnotatable, resolveAnchorDom, clampToViewport } from './dom.js';
 import { computeCapture, resolveRegionRect } from '../core/resolution.js';
-import { classifyGesture, popupCommit, canCommit, nextSendState, answersSend, applyHandleDrag } from './interaction.js';
+import { classifyGesture, popupCommit, canCommit, nextSendState, answersSend, applyHandleDrag, resolveLaneLayout } from './interaction.js';
 import { actorColorOf as resolveActorColor, claimedColors, authorKey as tbAuthorKey, lastSpeaker } from './actors.js';
 import { threadKeyOf, timelineItems, utteranceCount, planInsertions, anchorLabelSpec } from './thread.js';
 import { documentSurface, DOCUMENT_SURFACE_ID } from '../core/media.js';
@@ -79,7 +79,11 @@ const PANEL_CSS = `
    Tackback can only reserve space for chrome it knows about — its own panel. A host with chrome of
    its own at the bottom sets --tb-lane-left / --tb-lane-right to tell the lane where it may sit. */
 .tb-lane { position: fixed; z-index: 9998;
-  left: var(--tb-lane-left, 16px); right: var(--tb-lane-right, 232px);   /* measured from the panel — see placeLane */
+  left: var(--tb-lane-left, 16px);
+  /* two reservations, added: the HOST's (public, declared on the root) and the panel's (private,
+     measured in placeLane). Writing the measurement into the public one would silently override
+     anything a host declared. */
+  right: calc(var(--tb-lane-right, 16px) + var(--tb-panel-reserve, 0px));
   bottom: calc(16px + env(safe-area-inset-bottom, 0px));
   margin-inline: auto; max-width: 680px;
   box-sizing: border-box;
@@ -101,11 +105,11 @@ const PANEL_CSS = `
 .tb-lane textarea { width: 100%; box-sizing: border-box; min-height: 44px; font: inherit;
   border: 1px solid var(--tb-border); border-radius: 8px; padding: 7px; background: transparent; color: inherit; }
 .tb-lane .tb-anchor { display: none; }   /* the lane's own title already says what it is about */
-/* When there is not enough width to sit BESIDE the panel, the lane goes above it and takes the full
-   width. Which of the two applies is decided by measurement in placeLane, not by a guessed
+/* When there is not enough width to sit BESIDE the panel, the lane goes above it and takes the
+   available width, up to its own maximum. Which of the two applies is decided by measurement in placeLane, not by a guessed
    breakpoint — the panel's width follows its labels, so no fixed number is right for long. A host
    with its own bottom chrome can watch for the tb-lane-stacked class on the root element. */
-.tb-lane.tb-stacked { left: 16px; right: 16px; }
+.tb-lane.tb-stacked { left: var(--tb-lane-left, 16px); right: var(--tb-lane-right, 16px); --tb-panel-reserve: 0px; }
 .tb-popup { position: fixed; z-index: 10000; width: 320px; background: var(--tb-popup-bg); color: var(--tb-popup-fg);
   border: 1px solid var(--tb-border); border-radius: 10px; box-shadow: 0 8px 28px rgba(0,0,0,.35); padding: 11px; font: 13px -apple-system, system-ui, sans-serif; }
 .tb-popup .tb-anchor { font-size: 11px; color: var(--tb-muted); margin-bottom: 4px; }
@@ -1161,10 +1165,12 @@ export function attachPanel(core, options = {}) {
     // own reservation (--tb-lane-left) is part of the answer and this code cannot know it. Lay it
     // out beside, MEASURE, and step above only if what came back is too narrow to use. A 22px
     // composer is not a smaller version of the feature; it is a broken one.
-    lane.classList.remove('tb-stacked');
-    lane.style.setProperty('--tb-lane-right', `${panelW + 32}px`);
-    const beside = lane.getBoundingClientRect().width;
-    const stacked = beside < 320;
+    lane.style.setProperty('--tb-panel-reserve', `${panelW + 16}px`);
+    const { stacked } = resolveLaneLayout((tryStacked) => {
+      lane.classList.toggle('tb-stacked', tryStacked);
+      doc.documentElement.classList.toggle('tb-lane-stacked', tryStacked);
+      return lane.getBoundingClientRect().width;
+    });
     lane.classList.toggle('tb-stacked', stacked);
     doc.documentElement.classList.toggle('tb-lane-stacked', stacked);
     if (stacked) {
@@ -1175,6 +1181,7 @@ export function attachPanel(core, options = {}) {
     } else {
       lane.style.setProperty('--tb-lane-lift', '0px');
     }
+    doc.documentElement.classList.toggle('tb-lane-stacked', stacked);
     if (!vv) { lane.style.bottom = `calc(16px + env(safe-area-inset-bottom, 0px) + var(--tb-lane-lift, 0px))`; return; }
     // a software keyboard shrinks the visual viewport without moving the layout viewport
     const hidden = Math.max(0, (globalThis.innerHeight || 0) - (vv.height + vv.offsetTop));
