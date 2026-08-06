@@ -17,7 +17,11 @@ deletions. Mechanism only, as ever: the library reports what happened and attach
   a thread has more than one surface now, and naming the event after the popup would leave exactly
   one thread invisible to anything watching. Whether opening a thread means it has been *read* is the
   integrator's to decide; the library only says it was shown. The lane's composer being on screen is
-  not the thread being open — expanding is.
+  not the thread being open — expanding is. A surface is reported once its thread can be **addressed**:
+  `anchor` is always present and `threadKey` is never null. A place is addressable before anyone has
+  spoken there, so a Pane over an untouched block opens with `comments: []`; a freshly drawn region,
+  whose identity *is* its first comment, is a draft until that comment commits, and an abandoned one
+  reports nothing at all.
 - **`core.deleteComments(ids)`** — deleting a whole anchor, or clearing a document, is one act.
   Each comment still emits its own `comment:delete`, so nothing listening today changes, but the
   operation emits **`comments:delete`** once and commits once. From N indistinguishable events an
@@ -26,8 +30,11 @@ deletions. Mechanism only, as ever: the library reports what happened and attach
   added, so an integrator polling a server resurrected everything the server had deleted on the next
   sync. The envelope can now say what is gone. The client keeps **no tombstones** — the party that
   knows about a deletion is the one that recorded it, and a list that only grows is not something to
-  make every mounted instance carry. Removals are reported on the same seam as any other deletion,
-  and `importEnvelope` returns how many it applied.
+  make every mounted instance carry. Removals are reported on the same seam as any other deletion —
+  the same `{ id, previous }` payload, with `ids[i]` describing `previous[i]` — and `importEnvelope`
+  returns how many it applied. It is honoured in **`merge` only**: a `replace` already states the whole
+  set, so a tombstone there could only restate it. Envelopes given as a JSON string carry `deleted`
+  exactly as object ones do.
 
 ### Compatibility
 Additive. An envelope without `deleted` behaves exactly as before, `deleteComment` is unchanged, and

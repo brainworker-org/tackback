@@ -250,7 +250,7 @@ class TackbackInstance {
   /** @param {unknown} envelope @param {{mode?:'replace'|'merge',onConflict?:'skip'|'replace'|'keepBoth'}} [opts] */
   importEnvelope(envelope, opts = {}) {
     this._assertWritable();
-    const { comments, document: importedDoc } = parseEnvelope(envelope);
+    const { comments, document: importedDoc, deleted: incomingDeleted } = parseEnvelope(envelope);
     // REQ-204/304 (Z3): if the import names a revisionHash that disagrees with the doc we render
     // against, warn via rev:mismatch but DO NOT refuse — load in drift mode. Text anchors re-resolve
     // at render (DOM-side) and orphan what they cannot (REQ-004); never a silent mis-point. A legacy
@@ -271,22 +271,29 @@ class TackbackInstance {
       throw new TackbackError('IMPORT_INVALID', `replace import has ${dropped} invalid record(s); refusing to clear existing comments`);
     }
     const { diff, result } = this._store.ingest(valid, mode, opts.onConflict || 'skip');
-    // A merge only ever ADDED, so an integrator polling a server's envelope resurrected everything
+    // A MERGE only ever added, so an integrator polling a server's envelope resurrected everything
     // the server had deleted. The envelope can now say what is gone, and merge honours it. The
     // CLIENT keeps no tombstones: the party that knows about a deletion is the one that recorded it,
     // and a list that only grows is not something to make every mounted instance carry.
-    const tombstones = Array.isArray(envelope && envelope.deleted) ? envelope.deleted : [];
-    const gone = [];
+    //
+    // REPLACE ignores them, deliberately. There the incoming `comments` array already IS the whole
+    // state — anything absent from it is gone by definition — so a tombstone can only say the same
+    // thing twice, and applying it after the wipe produced an incoherent diff: an id present in both
+    // arrays was reported added and then removed twice.
+    const tombstones = (mode === 'merge' && Array.isArray(incomingDeleted)) ? incomingDeleted : [];
+    const gone = [], gonePrev = [];
     for (const id of tombstones) {
       if (typeof id !== 'string' || !this._store.has(id)) continue;
       const r = this._store.delete(id);
       this._attention.delete(id);
-      gone.push(id);
+      gone.push(id); gonePrev.push(r.previous);
       diff.removed.push(...r.diff.removed);
     }
     this._commit(diff, 'import');
-    for (const id of gone) this._emitter.emit('comment:delete', { id, previous: null });
-    if (gone.length) this._emitter.emit('comments:delete', { ids: gone, previous: [] });
+    // the same payload every other deletion carries — a listener reading `previous` must not find
+    // that an import is the one path that hands it nothing
+    for (let i = 0; i < gone.length; i++) this._emitter.emit('comment:delete', { id: gone[i], previous: gonePrev[i] });
+    if (gone.length) this._emitter.emit('comments:delete', { ids: gone, previous: gonePrev });
     return { ...result, dropped, deleted: gone.length };
   }
 

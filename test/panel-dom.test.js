@@ -514,3 +514,121 @@ test('thread events: repeated toggles do not double-report', () => {
     assert.equal(open, 1); assert.equal(close, 1);
   } finally { f.restore(); }
 });
+
+test('thread events: every report names the anchor it is about', () => {
+  // The payload's whole job is to let an integrator act on the thread that was shown. `threadKey`
+  // says WHICH, `anchor` says WHERE — and `anchor` was being derived from the comments the surface
+  // happened to be built with, so it was null for every thread that started empty. Which is every
+  // lane, on every open. Asserting two fields out of three is how that survived.
+  const f = mountPanel();
+  try {
+    const opened = [];
+    f.core.on('thread:open', (e) => opened.push(e));
+    f.core.addComment({ anchor: { type: 'document' }, body: 'about all of it' });
+    f.laneHead().click();
+    assert.deepEqual(opened[0].anchor, { type: 'document' }, 'the lane is about the document');
+
+    const p = f.doc.createElement('p'); p.id = 'para'; p.textContent = 'content';
+    f.root.appendChild(p);
+    const c = f.core.addComment({ anchor: { type: 'block', elementId: 'para' }, body: 'here' });
+    f.badges()[0].click();
+    const last = opened[opened.length - 1];
+    assert.equal(last.threadKey, 'block:para');
+    assert.deepEqual(last.anchor, { type: 'block', elementId: 'para' }, 'and a Pane is about its place');
+    assert.deepEqual(last.comments.map((x) => x.id), [c.id]);
+  } finally { f.restore(); }
+});
+
+test('thread events: a draft with no identity yet is not an open thread', () => {
+  // A fresh region has no thread until its first comment exists, so reporting one on the draft told
+  // an integrator a conversation had been shown that it could not address — `threadKey: null` — and,
+  // if the draft was abandoned, nothing ever came into being to close.
+  const f = mountPanel();
+  try {
+    const opened = [], closed = [];
+    f.core.on('thread:open', (e) => opened.push(e));
+    f.core.on('thread:close', (e) => closed.push(e));
+    const p = f.doc.createElement('p'); p.id = 'para2'; p.textContent = 'content';
+    f.root.appendChild(p);
+    const fire = (type, x, y, buttons) =>
+      p.dispatchEvent({ type, button: 2, buttons, clientX: x, clientY: y, pointerId: 7 });
+    fire('pointerdown', 10, 10, 2); fire('pointermove', 90, 70, 2); fire('pointerup', 90, 70, 0);
+    assert.ok(f.doc.querySelector('.tb-popup'), 'the draft surface is up');
+    assert.equal(opened.length, 0, 'but there is no thread to have opened');
+
+    const pop = f.doc.querySelector('.tb-popup');
+    const ta = pop.querySelector('textarea');
+    ta.value = 'about this area'; ta.dispatchEvent({ type: 'input' });
+    pop.querySelector('.tb-save').click();
+    assert.equal(opened.length, 1, 'committing is when the thread comes into being');
+    const c = f.core.listComments()[0];
+    assert.equal(opened[0].threadKey, 'region:' + c.id);
+    assert.equal(opened[0].anchor.type, 'region');
+    assert.equal(closed.length, 1, 'and the Pane that reported it reports its close');
+  } finally { f.restore(); }
+});
+
+test('thread events: an abandoned draft reports nothing at all', () => {
+  const f = mountPanel();
+  try {
+    const seen = [];
+    f.core.on('thread:open', () => seen.push('open'));
+    f.core.on('thread:close', () => seen.push('close'));
+    const p = f.doc.createElement('p'); p.id = 'para3'; p.textContent = 'content';
+    f.root.appendChild(p);
+    const fire = (type, x, y, buttons) =>
+      p.dispatchEvent({ type, button: 2, buttons, clientX: x, clientY: y, pointerId: 8 });
+    fire('pointerdown', 10, 10, 2); fire('pointermove', 90, 70, 2); fire('pointerup', 90, 70, 0);
+    f.doc.querySelector('.tb-popup').querySelector('.tb-cancel').click();
+    assert.deepEqual(seen, [], 'a close for a thread that never opened is worse than no event');
+  } finally { f.restore(); }
+});
+
+test('thread events: destroy closes an expanded lane, and stays quiet for a collapsed one', () => {
+  // Destroy routes a Pane through closePopup(), which reports. The lane it removed directly, so an
+  // integrator holding "this thread is on screen" held it forever.
+  const f = mountPanel();
+  try {
+    const closed = [];
+    f.core.on('thread:close', (e) => closed.push(e));
+    f.panel.toggleDocumentLane(true);
+    f.panel.destroy();
+    assert.equal(closed.length, 1, 'what was on screen has left the screen');
+    assert.equal(closed[0].threadKey, 'document');
+    assert.deepEqual(closed[0].anchor, { type: 'document' });
+  } finally { f.restore(); }
+  const g = mountPanel();
+  try {
+    let n = 0;
+    g.core.on('thread:close', () => n++);
+    g.panel.destroy();   // never expanded — nothing was shown, so nothing closes
+    assert.equal(n, 0);
+  } finally { g.restore(); }
+});
+
+test('thread events: a thread whose identity comes from its PLACE reports at once, empty', () => {
+  // The line is identity, not population. A block/range thread is addressable from its anchor alone,
+  // so a Pane over a place nobody has commented on yet IS an open thread — `comments: []` — and an
+  // integrator can act on it. A region has no address until its first comment, which is the only
+  // case that waits. Without this the two are indistinguishable in the code, and one of them is wrong.
+  const f = mountPanel();
+  try {
+    const opened = [], closed = [];
+    f.core.on('thread:open', (e) => opened.push(e));
+    f.core.on('thread:close', (e) => closed.push(e));
+    const p = f.doc.createElement('p'); p.id = 'fresh'; p.textContent = 'nobody has said anything here';
+    p.setAttribute('data-tb-anchor', '');   // the marker that makes an element commentable
+    f.root.appendChild(p);
+    const fire = (type, x, y, buttons) =>
+      p.dispatchEvent({ type, button: 2, buttons, clientX: x, clientY: y, pointerId: 9 });
+    fire('pointerdown', 20, 20, 2); fire('pointerup', 21, 21, 0);   // a click, not a drag
+    assert.ok(f.doc.querySelector('.tb-popup'), 'a Pane over the block');
+    assert.equal(opened.length, 1);
+    assert.equal(opened[0].threadKey, 'block:fresh');
+    assert.deepEqual(opened[0].anchor, { type: 'block', elementId: 'fresh' });
+    assert.deepEqual(opened[0].comments, [], 'open, and empty, are not in conflict');
+    f.doc.querySelector('.tb-popup').querySelector('.tb-cancel').click();
+    assert.equal(closed.length, 1, 'and every open is matched');
+    assert.equal(closed[0].threadKey, 'block:fresh');
+  } finally { f.restore(); }
+});

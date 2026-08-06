@@ -333,6 +333,7 @@ export function attachPanel(core, options = {}) {
   function buildLaneConversation() {
     laneConv = createConversation({
       anchorLabel: anchorLabelOf({ type: 'document' }),
+      anchor: { type: 'document' },
       // built before the first render, so it starts empty and is filled by the sync that every
       // renderMarks performs — the same path that keeps it current afterwards
       existing: [],
@@ -355,7 +356,7 @@ export function attachPanel(core, options = {}) {
     if (open) { laneConv.sync(); laneConv.focus(); }
     // The lane's composer is always on screen; its THREAD is not. Expanding is what shows the
     // utterances, so that is what a reader has actually been shown.
-    if (open !== was) (open ? core.reportThreadOpened : core.reportThreadClosed).call(core, laneConv.threadInfo());
+    if (open !== was) (open ? laneConv.announceOpen : laneConv.announceClose)();
     return open;
   }
   // The head is the lane's mark: the same utterance count a badge carries, and the same attention
@@ -552,7 +553,7 @@ export function attachPanel(core, options = {}) {
   // The pending region's lifetime IS the popup's: closing the popup (outside-click, Escape, Cancel,
   // empty save) removes the dashed rect, so no orphaned region ever lingers (Keisuke 2026-06-15).
   function closePopup() {
-    if (popupConv) core.reportThreadClosed(popupConv.threadInfo());
+    popupConv?.announceClose();
     popupCleanup?.(); popupCleanup = null; popupConv?.dispose(); popupConv = null; popup?.remove(); popup = null;
     if (pendingRegionEl) { pendingRegionEl.remove(); pendingRegionEl = null; }
     doc.documentElement.classList.remove('tb-popup-open');   // region affordances (resize grip / move cursor) re-enabled
@@ -565,7 +566,7 @@ export function attachPanel(core, options = {}) {
   //
   // The host supplies only what is genuinely its own: how to close, and what to clean up after a
   // commit. Everything a conversation knows about itself stays in here.
-  function createConversation({ anchorLabel, existing, onSave, draftKey, threadKey: initialThreadKey = null,
+  function createConversation({ anchorLabel, anchor = null, existing, onSave, draftKey, threadKey: initialThreadKey = null,
                                 onClose = () => {}, afterCommit = () => {} }) {
   // the thread this Pane belongs to (thread.js). A brand-new region has none until its first
   // comment exists — it is adopted below, on commit.
@@ -756,7 +757,7 @@ export function attachPanel(core, options = {}) {
     // during it was drawn: not the utterance itself, and not an answer an integrator sent
     // synchronously. Syncing here catches both, into the same batch, so the settlement below judges
     // them as if they had arrived like any other. draw() is keyed, so nothing is drawn twice.
-    if (created && threadKey == null) threadKey = threadKeyOf(created);
+    if (created && threadKey == null) { threadKey = threadKeyOf(created); announceOpen(); }
     inFlight = drawnDuringCommit;
     try { sync(); } finally { inFlight = null; }
     if (commit.closeOnCommit) return onClose();   // …and only now is dismissal the host's call
@@ -785,13 +786,22 @@ export function attachPanel(core, options = {}) {
     });
     };
 
-    // what a `thread:*` listener is told. Read at emit time, not captured, because a brand-new
-    // region adopts its identity on first commit.
+    // What a `thread:*` listener is told. Read at emit time rather than captured, because a
+    // brand-new region has no identity until its first commit. The anchor comes from the caller,
+    // which always knows it — deriving it from `existing` gave null for every thread that happened
+    // to be empty, which is every lane and every new comment.
     const threadInfo = () => ({
       threadKey,
-      anchor: (existing && existing[0] && existing[0].anchor) || null,
+      anchor,
       comments: threadKey == null ? [] : core.listComments().filter((c) => threadKeyOf(c) === threadKey),
     });
+    // A surface for a thread that does not exist yet is a draft, not a thread. Announcing it would
+    // tell an integrator a conversation had been shown when there is nothing to have seen — and, if
+    // the draft were abandoned, nothing would ever close. So the report waits for the identity, and
+    // whoever announced an open is the one who announces the close.
+    let announced = false;
+    const announceOpen = () => { if (!announced && threadKey != null) { announced = true; core.reportThreadOpened(threadInfo()); } };
+    const announceClose = () => { if (announced) { announced = false; core.reportThreadClosed(threadInfo()); } };
     const handle = {
       nodes: [anchorEl, ta, rwrap, exwrap, acts],
       threadInfo,
@@ -799,6 +809,7 @@ export function attachPanel(core, options = {}) {
       timeline: exwrap,
       sync, relabel, retint: () => { for (const r of tinted) applyTint(r); },
       preserveDraft, clearDraft,
+      announceOpen, announceClose,
       focus: () => ta.focus(),
       dispose: () => conversations.delete(handle),
     };
@@ -806,12 +817,12 @@ export function attachPanel(core, options = {}) {
     return handle;
   }
 
-  function openPopup({ anchorLabel, existing, onSave, draftKey, threadKey: initialThreadKey = null, ephemeralDraft }, ev) {
+  function openPopup({ anchorLabel, anchor, existing, onSave, draftKey, threadKey: initialThreadKey = null, ephemeralDraft }, ev) {
     closePopup();
     popup = el(doc, 'div', 'tb-popup');
     doc.documentElement.classList.add('tb-popup-open');   // lock region affordances while editing (REQ-008): no resize grip on hover, no move cursor
     const conv = createConversation({
-      anchorLabel, existing, onSave, draftKey, threadKey: initialThreadKey,
+      anchorLabel, anchor, existing, onSave, draftKey, threadKey: initialThreadKey,
       onClose: closePopup,
       // the saved region is now a committed overlay (rendered via `change`); drop the pending draft rect
       afterCommit: () => { if (pendingRegionEl) { pendingRegionEl.remove(); pendingRegionEl = null; } },
@@ -819,7 +830,7 @@ export function attachPanel(core, options = {}) {
     popupConv = conv;
     popup.append(...conv.nodes);
     doc.body.appendChild(popup);
-    core.reportThreadOpened(conv.threadInfo());
+    conv.announceOpen();
     const vw = globalThis.innerWidth || 1024, vh = globalThis.innerHeight || 768;
     const pos = clampToViewport(ev?.clientX ?? 120, ev?.clientY ?? 120, popup.offsetWidth, popup.offsetHeight, vw, vh);
     Object.assign(popup.style, { left: pos.x + 'px', top: pos.y + 'px' });
@@ -837,7 +848,7 @@ export function attachPanel(core, options = {}) {
   }
   function openThread(comments, ev) {
     const a = comments[0].anchor;
-    openPopup({ anchorLabel: anchorLabelOf(a), existing: comments, draftKey: anchorKey(a), threadKey: threadKeyOf(comments[0]), onSave: (body, reaction) => core.addComment({ anchor: a, body, reaction, threadId: comments[0].threadId || (a.type === 'region' || a.type === 'range' ? comments[0].id : undefined) }) }, ev);
+    openPopup({ anchorLabel: anchorLabelOf(a), anchor: a, existing: comments, draftKey: anchorKey(a), threadKey: threadKeyOf(comments[0]), onSave: (body, reaction) => core.addComment({ anchor: a, body, reaction, threadId: comments[0].threadId || (a.type === 'region' || a.type === 'range' ? comments[0].id : undefined) }) }, ev);
   }
   // Open the conversation about the document as a whole. Public on the PanelInstance too, so an
   // integrator that hides the control can still reach the thread — the panel's standing rule is that
@@ -848,6 +859,7 @@ export function attachPanel(core, options = {}) {
     const existing = core.listComments().filter((c) => c.anchor && c.anchor.type === 'document');
     openPopup({
       anchorLabel: anchorLabelOf(a),
+      anchor: a,
       existing,
       draftKey: anchorKey(a),
       threadKey: 'document',
@@ -885,7 +897,7 @@ export function attachPanel(core, options = {}) {
     } else {
       anchor = { type: 'block', elementId: elx.id };
     }
-    openPopup({ anchorLabel: anchorLabelOf(anchor), existing: [], draftKey: anchorKey(anchor), threadKey: threadKeyOf({ anchor }), onSave: (body, reaction) => core.addComment({ anchor, body, reaction, snapshot }) }, e);
+    openPopup({ anchorLabel: anchorLabelOf(anchor), anchor, existing: [], draftKey: anchorKey(anchor), threadKey: threadKeyOf({ anchor }), onSave: (body, reaction) => core.addComment({ anchor, body, reaction, snapshot }) }, e);
   };
   const onContext = (e) => {
     if (e.target.closest('.tb-popup,.tb-panel,.tb-lane')) return;
@@ -1085,7 +1097,7 @@ export function attachPanel(core, options = {}) {
     rectEl.className = 'tb-pending';
     // openPopup clamps {clientX,clientY} into the viewport — a drag that ended below/above the visible
     // area still pops up at the nearest edge (never an invisible popup + a lingering dashed region).
-    openPopup({ anchorLabel: anchorLabelOf(anchor), existing: [], draftKey: anchorKey(anchor), ephemeralDraft: true, onSave: (body, reaction) => core.addComment({ anchor, body, reaction }) }, { clientX, clientY });
+    openPopup({ anchorLabel: anchorLabelOf(anchor), anchor, existing: [], draftKey: anchorKey(anchor), ephemeralDraft: true, onSave: (body, reaction) => core.addComment({ anchor, body, reaction }) }, { clientX, clientY });
     pendingRegionEl = rectEl;
     return true;
   }
@@ -1257,7 +1269,7 @@ export function attachPanel(core, options = {}) {
       if (vv) { vv.removeEventListener('resize', queueRecalc); vv.removeEventListener('scroll', queueRecalc); vv.removeEventListener('resize', placeLane); vv.removeEventListener('scroll', placeLane); }
       win.removeEventListener?.('resize', queueRecalc); win.removeEventListener?.('resize', placeLane);
       if (mql && applyAutoTheme) mql.removeEventListener('change', applyAutoTheme);
-      closePopup(); closeAnchorMenu(); panel.remove(); lane?.remove(); doc.documentElement.classList.remove('tb-lane-stacked'); styleEl.remove(); themeStyleEl.remove();
+      closePopup(); closeAnchorMenu(); laneConv?.announceClose(); panel.remove(); lane?.remove(); doc.documentElement.classList.remove('tb-lane-stacked'); styleEl.remove(); themeStyleEl.remove();
       clearHighlights(win);
       doc.querySelectorAll('.tb-badge,.tb-pin,.tb-region,.tb-pending,.tb-ctxmenu').forEach((e) => e.remove());
     },

@@ -187,12 +187,19 @@ tb.on('attention:change', ({ id, on }) => {/* … */});
 
 ```js
 tb.on('thread:open',  ({ threadKey, anchor, comments }) => {/* it is on screen */});
-tb.on('thread:close', ({ threadKey })                   => {/* it is not */});
+tb.on('thread:close', ({ threadKey, anchor, comments }) => {/* it is not */});
 ```
 
 Both surfaces report: an anchored thread opening as a Pane, and the document thread when its lane is
 expanded. The lane's *composer* being on screen is not the thread being open — expanding is. Whether
 having seen a thread means it has been **read** is yours to decide; the library only says it was shown.
+
+`anchor` is always the thread's own anchor, so you can act on the place without looking anything up,
+and `threadKey` is never null — a surface is reported once the thread it shows can be **addressed**.
+A place can be addressed before anyone has spoken there, so a Pane over an untouched block opens with
+`comments: []`. A freshly drawn region is the one case that cannot: its identity is its first comment,
+so it is a *draft*, not a thread, and its open is reported when that comment commits. Abandon it and
+nothing is reported at all — a close for a thread that never opened is worse than silence.
 
 ```js
 tb.deleteComments([id1, id2]);        // one act → one `comments:delete`, plus the usual per-comment ones
@@ -203,6 +210,10 @@ Deleting a whole anchor is one operation, and says so — from a run of `comment
 cannot tell where one act ended. And a `merge` used to only ever add, so an integrator polling a
 server resurrected everything the server had deleted; an envelope can now carry what is gone. The
 client keeps no tombstones: the party that knows about a deletion is the one that recorded it.
+
+`deleted` is read **in `merge` only**, and a JSON string envelope carries it exactly as an object one
+does. A `replace` already states the whole set — anything the incoming `comments` omits is gone by
+definition — so there a tombstone could only say the same thing twice, and is ignored.
 
 The flag is **session-only**: never persisted, never written into the export envelope, so a per-viewer
 UI state can't leak into a shared file. It lives as long as its comment — deleting or wiping the comment

@@ -218,3 +218,74 @@ test('an envelope without `deleted` behaves exactly as it did before', () => {
   assert.equal(res.deleted, 0);
   assert.equal(tb.listComments().length, 1, 'a merge with nothing to add and nothing to remove is a no-op');
 });
+
+test('importEnvelope: a JSON-STRING envelope carries its tombstones too', () => {
+  // `parseEnvelope` accepts a string, which is how an integrator hands over what a fetch returned.
+  // Reading `deleted` off the caller's original argument instead of the parsed envelope meant the
+  // same envelope removed a comment as an object and silently removed nothing as text — the failure
+  // being invisible in exactly the transport where a server's tombstones actually arrive.
+  const build = () => {
+    const tb = Tackback.mount({ document: { id: 'tombstones-str' }, storage: memoryAdapter() });
+    const gone = tb.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'deleted on the server' });
+    return { tb, gone };
+  };
+  const envelope = (id) => ({ schemaVersion: 1, document: { id: 'tombstones-str' }, comments: [], deleted: [id] });
+
+  const a = build();
+  assert.equal(a.tb.importEnvelope(envelope(a.gone.id), { mode: 'merge' }).deleted, 1);
+  const b = build();
+  const asText = b.tb.importEnvelope(JSON.stringify(envelope(b.gone.id)), { mode: 'merge' });
+  assert.equal(asText.deleted, 1, 'the same envelope, in the form it actually arrives in');
+  assert.equal(b.tb.listComments().length, 0);
+});
+
+test('importEnvelope: a tombstoned comment is reported with the same payload as any other deletion', () => {
+  // "the same seam as any other deletion" is only true if the payload is the same. `previous` is
+  // what a listener needs to undo, or to tell WHICH comment left — an id alone does not say.
+  const tb = Tackback.mount({ document: { id: 'tombstone-payload' }, storage: memoryAdapter() });
+  const one = tb.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'first' });
+  const two = tb.addComment({ anchor: { type: 'block', elementId: 'p2' }, body: 'second' });
+  const singles = [], batches = [];
+  tb.on('comment:delete', (e) => singles.push(e));
+  tb.on('comments:delete', (e) => batches.push(e));
+  tb.importEnvelope({ comments: [], deleted: [one.id, two.id] }, { mode: 'merge' });
+  assert.deepEqual(singles.map((e) => e.id), [one.id, two.id]);
+  assert.deepEqual(singles.map((e) => e.previous && e.previous.body), ['first', 'second'],
+    'each event carries the comment that left, not null');
+  assert.deepEqual(batches[0].ids, [one.id, two.id]);
+  assert.deepEqual(batches[0].previous.map((c) => c.body), ['first', 'second'],
+    'and ids[i] still describes previous[i]');
+});
+
+test('importEnvelope: replace ignores `deleted`, because replace already says what exists', () => {
+  // In replace mode the incoming `comments` array IS the whole state, so a tombstone can only
+  // restate it — and applying one after the wipe produced an incoherent change: an id present in
+  // BOTH arrays was reported added and then removed, twice.
+  const tb = Tackback.mount({ document: { id: 'tombstone-replace' }, storage: memoryAdapter() });
+  const old = tb.addComment({ anchor: { type: 'block', elementId: 'p0' }, body: 'gone by omission' });
+  const survivor = {
+    id: 'c-keep', anchor: { type: 'block', elementId: 'p1' }, body: 'in both arrays',
+    createdAt: '2026-08-06T10:00:00.000Z', author: { id: 'u', kind: 'human' },
+  };
+  const events = [];
+  tb.on('comment:delete', (e) => events.push('delete:' + e.id));
+  tb.on('comments:delete', (e) => events.push('batch:' + e.ids.join(',')));
+  const res = tb.importEnvelope(
+    { schemaVersion: 1, document: { id: 'tombstone-replace' }, comments: [survivor], deleted: [survivor.id, old.id] },
+    { mode: 'replace' },
+  );
+  assert.equal(res.deleted, 0, 'replace removes by omission, and reports it as the replace it is');
+  assert.deepEqual(tb.listComments().map((c) => c.id), [survivor.id],
+    'an id the envelope still lists is present, whatever the tombstones also said');
+  assert.deepEqual(events, [], 'and the wipe is not narrated twice');
+});
+
+test('importEnvelope: a replaced-away comment leaves no attention flag behind', () => {
+  const tb = Tackback.mount({ document: { id: 'replace-attention' }, storage: memoryAdapter() });
+  const c = tb.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'flagged' });
+  tb.setAnchorAttention(c.id, true);
+  assert.equal(tb.hasAttention(c.id), true);
+  tb.importEnvelope({ comments: [], deleted: [c.id] }, { mode: 'replace' });
+  assert.equal(tb.listComments().length, 0, 'omitted from the incoming set, so gone');
+  assert.equal(tb.hasAttention(c.id), false, 'and the flag goes with the comment it was about');
+});
