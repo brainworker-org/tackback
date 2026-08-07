@@ -3,3 +3,6 @@ dist/
 types/
 *.tgz
 .DS_Store
+
+# Local session configuration (absolute paths, machine-specific)
+.claude/

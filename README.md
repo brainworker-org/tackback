@@ -49,11 +49,27 @@ import { Tackback } from '@brainworker/tackback';
 import { attachPanel } from '@brainworker/tackback/panel';
 
 const tb = Tackback.mount({ document: { id: 'my-doc', title: 'Design notes' } });
-attachPanel(tb, {
+const panel = attachPanel(tb, {
   theme: 'auto', locale: 'en',        // theming / reactions / i18n are all customizable
   controls: { docLane: true },        // pick which controls show; all but `import` are on by default
 });
+
+panel.destroy();                      // hands back everything it took, except the ids below
 ```
+
+**One panel per document.** `attachPanel` writes state under a `tb-` namespace on the document root,
+so attaching a second panel to the same document is not supported — call `destroy()` before
+re-attaching. `destroy()` releases everything the panel took: its listeners on the document, window,
+viewport and media queries, its observer, any queued repaint, any pointer capture an unfinished
+gesture held, its nodes, its stylesheets, and the classes it put on your elements. It is idempotent,
+and every method on the panel becomes a no-op afterwards.
+
+One thing it deliberately leaves behind: the **ids** it assigned to elements that had none, and the
+identity marks on region surfaces. Those are how a stored comment finds its place again — a comment
+names its element by id, so removing those would orphan the anchors that depend on them. Everything else
+it wrote onto your elements, including the `data-tb-anchor` and `data-tb-section` marks it uses to
+find what is commentable, is restored to whatever was there before — unless you changed it
+yourself while the panel was alive, in which case your value stays.
 
 > **PDF is optional and not a focus.** A region surface can be *any* non-text content (image, `<canvas>`,
 > SVG, diagram). A PDF page is just one such surface: an optional `@brainworker/tackback/pdf` adapter

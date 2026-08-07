@@ -6,6 +6,46 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
 
 ## [Unreleased]
 
+### Fixed
+- **`panel.destroy()` now gives the document back.** Teardown mirrored some two dozen acquisition
+  sites by hand in a single list, and what that list missed it missed in silence. Each resource now
+  records how to release it at the point it is taken, so the panel no longer has to remember. Fixed
+  as a result: a **pointer capture** held by an unfinished gesture was never released, so the page
+  went on routing pointer events to a panel that no longer existed; the **`tb-mark` class** stayed on
+  the host's own elements; **`data-tb-root`** and a **root class** stayed on the document element; a
+  **queued repaint** still ran and drove the core afterwards; and the **draft rectangle** of a gesture
+  in flight stayed on the page.
+- **A destroyed panel is inert.** Its stylesheet is gone, yet `openDocumentThread()` still built a
+  Pane and the theme, locale, reaction and colour setters still ran — producing chrome the host never
+  asked for and could not remove. Every public method is now a no-op afterwards, and `destroy()` is
+  idempotent.
+- **Deferred dismiss handlers can no longer outlive the surface that scheduled them.** Both the Pane
+  and the anchor menu register theirs from a deferred callback against a single cleanup slot, so one that was closed
+  — or replaced by another within the same tick — before the deferred callback ran left a mouse and a key listener
+  on the document that nothing could take off again. Each registration now checks it still belongs to
+  the surface on screen; asking whether *some* surface exists cannot tell replaced from closed.
+- **A destroy that happens during a core event no longer lets the panel run afterwards.** The emitter
+  snapshots its listeners before invoking them, so unsubscribing during a dispatch does not remove the
+  panel from the run already in progress: an integrator calling `destroy()` from its own `change`
+  handler had the panel's handler run next anyway, re-creating marks and writing to host elements
+  after teardown.
+- **A marked block detached before teardown gets its class back too.** The mark was released by
+  searching the document, so a block the host removed while the panel was alive was never found —
+  and re-attaching that element later brought the panel's class back with it. It is now released
+  through the elements themselves.
+- **Modals are a surface like any other.** They appended unclassed children straight to the document
+  body, outside every sweep: repeated clicks stacked several, and an import modal opened before
+  teardown could still write into the core afterwards. At most one at a time now, and it closes with
+  the panel.
+
+### Documented
+- `attachPanel` supports **one panel per document** — call `destroy()` before re-attaching. The one
+  thing `destroy()` deliberately leaves behind is the **ids** it assigned to elements that had none,
+  and the identity marks on region surfaces: a stored comment names its element by id, so removing
+  those would orphan the anchors that depend on them. Everything else it wrote onto your elements is
+  restored — and only where the value is still the one the panel wrote, so a host that changed it
+  while the panel was alive keeps its own.
+
 ## [0.9.6] — 2026-08-07
 One seam an integrator asked for, so it can stop losing deletions. Mechanism only, as ever: the
 library reports what happened and attaches no meaning to it.

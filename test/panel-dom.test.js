@@ -41,17 +41,24 @@ function fakeElement(doc, tag) {
     tagName: tag.toUpperCase(), ownerDocument: doc, children, parentNode: null,
     style: (() => { const st = {}; st.setProperty = (k, v) => { st[k] = v; }; st.getPropertyValue = (k) => st[k] ?? ''; return st; })(),
     listeners: {},
+    // A real DOMTokenList is iterable and has a length. Without those, code that walks the classes on
+    // an element — to clear a whole namespace, say — silently walks nothing here while working in a
+    // browser, which is the worst shape a fixture gap can take.
     classList: {
       add: (...c) => c.forEach((x) => classes.add(x)),
       remove: (...c) => c.forEach((x) => classes.delete(x)),
       contains: (c) => classes.has(c),
       toggle: (c, force) => { const on = force === undefined ? !classes.has(c) : !!force; if (on) classes.add(c); else classes.delete(c); return on; },
+      get length() { return classes.size; },
+      item: (i) => [...classes][i] ?? null,
+      [Symbol.iterator]: () => classes.values(),
     },
     get className() { return [...classes].join(' '); },
     set className(v) { classes.clear(); String(v).split(/\s+/).filter(Boolean).forEach((c) => classes.add(c)); },
     get id() { return attrs.id || ''; },
     set id(v) { attrs.id = v; },
     setAttribute(k, v) { attrs[k] = String(v); },
+    get attributes() { return { ...attrs }; },
     getAttribute(k) { return k in attrs ? attrs[k] : null; },
     hasAttribute(k) { return k in attrs; },
     removeAttribute(k) { delete attrs[k]; },
@@ -62,6 +69,10 @@ function fakeElement(doc, tag) {
     append(...cs) { cs.forEach((c) => el.appendChild(typeof c === 'object' ? c : doc.createTextNode(String(c)))); },
     matches: (sel) => matches(el, sel),
     closest(sel) { let n = el; while (n) { if (n.matches?.(sel)) return n; n = n.parentNode; } return null; },
+    // Pointer capture was invisible to every test here: the fixture implemented neither call, so the
+    // panel's `?.` calls silently did nothing and a capture retained past teardown could not be seen.
+    setPointerCapture(id) { (el.ownerDocument.captures ||= new Set()).add(id); },
+    releasePointerCapture(id) { el.ownerDocument.captures?.delete(id); },
     querySelectorAll(sel) { return descendants(el).filter((d) => matches(d, sel)); },
     querySelector(sel) { return el.querySelectorAll(sel)[0] || null; },
     getBoundingClientRect: () => ({ left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100 }),
@@ -69,8 +80,13 @@ function fakeElement(doc, tag) {
     removeEventListener(type, fn) { el.listeners[type] = (el.listeners[type] || []).filter((f) => f !== fn); },
     dispatchEvent(ev) { return bubble(el, { ...ev, target: ev.target || el }); },
     click() { bubble(el, { type: 'click', target: el, stopPropagation() {} }); },
-    clientWidth: 100, clientHeight: 100, offsetWidth: 100, offsetHeight: 100,
-    focus() {}, select() {}, value: '',
+    // A browser only focuses an element that is IN the document. Checking the immediate parent is not
+    // the same thing: a detached modal's textarea has a parent, so activation before mounting looked
+    // like it worked.
+    focus() { let n = el; while (n.parentNode) n = n.parentNode; if (n !== doc.documentElement) return; doc.activeElement = el; },
+    select() { if (doc.activeElement !== el) return; el.selected = true; },
+    blur() { if (doc.activeElement === el) doc.activeElement = null; },
+    clientWidth: 100, clientHeight: 100, offsetWidth: 100, offsetHeight: 100, value: '',
   };
   Object.defineProperty(el, 'textContent', {
     get: () => (children.length ? children.map((c) => c.textContent ?? '').join('') : text),
@@ -111,10 +127,18 @@ function fakeDoc() {
   const doc = {
     createElement: (t) => fakeElement(doc, t),
     createTextNode: (v) => ({ textContent: String(v), nodeType: 3 }),
+    createRange: () => ({
+      startContainer: null, endContainer: null,
+      setStart(n, o) { this.startContainer = n; this.startOffset = o; },
+      setEnd(n, o) { this.endContainer = n; this.endOffset = o; },
+      getBoundingClientRect: () => ({ left: 0, top: 0, right: 20, bottom: 12, width: 20, height: 12 }),
+    }),
     listeners: {},
     addEventListener(t, fn) { (doc.listeners[t] ||= []).push(fn); },
     removeEventListener(t, fn) { doc.listeners[t] = (doc.listeners[t] || []).filter((f) => f !== fn); },
   };
+  doc.captures = new Set();
+  doc.activeElement = null;
   doc.documentElement = fakeElement(doc, 'html');
   doc.head = fakeElement(doc, 'head');
   doc.body = fakeElement(doc, 'body');
@@ -129,10 +153,105 @@ function fakeDoc() {
 
 // `ensurePositioned` reaches for the global; the panel's `ready` handler can fire after a test has
 // returned, so the stub is installed for the file rather than per test.
-globalThis.getComputedStyle = () => ({ position: 'relative' });
+globalThis.getComputedStyle = (elx) => ({ position: elx?.style?.position || 'static' });
+
+/**
+ * Stand in for the globals the panel reaches for, so the work it schedules and the observers and
+ * non-document listeners it installs are countable. Without this a teardown test can only see the
+ * document, which is the smaller half of what a panel owns.
+ */
+function instrumentEnv({ noRaf = false } = {}) {
+  const saved = {
+    raf: globalThis.requestAnimationFrame, caf: globalThis.cancelAnimationFrame,
+    RO: globalThis.ResizeObserver, add: globalThis.addEventListener, rm: globalThis.removeEventListener,
+    st: globalThis.setTimeout, ct: globalThis.clearTimeout,
+    mm: globalThis.matchMedia, vv: globalThis.visualViewport,
+  };
+  const listenerBag = () => {
+    const m = new Map();
+    return {
+      add: (t, fn) => { if (!m.has(t)) m.set(t, []); m.get(t).push(fn); },
+      remove: (t, fn) => m.set(t, (m.get(t) || []).filter((f) => f !== fn)),
+      count: () => [...m.values()].reduce((n, a) => n + a.length, 0),
+    };
+  };
+  const env = { frames: new Map(), timers: new Map(), observers: new Set(), ran: [] };
+  const savedCSS = globalThis.CSS, savedHighlight = globalThis.Highlight;
+  globalThis.CSS = { highlights: new Map() };
+  globalThis.Highlight = class { constructor(...r) { this.ranges = r; } };
+  const win = listenerBag(), vv = listenerBag(), mql = listenerBag();
+  env.win = win; env.vv = vv; env.mql = mql;
+  let seq = 0;
+  if (noRaf) {
+    // Not every host has requestAnimationFrame; the panel falls back to a timer, whose handle
+    // `cancelAnimationFrame` cannot take back. That is the one arrangement in which the callback
+    // actually runs after teardown, so it is the only place the guard inside it is reachable.
+    delete globalThis.requestAnimationFrame; delete globalThis.cancelAnimationFrame;
+  } else {
+    globalThis.requestAnimationFrame = (fn) => { const id = ++seq; env.frames.set(id, fn); env.ran.push(fn); return id; };
+    globalThis.cancelAnimationFrame = (id) => { env.frames.delete(id); };
+  }
+  // Deferred registrations are the whole point of several of these tests; without a countable timer
+  // they are invisible, and a test can only observe what happened to fire on the real clock.
+  globalThis.setTimeout = (fn, ms) => { const id = ++seq; env.timers.set(id, fn); env.ran.push(fn); return id; };
+  globalThis.clearTimeout = (id) => { env.timers.delete(id); };
+  globalThis.ResizeObserver = class {
+    constructor(fn) { this.fn = fn; this.targets = []; env.observers.add(this); }
+    observe(t) { this.targets.push(t); }
+    disconnect() { env.observers.delete(this); }
+  };
+  globalThis.addEventListener = (t, fn) => win.add(t, fn);
+  globalThis.removeEventListener = (t, fn) => win.remove(t, fn);
+  // `vv` is null in the plain fixture, so the panel's four viewport registrations were never once
+  // executed under test — the same blind spot as measuring a guard with the feature switched off.
+  globalThis.visualViewport = { addEventListener: vv.add, removeEventListener: vv.remove, height: 768, offsetTop: 0 };
+  globalThis.matchMedia = () => ({ matches: false, addEventListener: mql.add, removeEventListener: mql.remove });
+
+  env.flushFrames = () => { const fns = [...env.frames.values()]; env.frames.clear(); fns.forEach((f) => f()); };
+  env.flushTimers = () => { const fns = [...env.timers.values()]; env.timers.clear(); fns.forEach((f) => f()); };
+  env.flush = () => { env.flushTimers(); env.flushFrames(); };
+  /** Run EVERY callback that was ever scheduled, including ones since cancelled. */
+  env.runStale = () => { const fns = env.ran.slice(); env.ran.length = 0; env.frames.clear(); env.timers.clear(); fns.forEach((f) => { try { f(); } catch { /* a stale callback may legitimately throw */ } }); };
+  /** Everything the environment can count, as one comparable snapshot. */
+  env.census = (doc) => ({
+    docListeners: Object.fromEntries(Object.entries(doc.listeners).map(([t, a]) => [t, a.length]).filter(([, n]) => n)),
+    windowListeners: win.count(), viewportListeners: vv.count(), mediaQueryListeners: mql.count(),
+    observers: env.observers.size, pendingFrames: env.frames.size, pendingTimers: env.timers.size,
+    captures: [...doc.captures].sort(),
+    headChildren: (doc.head.children || []).filter((c) => c.tagName).length,
+    bodyChildren: (doc.body.children || []).filter((c) => c.tagName).map((c) => `${c.tagName}.${c.className || ''}`).sort(),
+    rootClass: doc.documentElement.className, rootAttrs: { ...(doc.documentElement.attributes || {}) },
+    // What the panel wrote onto elements the HOST owns. Two of this change's headline fixes live
+    // here — the mark class and the inline positioning context — and neither was being measured.
+    // EVERY element, with nothing skipped. An earlier version skipped anything carrying a `tb-`
+    // class, which excluded precisely what it was added to watch: a host element left wearing the
+    // mark class. There is no need to exempt panel-owned subtrees either — the census is taken
+    // before the panel attaches and after it is destroyed, so a surviving panel node SHOULD make the
+    // comparison fail.
+    host: (function walk(node, out) {
+      for (const c of node.children || []) {
+        if (!c.tagName) continue;
+        out.push(`${c.tagName}#${c.id}|${c.className}|${c.style.position || ''}|${JSON.stringify(c.attributes || {})}`);
+        walk(c, out);
+      }
+      return out;
+    })(doc.body, [`BODY#|${doc.body.className}|${doc.body.style.position || ''}|${JSON.stringify(doc.body.attributes || {})}`]).sort(),
+    highlights: [...(globalThis.CSS?.highlights?.keys?.() || [])].sort(),
+  });
+  env.restore = () => {
+    globalThis.requestAnimationFrame = saved.raf; globalThis.cancelAnimationFrame = saved.caf;
+    globalThis.setTimeout = saved.st; globalThis.clearTimeout = saved.ct;
+    globalThis.ResizeObserver = saved.RO; globalThis.addEventListener = saved.add;
+    globalThis.removeEventListener = saved.rm;
+    globalThis.matchMedia = saved.mm; globalThis.visualViewport = saved.vv;
+    globalThis.CSS = savedCSS; globalThis.Highlight = savedHighlight;
+  };
+  return env;
+}
 
 /** Mount a core + panel on a fresh fake document. Returns everything a test needs to drive it. */
-function mountPanel({ comments = [], controls } = {}) {
+function mountPanel({ comments = [], controls, instrument = false, setup, noRaf = false } = {}) {
+  const env = instrument ? instrumentEnv({ noRaf }) : null;
   const doc = fakeDoc();
   // mount on the body, as a page with no explicit root does — that is what puts the lane INSIDE the
   // gesture root, which is the only geometry in which the lane's gesture guard can be exercised.
@@ -140,14 +259,62 @@ function mountPanel({ comments = [], controls } = {}) {
   // a storage adapter that seeds the store WITHOUT validation — the path a persisted comment takes
   const storage = { load: () => ({ comments }), save: () => {} };
   const core = Tackback.mount({ document: { id: 'panel-fixture' }, storage, root });
+  // Page content the test needs is added BEFORE the panel attaches, so the baseline below includes
+  // it and the meter measures the panel's footprint rather than the fixture's.
+  setup?.(doc, root, core);
+  // Taken after the core is mounted and after the host page exists, and before the panel attaches.
+  const before = env ? env.census(doc) : null;
   const panel = attachPanel(core, { root, target: doc.body, ...(controls ? { controls } : {}) });
-  const restore = () => {};
+  const restore = () => { env?.restore(); };
   const lane = () => doc.querySelector('.tb-lane');
   const laneHead = () => lane()?.querySelector('.tb-lane-head') || null;
   const laneCount = () => lane()?.querySelector('.tb-lane-count')?.textContent ?? null;
   const laneOpen = () => !!lane()?.classList.contains('tb-open');
   const badges = () => doc.querySelectorAll('.tb-badge,.tb-pin');
-  return { doc, root, core, panel, lane, laneHead, laneCount, laneOpen, badges, restore };
+  /**
+   * The acceptance invariant: after destroy, every count the environment can take is back where it
+   * was before the panel attached. Measured from OUTSIDE the panel on purpose — asking the panel's
+   * own bookkeeping whether it cleaned up verifies the mechanism with the mechanism, and an
+   * acquisition that bypassed the seam would be invisible to it.
+   *
+   * Exempt by contract: the element IDS assigned to elements that had none, and the identity mark on
+   * a region's surface. A stored comment names its element by id, so removing those would orphan the
+   * anchors that depend on them. The other indexing marks are NOT exempt and are measured here.
+   */
+  const assertEnvironmentRestored = (where) => {
+    // TWO measurements, because one hid the thing it was meant to reveal. Flushing before counting
+    // executes and empties the pending work, so `pendingTimers` and `pendingFrames` could never
+    // report anything left scheduled at the moment of teardown.
+    assert.deepEqual(env.census(doc), before, `${where}: not given back at the moment of teardown`);
+    // …and then run every callback that was ever scheduled, INCLUDING the ones teardown cancelled.
+    // Flushing alone proves cancellation, because cancelling removes the callback from the queue —
+    // it says nothing about whether a callback something else already dequeued is inert.
+    env.runStale();
+    assert.deepEqual(env.census(doc), before, `${where}: a stale callback still had an effect`);
+  };
+  return { doc, root, core, panel, lane, laneHead, laneCount, laneOpen, badges, restore, env, before, assertEnvironmentRestored };
+}
+
+// ---- invariants -------------------------------------------------------------------------------
+// Properties that must hold however you got here. Example tests can only encode the paths someone
+// thought of; these are checked at the end of the lifecycle tests, so a path nobody wrote a scenario
+// for still cannot leave the document holding the panel's leftovers.
+const PANEL_SELECTORS = '.tb-panel,.tb-popup,.tb-lane,.tb-ctxmenu,.tb-badge,.tb-pin,.tb-region,.tb-pending,.tb-draw';
+
+/** After destroy the panel owns nothing: no node of its own, and no listener on the document. */
+function assertFullyGone(f, where) {
+  const left = PANEL_SELECTORS.split(',').flatMap((sel) => f.doc.querySelectorAll(sel));
+  assert.deepEqual(left.map((e) => e.className), [], `${where}: no panel node may outlive destroy`);
+  for (const type of ['mousedown', 'keydown', 'contextmenu', 'pointerdown', 'pointermove', 'pointerup', 'pointercancel']) {
+    assert.deepEqual(f.doc.listeners[type] || [], [], `${where}: no ${type} listener may outlive destroy`);
+  }
+}
+
+/** At most one of each singleton surface, ever. */
+function assertAtMostOne(f, where) {
+  for (const sel of ['.tb-popup', '.tb-ctxmenu', '.tb-lane', '.tb-panel']) {
+    assert.ok(f.doc.querySelectorAll(sel).length <= 1, `${where}: more than one ${sel} on screen`);
+  }
 }
 
 const docComment = (over = {}) => ({
@@ -510,5 +677,352 @@ test('panel: clearing the document is one operation too', () => {
       assert.equal(changes.length, 1, 'and it settles once');
       assert.equal(f.core.listComments().length, 0);
     } finally { globalThis.confirm = prevConfirm; }
+  } finally { f.restore(); }
+});
+
+// ---- the panel's own lifetime -------------------------------------------------------------------
+
+test('panel: destroy leaves nothing behind, and is idempotent', async () => {
+  const f = mountPanel();
+  try {
+    const p = f.doc.createElement('p'); p.id = 'para-life'; p.textContent = 'content';
+    p.setAttribute('data-tb-anchor', '');
+    f.root.appendChild(p);
+    f.core.addComment({ anchor: { type: 'block', elementId: 'para-life' }, body: 'here' });
+    f.core.addComment({ anchor: { type: 'document' }, body: 'about it all' });
+    f.panel.toggleDocumentLane(true);
+    f.badges()[0].dispatchEvent({ type: 'contextmenu', clientX: 5, clientY: 5, preventDefault() {} });
+    assert.ok(f.doc.querySelector('.tb-ctxmenu'), 'a menu is open when destroy runs');
+
+    f.panel.destroy();
+    await new Promise((r) => setTimeout(r, 0));   // let any deferred registration fire
+    assertFullyGone(f, 'after destroy');
+    // asserted HERE, where the lane exists: with the lane off, toggling answers false whether or not
+    // the panel is destroyed, so the guard would be invisible.
+    assert.equal(f.panel.toggleDocumentLane(true), false, 'a destroyed lane cannot be re-expanded');
+    assertFullyGone(f, 'after trying to re-expand the lane');
+    f.panel.destroy();                            // twice must not throw or resurrect anything
+    assertFullyGone(f, 'after a second destroy');
+  } finally { f.restore(); }
+});
+
+test('panel: no public method revives a destroyed panel', async () => {
+  // destroy() removes the stylesheet, so anything built afterwards is unstyled chrome the host
+  // never asked for and cannot get rid of. Every entry point has to be closed, not just the ones
+  // someone remembered.
+  //
+  // The lane is OFF on purpose: with it on, `openDocumentThread` expands the (already detached) lane
+  // and adds no node, so the guard would be invisible to this test. Off, it builds a Pane — which is
+  // the thing that must not appear.
+  const f = mountPanel({ controls: { docLane: false } });
+  try {
+    f.core.addComment({ anchor: { type: 'document' }, body: 'q' });
+    f.panel.destroy();
+    f.panel.openDocumentThread();
+    assert.equal(f.panel.toggleDocumentLane(true), false, 'and it says it did nothing');
+    f.panel.setTheme('dark');
+    f.panel.setActorColors({ ai: '#123456' });
+    f.panel.setReactions([{ id: 'x', icon: '?' }]);
+    f.panel.setLocale('ja');
+    f.panel.registerLocale('xx', {});
+    f.panel.toggleMarks();
+    await new Promise((r) => setTimeout(r, 0));
+    assertFullyGone(f, 'after calling every public method on a destroyed panel');
+  } finally { f.restore(); }
+});
+
+test('panel: an anchor menu closed before its registration runs registers nothing', async () => {
+  // Same deferred-ownership shape the Pane has: the dismiss handlers register from a deferred callback, backed by
+  // a single cleanup slot, so a menu that is gone — or superseded — by the time the deferred callback runs
+  // leaves listeners on the document that nothing can ever remove.
+  const f = mountPanel();
+  try {
+    const p = f.doc.createElement('p'); p.id = 'para-menu'; p.textContent = 'content';
+    p.setAttribute('data-tb-anchor', '');
+    f.root.appendChild(p);
+    f.core.addComment({ anchor: { type: 'block', elementId: 'para-menu' }, body: 'here' });
+    const badge = f.badges()[0];
+    badge.dispatchEvent({ type: 'contextmenu', clientX: 5, clientY: 5, preventDefault() {} });
+    f.doc.querySelector('.tb-ctxitem').click();   // deleting closes the menu, within the same tick
+    await new Promise((r) => setTimeout(r, 0));
+    assert.deepEqual(f.doc.listeners.mousedown || [], [], 'the menu registered nothing on its way out');
+    assert.deepEqual(f.doc.listeners.keydown || [], []);
+  } finally { f.restore(); }
+});
+
+test('panel: an anchor menu replaced within the same tick takes its registration with it', async () => {
+  const f = mountPanel();
+  try {
+    for (const id of ['m1', 'm2']) {
+      const p = f.doc.createElement('p'); p.id = id; p.textContent = 'content ' + id;
+      p.setAttribute('data-tb-anchor', '');
+      f.root.appendChild(p);
+      f.core.addComment({ anchor: { type: 'block', elementId: id }, body: 'on ' + id });
+    }
+    const [a, b] = f.badges();
+    a.dispatchEvent({ type: 'contextmenu', clientX: 5, clientY: 5, preventDefault() {} });
+    b.dispatchEvent({ type: 'contextmenu', clientX: 9, clientY: 9, preventDefault() {} });
+    assertAtMostOne(f, 'two menus opened in one tick');
+    await new Promise((r) => setTimeout(r, 0));
+    f.doc.querySelector('.tb-ctxmenu').querySelector('.tb-ctxitem').click();
+    await new Promise((r) => setTimeout(r, 0));
+    assert.deepEqual(f.doc.listeners.mousedown || [], [], 'the replaced menu registered nothing');
+    assert.deepEqual(f.doc.listeners.keydown || [], []);
+  } finally { f.restore(); }
+});
+
+test('panel: destroy during a region drag takes the draft rectangle with it', async () => {
+  // A draft rectangle is drawn while the gesture is in flight and only becomes a pending region on
+  // commit, so it is the one mark `closePopup()` does not own. Tearing the panel down mid-drag left
+  // it on the page: a dashed box the host has no handle to remove.
+  const f = mountPanel();
+  try {
+    const p = f.doc.createElement('p'); p.id = 'drag-target'; p.textContent = 'content';
+    f.root.appendChild(p);
+    const fire = (type, x, y, buttons) =>
+      p.dispatchEvent({ type, button: 2, buttons, clientX: x, clientY: y, pointerId: 21 });
+    fire('pointerdown', 10, 10, 2); fire('pointermove', 90, 70, 2);
+    assert.equal(f.doc.querySelectorAll('.tb-draw').length, 1, 'a draft rectangle is on screen');
+    f.panel.destroy();
+    await new Promise((r) => setTimeout(r, 0));
+    assertFullyGone(f, 'destroyed mid-drag');
+  } finally { f.restore(); }
+});
+
+test('panel: destroy gives the environment back, whatever was in flight', async () => {
+  // The acceptance invariant for the panel's ownership. Not "the nodes I remembered to list are
+  // gone" — every count the environment can take, back where it was before the panel attached.
+  const f = mountPanel({
+    instrument: true,
+    setup: (doc, root) => {
+      const p = doc.createElement('p'); p.id = 'own'; p.textContent = 'content';
+      p.setAttribute('data-tb-anchor', '');
+      root.appendChild(p);
+    },
+  });
+  try {
+    const p = f.doc.getElementById('own');
+    f.core.addComment({ anchor: { type: 'block', elementId: 'own' }, body: 'x' });
+    f.panel.toggleDocumentLane(true);
+    f.badges()[0].dispatchEvent({ type: 'contextmenu', clientX: 5, clientY: 5, preventDefault() {} });
+    const fire = (t, x, y, b) => p.dispatchEvent({ type: t, button: 2, buttons: b, clientX: x, clientY: y, pointerId: 41 });
+    fire('pointerdown', 10, 10, 2); fire('pointermove', 90, 70, 2);   // a gesture holding capture
+    [...f.env.observers][0]?.fn?.();                                   // a repaint queued
+    f.panel.destroy();
+    f.assertEnvironmentRestored('destroy with a menu open, a gesture in flight and a frame queued');
+  } finally { f.restore(); }
+});
+
+test('panel: a Pane replaced before its deferred callback fires leaves no listener behind', async () => {
+  // The deferred-ownership shape, on the Pane this time. `popupCleanup` holds one remover, so if the
+  // Pane that scheduled the registration has been replaced by the time the deferred callback runs, the loser's
+  // listeners can never come off. Asking whether SOME Pane exists cannot tell replaced from closed.
+  const f = mountPanel({ instrument: true, controls: { docLane: false } });
+  try {
+    f.core.addComment({ anchor: { type: 'document' }, body: 'q' });
+    f.panel.openDocumentThread();
+    f.panel.openDocumentThread();   // replaces the first, before either has registered
+    f.env.flushTimers();
+    f.doc.querySelector('.tb-cancel').click();
+    // The loser's listeners went straight onto the document rather than through the panel's own
+    // seam, so nothing but this Pane could ever have removed them — teardown is where that shows.
+    f.panel.destroy();
+    f.assertEnvironmentRestored('a Pane opened twice in one tick, dismissed, then destroyed');
+  } finally { f.restore(); }
+});
+
+test('panel: a modal is a surface — one at a time, and it goes when the panel does', async () => {
+  // They used to be unclassed children appended straight to the body: outside every sweep and every
+  // count, stacking one per click, and an import modal opened before teardown could still write into
+  // the core afterwards.
+  const f = mountPanel({ instrument: true, controls: { export: true, import: true } });
+  try {
+    const buttons = f.doc.querySelectorAll('.tb-sec').filter((b) => /import/i.test(b.textContent));
+    const importBtn = buttons[0] || f.doc.querySelectorAll('button').filter((b) => /import/i.test(b.textContent))[0];
+    assert.ok(importBtn, 'the import control is on the panel');
+    importBtn.click();
+    importBtn.click();
+    importBtn.click();
+    assert.equal(f.doc.querySelectorAll('.tb-modal').length, 1, 'three clicks, one modal');
+    f.panel.destroy();
+    f.assertEnvironmentRestored('destroy with a modal open');
+  } finally { f.restore(); }
+});
+
+test('panel: a repaint queued on a timer does not fire after the panel is gone', async () => {
+  // With requestAnimationFrame present the teardown cancels the frame outright. Without it the panel
+  // falls back to a timer, whose handle cancelAnimationFrame cannot take back — so the callback does
+  // run, and the only thing standing between a destroyed panel and a repaint it provokes is the
+  // check inside it. It used to ask whether the CORE was alive, which says nothing about this panel.
+  const f = mountPanel({ instrument: true, noRaf: true });
+  try {
+    const recalcs = [];
+    f.core.on('recalculate', () => recalcs.push(1));
+    [...f.env.observers][0]?.fn?.();          // something asks for a repaint
+    assert.ok(f.env.timers.size >= 1, 'the repaint is queued on a timer');
+    f.panel.destroy();
+    // Teardown cancels it, so run it ON PURPOSE: the guard inside the callback is what stands between
+    // a dequeued-but-stale callback and a repaint, and cancellation alone would never exercise it.
+    f.env.runStale();
+    assert.deepEqual(recalcs, [], 'a destroyed panel drives no repaint, even if its work runs anyway');
+  } finally { f.restore(); }
+});
+
+test('panel: destroy from inside a core dispatch does not let the panel run afterwards', async () => {
+  const panelRef = {};
+  // The emitter snapshots its listeners before invoking them, so unsubscribing during a dispatch
+  // does not take this panel out of the run already in progress. An integrator that destroys the
+  // panel from its own `change` handler had the panel's handler run next anyway — re-creating marks
+  // and writing to host elements after teardown. Unsubscription is not a liveness check.
+  const f = mountPanel({
+    instrument: true,
+    setup: (doc, root, core) => {
+      const p = doc.createElement('p'); p.id = 'reentry'; p.textContent = 'content';
+      p.setAttribute('data-tb-anchor', '');
+      root.appendChild(p);
+      // Subscribed BEFORE the panel attaches, so this handler sits ahead of the panel's in the
+      // snapshot the emitter takes — the only ordering in which the panel's handler runs after
+      // destroy. `panel` is read lazily because it does not exist yet at this point.
+      core.on('change', () => panelRef.panel?.destroy());
+    },
+  });
+  panelRef.panel = f.panel;
+  try {
+    f.core.addComment({ anchor: { type: 'block', elementId: 'reentry' }, body: 'x' });
+    f.assertEnvironmentRestored('destroyed from inside a core dispatch');
+  } finally { f.restore(); }
+});
+
+test('panel: destroy with a Pane open gives everything back', async () => {
+  // The Pane's own dismissal is a teardown seam nothing else reached.
+  //
+  // Releasing the CSS highlight registry is NOT covered here. This document holds text as a flat
+  // property and has no tree walker, so a range anchor never resolves and the registry is never
+  // populated — staging one would only add a swallowed error and the appearance of coverage. That
+  // release is verified in a real browser instead.
+  const f = mountPanel({
+    instrument: true,
+    controls: { docLane: false },
+    setup: (doc, root) => {
+      const p = doc.createElement('p'); p.id = 'phrase';
+      p.textContent = 'a sentence with a quotable phrase inside it';
+      p.setAttribute('data-tb-anchor', '');
+      root.appendChild(p);
+    },
+  });
+  try {
+    f.core.addComment({ anchor: { type: 'document' }, body: 'about it all' });
+    f.panel.openDocumentThread();
+    assert.ok(f.doc.querySelector('.tb-popup'), 'a Pane is open when destroy runs');
+    f.panel.destroy();
+    f.assertEnvironmentRestored('destroy with a Pane open');
+  } finally { f.restore(); }
+});
+
+test('panel: teardown does not overwrite an indexing mark the host changed since', async () => {
+  // The indexing marks are the panel's, so it hands them back — but only where the value is still the
+  // one it wrote. A host that relabels a section while the panel is alive owns that value afterwards;
+  // restoring blindly would silently undo the host's own edit at teardown.
+  const f = mountPanel({
+    instrument: true,
+    setup: (doc, root) => {
+      const p = doc.createElement('p'); p.id = 'relabelled'; p.textContent = 'content';
+      root.appendChild(p);
+    },
+  });
+  try {
+    const p = f.doc.getElementById('relabelled');
+    assert.equal(p.getAttribute('data-tb-anchor'), '1', 'indexing marked it');
+    p.setAttribute('data-tb-section', 'the host renamed this');   // the host takes it over
+    // Detached BEFORE teardown: the disposer holds the element itself, so it is still handed back.
+    // A version that searched the document at teardown would never find this one, and would leave
+    // the panel's mark on an element the host may well re-attach.
+    p.remove();
+    f.panel.destroy();
+    assert.equal(p.getAttribute('data-tb-section'), 'the host renamed this',
+      'the value the host set is still the value the host set');
+    assert.equal(p.getAttribute('data-tb-anchor'), null,
+      'and the mark the panel still owned is gone');
+  } finally { f.restore(); }
+});
+
+test('panel: a modal is activated after it is mounted, and cancel and close release the surface', async () => {
+  // Making modals owned moved the mounting step, and focusing or selecting inside a node that is not
+  // yet in the document does nothing — so activation has to come after. And a dismissal that only
+  // removed the node left the panel still holding a detached surface as its one modal.
+  const f = mountPanel({ instrument: true, controls: { export: true, import: true } });
+  try {
+    const byText = (re) => f.doc.querySelectorAll('button').filter((b) => re.test(b.textContent))[0];
+    const importBtn = byText(/import/i), exportBtn = byText(/export/i);
+    assert.ok(importBtn && exportBtn, 'both controls are on the panel');
+
+    importBtn.click();
+    const importModalEl = f.doc.querySelector('.tb-modal');
+    assert.ok(importModalEl, 'the import modal is mounted');
+    const ta = importModalEl.querySelector('textarea');
+    assert.equal(f.doc.activeElement, ta, 'and its input was focused once it was in the document');
+
+    importModalEl.querySelectorAll('button').filter((b) => /cancel/i.test(b.textContent))[0].click();
+    assert.equal(f.doc.querySelectorAll('.tb-modal').length, 0, 'cancel takes the node away');
+    // and the next one opens cleanly afterwards. That the SLOT was released is not observable from
+    // here — opening another modal clears a stale reference on its way in either way.
+    exportBtn.click();
+    assert.equal(f.doc.querySelectorAll('.tb-modal').length, 1, 'exactly one, the export modal');
+    const exportModalEl = f.doc.querySelector('.tb-modal');
+    assert.ok(exportModalEl.querySelectorAll('button').some((b) => /close/i.test(b.textContent)),
+      'the export modal has its Close button, not a stray value in its place');
+    assert.equal(exportModalEl.querySelector('textarea').selected, true, 'and its text was selected');
+
+    exportModalEl.querySelectorAll('button').filter((b) => /close/i.test(b.textContent))[0].click();
+    f.panel.destroy();
+    f.assertEnvironmentRestored('modals opened, dismissed, then the panel destroyed');
+  } finally { f.restore(); }
+});
+
+test('panel: a marked block detached before teardown still gets its class back', async () => {
+  // The census cannot see this shape: the element has left the subtree it walks. Releasing the mark
+  // by searching the document would not find a block the host detached while the panel was alive,
+  // and re-attaching that element later would bring the panel's class back with it.
+  const f = mountPanel({
+    instrument: true,
+    setup: (doc, root) => {
+      const p = doc.createElement('p'); p.id = 'detached'; p.textContent = 'content';
+      p.setAttribute('data-tb-anchor', '');
+      root.appendChild(p);
+    },
+  });
+  try {
+    const p = f.doc.getElementById('detached');
+    f.core.addComment({ anchor: { type: 'block', elementId: 'detached' }, body: 'x' });
+    assert.equal(p.classList.contains('tb-mark'), true, 'the block is marked while the panel is alive');
+    p.remove();                     // the host takes it out of the document…
+    f.panel.destroy();
+    assert.equal(p.classList.contains('tb-mark'), false,
+      'and it comes back without the panel\'s class on it');
+  } finally { f.restore(); }
+});
+
+test('panel: a modal dismissing itself does not close the one that replaced it', async () => {
+  // A successful import emits `change` synchronously. A listener that opens another modal from there
+  // returns control to the import handler, which then dismisses — and an unscoped close would take
+  // the replacement with it. Dismissal has to name the modal doing the dismissing, for the same
+  // reason a Pane's deferred registration has to: "the current one" is a moving target.
+  const f = mountPanel({ instrument: true, controls: { export: true, import: true } });
+  try {
+    const byText = (re) => f.doc.querySelectorAll('button').filter((b) => re.test(b.textContent))[0];
+    byText(/import/i).click();
+    const importModalEl = f.doc.querySelector('.tb-modal');
+    let opened = false;
+    f.core.on('change', () => { if (!opened) { opened = true; byText(/export/i).click(); } });
+    importModalEl.querySelector('textarea').value = JSON.stringify({ comments: [] });
+    importModalEl.querySelectorAll('button').filter((b) => /load|import/i.test(b.textContent))[0].click();
+
+    assert.equal(opened, true, 'the import did emit a change, and the listener opened another modal');
+    const left = f.doc.querySelectorAll('.tb-modal');
+    assert.equal(left.length, 1, 'the replacement is still on screen');
+    assert.ok(left[0].querySelectorAll('button').some((b) => /close/i.test(b.textContent)),
+      'and it is the export modal, not the import one');
+    f.panel.destroy();
+    f.assertEnvironmentRestored('a modal replaced from inside its own dismissal');
   } finally { f.restore(); }
 });
