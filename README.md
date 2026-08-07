@@ -252,7 +252,17 @@ arrives or a later pull succeeds:
 let readable;
 try { readable = tb.visibleThreads(); }
 catch { /* unknown right now — keep the last known and wait for the next report */ }
-``` Tearing the panel down is
+```
+
+Recovery is the display's to signal. Every store mutation already asks for a fresh look, so an
+integration that keeps writing recovers on its own; if nothing is being written, call
+`tb.reportThreadVisibility()` when the display becomes readable again. The core retries a few times
+by itself, but it cannot know when the condition that made a display unreadable has passed.
+
+**What "readable" does and does not mean.** It means a Pane is on screen showing that thread, or the
+document lane is expanded — library state, reported as a settled fact. It does **not** mean a person
+looked, and it does not account for the viewport or for host CSS: a panel hidden by your own styles is
+still reported as readable. If you use this to mean "read", that gap is yours to decide about. Tearing the panel down is
 itself a transition: you are told the thread is no longer readable, which is exactly when a consumer
 that raised its update rate needs to hear it.
 
