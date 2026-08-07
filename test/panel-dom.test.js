@@ -248,7 +248,9 @@ function instrumentEnv({ noRaf = false } = {}) {
   /** Fail if any subscriber threw — including an assertion the emitter's try/catch would have eaten. */
   env.assertNoHandlerErrors = (where = 'handlers') => {
     if (!env.handlerErrors.length) return;
-    const [first] = env.handlerErrors;
+    // Consumed as it is reported. A test that deliberately provokes one asserts on it here, and by
+    // doing so accounts for it — anything left unaccounted for is what teardown refuses to let pass.
+    const [first] = env.handlerErrors.splice(0);
     const cause = first[first.length - 1];
     throw new Error(`${where}: a subscriber threw and the emitter swallowed it — ${cause?.message || cause}`, { cause });
   };
@@ -269,7 +271,9 @@ function instrumentEnv({ noRaf = false } = {}) {
     // target, so releasing one and installing another cannot pass as a clean teardown.
     docListenerIds: Object.entries(doc.listeners).flatMap(([t, a]) => a.map((f) => `${t}:${idOf(f)}`)).sort(),
     windowListenerIds: win.identity(), viewportListenerIds: vv.identity(), mediaQueryListenerIds: mql.identity(),
-    observerTargets: [...env.observers].map((o) => o.targets.map((t) => `${t?.tagName || '?'}#${t?.id || ''}`).sort().join(',')).sort(),
+    // By identity, not by description: two anonymous elements of the same tag read alike, so a census
+    // built from tag and id calls one observer swapped for another on a different target "unchanged".
+    observerTargets: [...env.observers].map((o) => o.targets.map((t) => idOf(t)).sort().join(',')).sort(),
     captures: [...doc.captures].sort(),
     headChildren: (doc.head.children || []).filter((c) => c.tagName).length,
     bodyChildren: (doc.body.children || []).filter((c) => c.tagName).map((c) => `${c.tagName}.${c.className || ''}`).sort(),
@@ -319,7 +323,21 @@ function mountPanel({ comments = [], controls, instrument = false, setup, noRaf 
   // Taken after the core is mounted and after the host page exists, and before the panel attaches.
   const before = env ? env.census(doc) : null;
   const panel = attachPanel(core, { root, target: doc.body, ...(controls ? { controls } : {}) });
-  const restore = () => { env?.restore(); };
+  // Restoring the globals comes FIRST and unconditionally: a teardown that throws before putting the
+  // environment back leaves every later test running against stubs, which is how a single mistake
+  // here once hung the whole suite rather than failing one case.
+  //
+  // Then the default flips. Capturing swallowed subscriber errors only helped a test that remembered
+  // to ask, which makes it a detector rather than a rule — so an unaccounted-for one now fails the
+  // test that produced it, whether or not that test thought to look.
+  const restore = () => {
+    env?.restore();
+    if (env?.handlerErrors.length) {
+      const [first] = env.handlerErrors;
+      const cause = first[first.length - 1];
+      throw new Error(`a subscriber threw and the emitter swallowed it, unnoticed by this test — ${cause?.message || cause}`, { cause });
+    }
+  };
   const lane = () => doc.querySelector('.tb-lane');
   const laneHead = () => lane()?.querySelector('.tb-lane-head') || null;
   const laneCount = () => lane()?.querySelector('.tb-lane-count')?.textContent ?? null;
@@ -1507,4 +1525,35 @@ test('visibility: a destroyed core does not take on a new display', () => {
   assert.equal(typeof off, 'function', 'it still answers with something callable');
   off();
   assert.equal(asked, false, 'but nothing was ever registered to ask');
+});
+
+test('harness: the census sees one observer target swapped for an identical-looking one', () => {
+  const f = mountPanel({ instrument: true });
+  try {
+    const a = f.doc.createElement('div'), b = f.doc.createElement('div');
+    f.root.appendChild(a); f.root.appendChild(b);
+    const ro = new globalThis.ResizeObserver(() => {});
+    ro.observe(a);
+    const before = f.env.census(f.doc);
+    ro.targets.length = 0; ro.observe(b);
+    const after = f.env.census(f.doc);
+    assert.notDeepEqual(after.observerTargets, before.observerTargets,
+      'two anonymous divs describe alike; only identity tells them apart');
+    ro.disconnect();
+  } finally { f.restore(); }
+});
+
+test('harness: a test that never asks still fails when a subscriber threw', () => {
+  // The rule, not the detector. This test asserts nothing about handler errors and does not call the
+  // check — teardown is what refuses to let one pass, which is the only version of this that survives
+  // an author who did not think to look.
+  const f = mountPanel({ instrument: true });
+  let threw = false;
+  try {
+    f.core.on('comment:add', () => { assert.equal(1, 2, 'deliberate'); });
+    f.core.addComment({ anchor: { type: 'document' }, body: 'x' });
+  } finally {
+    try { f.restore(); } catch (err) { threw = /swallowed it, unnoticed/.test(err.message); }
+  }
+  assert.ok(threw, 'teardown, not the test, is what caught it');
 });
