@@ -13,7 +13,7 @@ any HTML, including Markdown rendered to HTML.
 > multi-participant timeline, actor colors, attention, and the Save/Send scenarios — run
 > `demo/demo.html`: `npm run build`, serve the package root over http, and open it.
 
-> **Version 0.9.6 (staging).** Pre-1.0: the API is functional and tested but may still change before
+> **Version 0.9.7 (staging).** Pre-1.0: the API is functional and tested but may still change before
 > the 1.0 stable release. The public API is the **JavaScript** API called in the browser (not an HTTP API).
 
 ## Install
@@ -213,7 +213,11 @@ knowing which threads are actually in front of the reader right now, and Tackbac
 tb.on('thread:visibility', ({ visible, opened, closed }) => {
   // visible: [{ threadKey, anchor, comments: [id, …] }] — everything readable right now
   // opened / closed: the difference from the last report, computed for you
-  for (const t of opened) markRead(t.comments);
+  //
+  // Resolve read state from `visible`, not from `opened`. A thread the reader is watching while it
+  // grows is reported with `opened` and `closed` both empty — that is the case an open/close pair
+  // cannot express, and reading only `opened` walks straight past it.
+  for (const t of visible) markRead(t.comments);
 });
 
 tb.visibleThreads();   // → the same array, answered on the spot
