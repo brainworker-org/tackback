@@ -1646,3 +1646,60 @@ test('visibility: an anchor the core cannot rebuild is a failed look, not a cras
     assert.ok(errors.length >= 1, 'reported as an error rather than thrown into the void');
   } finally { f.restore(); }
 });
+
+test('visibility: a thread that MOVES while open is reported at its new place', () => {
+  // Where a thread points can change without its identity changing: a region keeps its key when it is
+  // dragged, and an import can replace a comment under the same key. A remembered anchor goes on
+  // naming where the thread used to be while the reader is looking at where it is now — and the
+  // report is what a consumer uses to put its own marker somewhere.
+  const f = mountPanel({ instrument: true });
+  try {
+    const c = f.core.addComment({
+      anchor: { type: 'region', surfaceId: 'document', rect: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 } },
+      body: 'over the diagram',
+    });
+    const pin = f.doc.querySelectorAll('.tb-pin')[0];
+    assert.ok(pin, 'the region drew a pin to open from');
+    // A pin opens its thread on a pointerup that did not move — the same gesture that would otherwise
+    // have dragged the region — so the thread is opened the way a reader opens it.
+    pin.dispatchEvent({ type: 'pointerdown', clientX: 5, clientY: 5, button: 0, pointerId: 1, preventDefault() {}, stopPropagation() {} });
+    f.doc.dispatchEvent?.({ type: 'pointerup', clientX: 5, clientY: 5, pointerId: 1, preventDefault() {}, stopPropagation() {} });
+    f.root.dispatchEvent({ type: 'pointerup', clientX: 5, clientY: 5, pointerId: 1, preventDefault() {}, stopPropagation() {} });
+    f.env.drainMicrotasks();
+    const opened = f.core.visibleThreads();
+    assert.equal(opened.length, 1, 'the region thread is open');
+    assert.equal(opened[0].anchor.rect.x, 0.1, 'reported where it was drawn');
+
+    f.core.recordRegionEvent(c.id, { rect: { x: 0.6, y: 0.6, width: 0.2, height: 0.2 } }, 'move');
+    f.env.drainMicrotasks();
+    const after = f.core.visibleThreads();
+    assert.equal(after.length, 1, 'still the same open thread');
+    assert.equal(after[0].anchor.rect.x, 0.6, 'and it followed the region to where it now is');
+  } finally { f.restore(); }
+});
+
+test('visibility: an open thread emptied after it moved is reported where it ENDED UP', () => {
+  // The only case the remembered place answers: the surface is still open, the store no longer has
+  // anything to say about where it points, and where it was FIRST opened is not where it was last
+  // seen. Remembering the initial value instead would name a place the thread had already left.
+  const f = mountPanel({ instrument: true });
+  try {
+    const c = f.core.addComment({
+      anchor: { type: 'region', surfaceId: 'document', rect: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 } },
+      body: 'over the diagram',
+    });
+    const pin = f.doc.querySelectorAll('.tb-pin')[0];
+    pin.dispatchEvent({ type: 'pointerdown', clientX: 5, clientY: 5, button: 0, pointerId: 1, preventDefault() {}, stopPropagation() {} });
+    f.root.dispatchEvent({ type: 'pointerup', clientX: 5, clientY: 5, pointerId: 1, preventDefault() {}, stopPropagation() {} });
+    f.core.recordRegionEvent(c.id, { rect: { x: 0.6, y: 0.6, width: 0.2, height: 0.2 } }, 'move');
+    f.env.drainMicrotasks();
+    assert.equal(f.core.visibleThreads()[0]?.anchor.rect.x, 0.6, 'it moved while open');
+
+    f.core.deleteComment(c.id);
+    f.env.drainMicrotasks();
+    const after = f.core.visibleThreads();
+    if (!after.length) return;   // if emptying also closes the surface, there is nothing to remember
+    assert.equal(after[0].comments.length, 0, 'still open, now holding nothing');
+    assert.equal(after[0].anchor.rect.x, 0.6, 'and still naming where it ended up, not where it began');
+  } finally { f.restore(); }
+});
