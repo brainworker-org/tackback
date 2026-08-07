@@ -1339,3 +1339,33 @@ test('visibility: a destroyed panel is no longer asked what is readable', () => 
     assert.deepEqual(seen, [], 'and the core has nothing to announce');
   } finally { f.restore(); }
 });
+
+test('visibility: two displays showing the same thread make it readable once, not twice', () => {
+  // The objection that a core-level baseline cannot serve more than one display. It can, because the
+  // core never stores what a display returned: it asks every display and merges. One thread shown in
+  // two places is one readable thread, and a consumer resolving read state gets the union of what is
+  // actually on screen rather than whichever display answered last.
+  const f = mountPanel({ instrument: true });
+  try {
+    const c = f.core.addComment({ anchor: { type: 'document' }, body: 'in the lane' });
+    f.panel.toggleDocumentLane(true);
+    const other = f.core.registerThreadVisibility(() => ([
+      { threadKey: 'document', anchor: { type: 'document' }, comments: [c.id, 'seen-only-over-there'] },
+      { threadKey: 'block:elsewhere', anchor: { type: 'block', elementId: 'elsewhere' }, comments: ['x'] },
+    ]));
+    f.env.drainMicrotasks();
+
+    const now = f.core.visibleThreads();
+    assert.deepEqual(now.map((e) => e.threadKey), ['block:elsewhere', 'document'], 'one entry per thread');
+    assert.deepEqual(now.find((e) => e.threadKey === 'document').comments, [c.id, 'seen-only-over-there'].sort(),
+      'the union of what both displays are showing');
+
+    const seen = recordVisibility(f.core);
+    other();                                  // the second display goes away
+    f.env.drainMicrotasks();
+    assert.deepEqual(seen[0].closed.map((e) => e.threadKey), ['block:elsewhere'],
+      'only what it alone was showing closes');
+    assert.deepEqual(f.core.visibleThreads().map((e) => e.threadKey), ['document'],
+      'the thread the panel still shows stays open');
+  } finally { f.restore(); }
+});

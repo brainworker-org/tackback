@@ -6,6 +6,42 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
 
 ## [Unreleased]
 
+## [0.9.7] — 2026-08-07
+
+### Added
+- **`thread:visibility` — which threads a reader can actually see.** A flag like anchor attention is
+  only half of a read state; something has to decide when to clear it, and that takes knowing what is
+  in front of the reader. `tb.on('thread:visibility', ({ visible, opened, closed }) => …)` reports it
+  as a **settled snapshot**, with `tb.visibleThreads()` answering the same question on the spot. Each
+  entry carries `{ threadKey, anchor, comments }`, where `comments` is every utterance id in the
+  thread, replies included. `opened` and `closed` are the library's own difference against what it
+  last delivered, so no two consumers can compute them differently.
+
+  A snapshot rather than an open/close pair because an edge contract makes the consumer responsible
+  for balancing it, and a report that arrives out of order or not at all is unrecoverable — nothing
+  later says what the truth now is. A snapshot repairs itself on the next report. It also lets the
+  library report the case an edge pair cannot express at all: **a thread the reader is watching while
+  it grows** is reported again when its contents change, though it never opened or closed.
+
+  Reports settle at the microtask boundary from a state that has finished moving, so several changes
+  in one turn arrive as one report and nothing is announced from the middle of a surface changing. A
+  thread with no identity yet — an uncommitted region — is **absent** rather than reported with nulls,
+  and appears once its first commit gives it one.
+
+  The panel is what can see a surface, so the panel is what answers: attach one and reports begin, and
+  a core with no panel reports nothing. Tearing the panel down is itself a transition, so a consumer
+  that raised its update rate while a thread was open is told when that stops being true.
+
+### Changed
+- Nothing existing changes shape. `thread:visibility` is additive, and no other event's payload,
+  ordering or timing is affected.
+
+### Compatibility
+- **Same-turn transients are coalesced away, by design.** Open a thread and close it before the
+  boundary and nothing is emitted. This reports settled visibility; it is **not** a lossless
+  interaction log. Anything that needs to count impressions or measure how long a thread was open must
+  do so from its own handlers.
+
 ### Fixed
 - **`panel.destroy()` now gives the document back.** Teardown mirrored some two dozen acquisition
   sites by hand in a single list, and what that list missed it missed in silence. Each resource now

@@ -203,6 +203,41 @@ The flag is **session-only**: never persisted, never written into the export env
 UI state can't leak into a shared file. It lives as long as its comment — deleting or wiping the comment
 drops it, and re-importing that comment id starts unflagged. Restyle it via the `--tb-attention` token.
 
+### Which threads a reader can see
+
+A flag like attention is only half of it: something has to decide when to *clear* it. That takes
+knowing which threads are actually in front of the reader right now, and Tackback reports it as a
+**settled snapshot** rather than as open/close edges you would have to keep balanced yourself:
+
+```js
+tb.on('thread:visibility', ({ visible, opened, closed }) => {
+  // visible: [{ threadKey, anchor, comments: [id, …] }] — everything readable right now
+  // opened / closed: the difference from the last report, computed for you
+  for (const t of opened) markRead(t.comments);
+});
+
+tb.visibleThreads();   // → the same array, answered on the spot
+```
+
+`comments` carries every utterance id in the thread, replies included — the ids you would resolve a
+read cursor against. A thread the reader is *watching while it grows* is reported again when its
+contents change, even though it never opened or closed: that is the case a plain open/close pair
+cannot express, and the reason this is a snapshot.
+
+Reports settle at the microtask boundary from a state that has finished moving, so several changes in
+one turn arrive as one report, and nothing is ever announced from the middle of a surface changing. A
+thread with no identity yet — an uncommitted region — is simply **absent**, and appears once its first
+commit gives it one.
+
+Because it is a snapshot, **same-turn transients are coalesced away**: open a thread and close it
+before the boundary and nothing is emitted. This reports settled visibility; it is not a lossless
+interaction log. If you need to count impressions, count them from your own handlers.
+
+The panel is what can see a surface, so it is the panel that answers — attach one and the reports
+begin; a core with no panel reports nothing and `visibleThreads()` is empty. Tearing the panel down is
+itself a transition: you are told the thread is no longer readable, which is exactly when a consumer
+that raised its update rate needs to hear it.
+
 ### Deleting as one act, and a merge that can remove
 
 ```js
