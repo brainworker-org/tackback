@@ -1190,11 +1190,15 @@ test('visibility: the pull accessor answers the same question without waiting', 
   } finally { f.restore(); }
 });
 
-test('visibility: a core with no panel has no surfaces, and says so without erroring', () => {
+test('visibility: a core with no panel has no surfaces, and says so without erroring', async () => {
   const core = Tackback.mount({ document: { id: 'headless-fixture' } });
   const seen = recordVisibility(core);
   core.addComment({ anchor: { type: 'document' }, body: 'nobody is showing this' });
   assert.deepEqual(core.visibleThreads(), [], 'a headless core shows nothing');
+  // The boundary has to actually be reached before silence means anything. Asserting here and then
+  // destroying would let a core that DOES emit pass, because the report it scheduled would run after
+  // the assertion and return early on a destroyed instance.
+  await Promise.resolve(); await Promise.resolve();
   assert.deepEqual(seen, [], 'and announces nothing');
   core.destroy();
 });
@@ -1259,11 +1263,15 @@ test('visibility: a comment arriving in an OPEN thread is reported, though membe
 test('visibility: a report identical to the last one is not sent again', () => {
   const f = mountPanel({ controls: { docLane: false }, instrument: true });
   try {
-    f.core.addComment({ anchor: { type: 'document' }, body: 'first' });
+    const first = f.core.addComment({ anchor: { type: 'document' }, body: 'first' });
     f.panel.openDocumentThread();
     f.env.drainMicrotasks();
     const seen = recordVisibility(f.core);
-    f.core.setAnchorAttention('nonexistent', true);   // a change that moves nothing visible
+    // A real mutation, so a report is genuinely reconsidered — the point is that it finds nothing to
+    // say. Editing a body changes the thread's contents without changing anything the snapshot
+    // promises: same thread, same anchor, same ids. An earlier version of this test used a call that
+    // never scheduled a report at all, so it would have stayed green with the comparison deleted.
+    f.core.updateComment(first.id, { body: 'edited, but the same utterance' });
     f.env.drainMicrotasks();
     assert.deepEqual(seen, [], 'the same snapshot twice is one fact, not two');
   } finally { f.restore(); }
@@ -1279,7 +1287,11 @@ test('visibility: opening and closing within one turn settles to nothing, and sa
     // immediately close it. Frames and timers only — draining microtasks here would deliver the
     // opening report and destroy the premise, which is that both events happen inside ONE turn.
     f.env.flushTimers(); f.env.flushFrames();
+    // Both transitions have to be real for the silence to mean anything: an `openDocumentThread` that
+    // quietly did nothing would satisfy an event-only assertion just as well.
+    assert.deepEqual(f.core.visibleThreads().map((e) => e.threadKey), ['document'], 'it really did open');
     f.root.dispatchEvent({ type: 'keydown', key: 'Escape', preventDefault() {} });
+    assert.deepEqual(f.core.visibleThreads(), [], 'and it really did close, both before the boundary');
     f.env.drainMicrotasks();
     assert.deepEqual(seen, [], 'this is settled visibility, not an interaction log');
   } finally { f.restore(); }
@@ -1368,4 +1380,131 @@ test('visibility: two displays showing the same thread make it readable once, no
     assert.deepEqual(f.core.visibleThreads().map((e) => e.threadKey), ['document'],
       'the thread the panel still shows stays open');
   } finally { f.restore(); }
+});
+
+test('visibility: a surface with nothing written in it yet is still readable', () => {
+  // Being open and holding a comment are different facts. A thread the reader has just opened has
+  // never been written in, and answering "not readable" while they are looking straight at it makes
+  // the report describe the store rather than the reader.
+  const f = mountPanel({ controls: { docLane: false }, instrument: true });
+  try {
+    f.panel.openDocumentThread();
+    f.env.drainMicrotasks();
+    const now = f.core.visibleThreads();
+    assert.deepEqual(now.map((e) => e.threadKey), ['document'], 'an empty thread is open all the same');
+    assert.deepEqual(now[0].comments, [], 'and holds nothing, which is a state and not an absence');
+    assert.ok(now[0].anchor, 'it still knows what it points at');
+  } finally { f.restore(); }
+});
+
+test('visibility: emptying an open thread is not the same as closing it', () => {
+  // The lane stays expanded when its last comment goes, composer and all. Deriving presence from the
+  // store reports a closing that never happened, and a consumer that stops tracking on `closed` then
+  // stops tracking a thread the reader is still sitting in front of.
+  const f = mountPanel({ instrument: true });
+  try {
+    const c = f.core.addComment({ anchor: { type: 'document' }, body: 'the only one' });
+    f.panel.toggleDocumentLane(true);
+    f.env.drainMicrotasks();
+    const seen = recordVisibility(f.core);
+
+    f.core.deleteComment(c.id);
+    f.env.drainMicrotasks();
+    assert.equal(seen.length, 1, 'losing its contents is a change worth reporting');
+    assert.deepEqual(seen[0].closed, [], 'but nothing closed — the lane never folded away');
+    assert.deepEqual(seen[0].visible.map((e) => e.threadKey), ['document']);
+    assert.deepEqual(seen[0].visible[0].comments, [], 'it is simply empty now');
+  } finally { f.restore(); }
+});
+
+test('visibility: what a subscriber is handed cannot rewrite what the core believes it said', () => {
+  // A snapshot contract is worth nothing if the recipient can edit the baseline the next difference
+  // is measured against — or, through a shared anchor, edit stored comment state with no mutation, no
+  // validation and no `change` event.
+  const f = mountPanel({ instrument: true });
+  try {
+    const c = f.core.addComment({ anchor: { type: 'document' }, body: 'held' });
+    f.panel.toggleDocumentLane(true);
+    let vandalised = false;
+    f.core.on('thread:visibility', (p) => {
+      if (vandalised || !p.visible.length) return;
+      vandalised = true;
+      p.visible[0].threadKey = 'rewritten';
+      p.visible[0].comments.push('invented');
+      if (p.visible[0].anchor) p.visible[0].anchor.type = 'rewritten';
+    });
+    f.env.drainMicrotasks();
+    assert.ok(vandalised, 'the payload was actually reachable, so this test measured something');
+
+    assert.deepEqual(f.core.visibleThreads().map((e) => e.threadKey), ['document'], 'the pull is untouched');
+    assert.deepEqual(f.core.visibleThreads()[0].comments, [c.id], 'and so is what it holds');
+    assert.equal(f.core.getComment(c.id).anchor.type, 'document', 'the stored comment kept its own anchor');
+
+    const seen = recordVisibility(f.core);
+    f.panel.toggleDocumentLane(false);
+    f.env.drainMicrotasks();
+    assert.deepEqual(seen[0].closed.map((e) => e.threadKey), ['document'], 'the close names the real thread');
+    assert.equal(seen[0].closed[0].anchor.type, 'document');
+  } finally { f.restore(); }
+});
+
+test('visibility: the same anchor spelled in a different order is the same anchor', () => {
+  // Equality has to be about what an anchor MEANS. Property order is how it happens to be written
+  // down, and an import can legitimately write it down differently — reporting that as a change makes
+  // the documented suppression untrue exactly where round-tripping is most likely.
+  const f = mountPanel({ instrument: true });
+  try {
+    const spelled = (order) => order === 'a'
+      ? { type: 'block', elementId: 'para-x' }
+      : { elementId: 'para-x', type: 'block' };
+    let which = 'a';
+    f.core.registerThreadVisibility(() => ([{ threadKey: 'block:para-x', anchor: spelled(which), comments: ['c1'] }]));
+    f.env.drainMicrotasks();
+    const seen = recordVisibility(f.core);
+
+    which = 'b';
+    f.core.reportThreadVisibility();
+    f.env.drainMicrotasks();
+    assert.deepEqual(seen, [], 'the same fact written the other way round is not news');
+  } finally { f.restore(); }
+});
+
+test('visibility: a display that fails to answer has not stopped showing anything', () => {
+  // "Could not answer" and "shows nothing" are opposite facts, and the diff cannot tell them apart
+  // once one is written down as the other: everything that display alone was showing lands in
+  // `closed`, that becomes the baseline, and nothing repairs it until something else happens.
+  const f = mountPanel({ instrument: true });
+  try {
+    let failing = false;
+    f.core.registerThreadVisibility(() => {
+      if (failing) throw new Error('cannot read the surface right now');
+      return [{ threadKey: 'block:elsewhere', anchor: { type: 'block', elementId: 'elsewhere' }, comments: ['x'] }];
+    });
+    f.env.drainMicrotasks();
+    assert.deepEqual(f.core.visibleThreads().map((e) => e.threadKey), ['block:elsewhere']);
+
+    const seen = recordVisibility(f.core);
+    const errors = [];
+    f.core.on('error', (e) => errors.push(e));
+    failing = true;
+    f.core.reportThreadVisibility();
+    f.env.drainMicrotasks();
+    assert.deepEqual(seen, [], 'a moment of not answering closes nothing');
+    assert.equal(errors.length >= 1, true, 'and is not swallowed either');
+
+    failing = false;
+    f.core.addComment({ anchor: { type: 'document' }, body: 'recovering' });
+    f.env.drainMicrotasks();
+    assert.deepEqual(f.core.visibleThreads().map((e) => e.threadKey), ['block:elsewhere'], 'it answers again');
+  } finally { f.restore(); }
+});
+
+test('visibility: a destroyed core does not take on a new display', () => {
+  const core = Tackback.mount({ document: { id: 'destroyed-fixture' } });
+  core.destroy();
+  let asked = false;
+  const off = core.registerThreadVisibility(() => { asked = true; return []; });
+  assert.equal(typeof off, 'function', 'it still answers with something callable');
+  off();
+  assert.equal(asked, false, 'but nothing was ever registered to ask');
 });

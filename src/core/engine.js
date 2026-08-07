@@ -26,7 +26,26 @@ const nowIso = () => new Date().toISOString();
 const sameEntry = (a, b) => !!b
   && a.comments.length === b.comments.length
   && a.comments.every((id, i) => id === b.comments[i])
-  && JSON.stringify(a.anchor ?? null) === JSON.stringify(b.anchor ?? null);
+  && a.sig === b.sig;
+
+/**
+ * A value rebuilt as the core's own, with object keys in a defined order and absent optionals
+ * dropped. Two jobs at once, and they are the same job: what a subscriber receives shares nothing
+ * with what a display handed over or with what the core will diff against next time, and two anchors
+ * that MEAN the same thing compare equal however their properties happen to be ordered — a fresh
+ * import can spell an anchor differently without that counting as a change.
+ * @template T @param {T} v @returns {T}
+ */
+const canonical = (v) => {
+  if (v === null || v === undefined || typeof v !== 'object') return v === undefined ? null : v;
+  if (Array.isArray(v)) return /** @type {any} */ (v.map(canonical));
+  const out = /** @type {any} */ ({});
+  for (const k of Object.keys(v).sort()) { if (v[k] !== undefined) out[k] = canonical(v[k]); }
+  return out;
+};
+
+/** A visibility entry as a subscriber sees it: freshly built every time, sharing nothing. */
+const visibilityDTO = (e) => ({ threadKey: e.threadKey, anchor: canonical(e.anchor), comments: e.comments.slice() });
 
 /**
  * @typedef {import('./model.js').Comment} Comment
@@ -53,6 +72,7 @@ class TackbackInstance {
     this._transport = options.transport || null;   // descriptor only; core never transports (REQ-205)
     this._visibilityProviders = new Set();      // displays that can say what is readable — see below
     this._visibilityDelivered = new Map();      // the snapshot subscribers were last told about
+    this._visibilityLast = new Map();           // each display's last good answer, kept for when one fails
     this._visibilityScheduled = false;
     this._attention = new Set();   // comment ids currently flagged for ATTENTION — a generic, live UI
                                    // state driven by the integrator; NOT persisted, NOT exported, and
@@ -427,11 +447,14 @@ class TackbackInstance {
    * @returns {() => void} deregister — which is itself a transition, and is reported as one
    */
   registerThreadVisibility(provider) {
-    if (typeof provider !== 'function') return () => {};
+    // A destroyed core keeps nothing: it would never schedule a report for this provider, so adding
+    // it only makes the display — and everything its closure holds — reachable from a corpse.
+    if (typeof provider !== 'function' || this._destroyed) return () => {};
     this._visibilityProviders.add(provider);
     this._scheduleVisibility();
     return () => {
       if (!this._visibilityProviders.delete(provider)) return;
+      this._visibilityLast.delete(provider);   // deregistering IS the intent to withdraw its answer
       this._scheduleVisibility();
     };
   }
@@ -443,7 +466,7 @@ class TackbackInstance {
    * The readable threads, right now. Same shape as the event's `visible`, answered without waiting.
    * @returns {Array<{threadKey:string, anchor:object, comments:string[]}>}
    */
-  visibleThreads() { return this._projectVisibility(); }
+  visibleThreads() { return this._projectVisibility().map(visibilityDTO); }
 
   _projectVisibility() {
     if (this._destroyed) return [];
@@ -451,14 +474,32 @@ class TackbackInstance {
     const merged = new Map();
     for (const provider of [...this._visibilityProviders]) {
       let entries;
-      // A display that throws is isolated the same way a subscriber is: it loses its own say in this
-      // report, and takes nobody else's with it.
-      try { entries = provider(); } catch { continue; }
+      try {
+        entries = provider();
+        this._visibilityLast.set(provider, entries);
+      } catch (err) {
+        // A display that fails has not stopped showing anything — it has stopped ANSWERING, and those
+        // are opposite facts. Dropping it here would put every thread only it was showing into
+        // `closed` and then install that as the truth future diffs are measured from, so a moment's
+        // failure would be indistinguishable from the reader closing everything, and nothing would
+        // repair it until something else happened to schedule a report. Its last good answer stands
+        // until it answers again or withdraws.
+        entries = this._visibilityLast.get(provider);
+        this._fail('ADAPTER_FAILED', 'a display could not report what is visible', err);
+      }
       for (const e of entries || []) {
         if (!e || typeof e.threadKey !== 'string' || !e.threadKey) continue;
+        // A display supplies facts, not values the core will hand on: the ids are narrowed to what
+        // was promised, and the anchor is rebuilt as the core's own so that neither the display's
+        // state nor a stored comment can be reached through a report.
+        const ids = [...new Set((Array.isArray(e.comments) ? e.comments : [])
+          .filter((id) => typeof id === 'string' && id))].sort();
         const prev = merged.get(e.threadKey);
-        const ids = [...new Set(e.comments || [])].sort();
-        if (!prev) { merged.set(e.threadKey, { threadKey: e.threadKey, anchor: e.anchor ?? null, comments: ids }); continue; }
+        if (!prev) {
+          const anchor = canonical(e.anchor ?? null);
+          merged.set(e.threadKey, { threadKey: e.threadKey, anchor, comments: ids, sig: JSON.stringify(anchor) });
+          continue;
+        }
         // Two displays showing the same thread is one readable thread, not two.
         prev.comments = [...new Set([...prev.comments, ...ids])].sort();
       }
@@ -492,7 +533,11 @@ class TackbackInstance {
     // this frame writing back a world its own handler has already left.
     this._visibilityDelivered = now;
     if (!changed) return;
-    this._emitter.emit('thread:visibility', { visible, opened, closed });
+    // Built fresh for this delivery. What a subscriber is given is not the baseline the next diff is
+    // measured against, so nothing it does to the payload can rewrite what the core believes it said.
+    this._emitter.emit('thread:visibility', {
+      visible: visible.map(visibilityDTO), opened: opened.map(visibilityDTO), closed: closed.map(visibilityDTO),
+    });
   }
 
   setAuthor(name) { this._opts.author = name; }
@@ -517,6 +562,7 @@ class TackbackInstance {
     this._attention.clear();
     this._visibilityProviders.clear();
     this._visibilityDelivered.clear();
+    this._visibilityLast.clear();
     this._emitter.clear();
   }
 
