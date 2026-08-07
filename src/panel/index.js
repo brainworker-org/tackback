@@ -181,24 +181,130 @@ export function attachPanel(core, options = {}) {
   const t = (k, v) => i18n.t(k, v);
   const lbl = (k, fb) => { const v = t(k); return v === k ? fb : v; };   // i18n with a literal fallback
 
-  doc.documentElement.setAttribute('data-tb-root', '');
+  // ---- ownership -------------------------------------------------------------------------------
+  // Every resource this panel takes registers how to give it back, AT THE POINT IT IS TAKEN. Teardown
+  // then has nothing to remember: it runs the bag, last acquired first. The previous teardown mirrored
+  // some twenty-five acquisition sites by hand in one list, and whatever it missed it missed in
+  // silence — a held pointer capture, a class left on a host element, an attribute on the root.
+  //
+  // What is deliberately NOT given back: the element IDS assigned to elements that had none, and the
+  // identity mark on a region's surface. A stored comment names its element by id, so removing those
+  // would orphan the anchors that depend on them. They are contract, not litter. Nothing else the
+  // panel writes onto a host element is in that category — see the indexing marks below.
+  const owned = [];
+  const own = (dispose) => { owned.push(dispose); };
+  const disposeOwned = () => {
+    while (owned.length) { try { owned.pop()(); } catch { /* one bad disposer must not strand the rest */ } }
+  };
+  const onDoc = (type, fn, capture) => { doc.addEventListener(type, fn, capture); own(() => doc.removeEventListener(type, fn, capture)); };
+  const onWin = (type, fn) => { if (!win.addEventListener) return; win.addEventListener(type, fn); own(() => win.removeEventListener?.(type, fn)); };
+  const ownNode = (node) => { own(() => node.remove()); return node; };
+  /**
+   * Subscribe to the core, and register the unsubscribe. The guard is not redundant with it: the
+   * emitter snapshots its listeners before invoking them, so unsubscribing DURING a dispatch does not
+   * take this panel out of the run already in progress. An integrator that calls `destroy()` from its
+   * own `change` handler used to have the panel's handler run afterwards anyway — re-creating marks
+   * and writing to host elements after teardown.
+   */
+  const onCore = (event, fn) => { own(core.on(event, (...a) => { if (!destroyed) fn(...a); })); };
+  /**
+   * Defer work, and hand back a cancel that matches how it was scheduled. Both surfaces and the
+   * repaint used to defer without keeping a handle at all. Where the host has animation frames that
+   * merely meant nothing could be cancelled; where it has none the work is a timer, which
+   * `cancelAnimationFrame` cannot take back, so it carried straight across teardown.
+   */
+  const later = (fn) => {
+    const raf = globalThis.requestAnimationFrame;
+    if (typeof raf === 'function') { const id = raf(fn); return () => globalThis.cancelAnimationFrame?.(id); }
+    const id = (globalThis.setTimeout || ((f) => (f(), 0)))(fn, 0);
+    return () => globalThis.clearTimeout?.(id);
+  };
+  /** Defer work that belongs to the PANEL: cancelled when the panel goes. */
+  const laterOwned = (fn) => { const cancel = later(fn); own(cancel); return cancel; };
+  /** Add a class to something the HOST owns, and take only that class back. */
+  const ownClass = (element, cls) => { element.classList.add(cls); own(() => element.classList.remove(cls)); };
+  /** Write an attribute on something the host owns; restore it only if it is still what we wrote. */
+  const ownAttr = (element, name, value) => {
+    const prev = element.getAttribute(name);
+    element.setAttribute(name, value);
+    own(() => {
+      if (element.getAttribute(name) !== value) return;   // the host changed it since; leave theirs
+      if (prev == null) element.removeAttribute?.(name); else element.setAttribute(name, prev);
+    });
+  };
+
+  ownAttr(doc.documentElement, 'data-tb-root', '');
+  // Indexing writes three things onto the HOST's own elements, and only one of them is anchor
+  // identity. The element `id` is: a stored comment names it as `elementId`, so removing it would
+  // orphan that comment. `data-tb-anchor` and `data-tb-section` are not — nothing in anchor
+  // resolution reads them; they exist so this panel can find what is commentable and label a thread.
+  // So the id stays, and those two are handed back the same way the positioning context is: recorded
+  // per element at the moment of writing, and restored only where the value is still the one the
+  // panel wrote. Searching the document at teardown instead would miss anything detached since, and
+  // would overwrite a value the host changed while the panel was alive.
+  const indexed = new Map();
+  for (const elx of root.querySelectorAll('[data-tb-anchor],[data-tb-section]') || []) {
+    indexed.set(elx, { before: [elx.getAttribute('data-tb-anchor'), elx.getAttribute('data-tb-section')] });
+  }
   indexAnnotatable(root);
+  for (const elx of root.querySelectorAll('[data-tb-anchor],[data-tb-section]') || []) {
+    const rec = indexed.get(elx) || { before: [null, null] };
+    rec.written = [elx.getAttribute('data-tb-anchor'), elx.getAttribute('data-tb-section')];
+    indexed.set(elx, rec);
+  }
+  own(() => {
+    for (const [elx, rec] of indexed) {
+      for (const [i, name] of [[0, 'data-tb-anchor'], [1, 'data-tb-section']]) {
+        if (elx.getAttribute(name) !== rec.written?.[i]) continue;   // the host changed it; leave theirs
+        const had = rec.before[i];
+        if (had == null) elx.removeAttribute?.(name); else elx.setAttribute(name, had);
+      }
+    }
+  });
+  // `.tb-mark` is a class on the HOST's own elements — the teardown sweep could never remove those
+  // nodes, and did not think to remove the class either. renderMarks clears them each pass; this is
+  // the last one.
+  // Released through the ELEMENTS, not through a search of the document. A host that detaches a
+  // marked block while the panel is alive would not be found by a search, and re-attaching that
+  // element later would bring the panel's class back with it — the same shape the indexing marks
+  // needed, and one the outside census cannot see, because the element has left the subtree it walks.
+  const marked = new Set();
+  const markHost = (element) => { element.classList.add('tb-mark'); marked.add(element); };
+  const unmarkHosts = () => { for (const e of marked) e.classList.remove('tb-mark'); marked.clear(); };
+  own(unmarkHosts);
+  // State this panel writes onto the document root, as a namespace rather than as a list of three
+  // classes to remember: `tb-hide`, `tb-popup-open`, `tb-lane-stacked` are all toggled from several
+  // places, and one of them survived teardown because the removal was a hand-written line rather
+  // than a consequence of having set it. The `tb-` namespace on the root belongs to this library.
+  own(() => {
+    for (const cls of [...(doc.documentElement.classList || [])]) {
+      if (String(cls).startsWith('tb-')) doc.documentElement.classList.remove(cls);
+    }
+  });
+  // A gesture torn down mid-flight kept the pointer capture it took, so the page went on routing
+  // pointer events to a panel that no longer exists.
+  own(() => {
+    for (const id of [draw?.pointerId, handleDrag?.captured ? handleDrag.pointerId : null]) {
+      if (id == null) continue;
+      try { doc.documentElement?.releasePointerCapture?.(id); } catch { /* ignore */ }
+    }
+  });
 
   // The default HTML surface = the document content box (REQ-005): a region can be drawn over the
   // document itself (cross-element, over text + non-text), not only over a figure/PDF page. Register
   // it against the panel's content root so surfaceId:'document' anchors resolve. Idempotent if the
   // core was also mounted with a root (same id overwrites).
-  const offDocSurface = core.registerMediaAdapter({
+  own(core.registerMediaAdapter({
     name: 'tb-document',
     mount: (ctx) => { ctx.registerSurface(documentSurface(root)); },
-  });
+  }));
 
   // ---- styles (panel + theme tokens) -----------------------------------------------------------
   const styleEl = doc.createElement('style');
   const themeStyleEl = doc.createElement('style');
   styleEl.textContent = PANEL_CSS;
-  doc.head.appendChild(styleEl);
-  doc.head.appendChild(themeStyleEl);
+  doc.head.appendChild(ownNode(styleEl));
+  doc.head.appendChild(ownNode(themeStyleEl));
 
   let mql = null, applyAutoTheme = null;
   function applyTheme(theme) {
@@ -212,6 +318,10 @@ export function attachPanel(core, options = {}) {
       mql = globalThis.matchMedia('(prefers-color-scheme: dark)');
       applyAutoTheme = () => { themeStyleEl.textContent = buildThemeCSS(resolveTheme(theme, mql.matches)); };
       mql.addEventListener('change', applyAutoTheme);
+      // re-registered on every theme change, so the disposer is registered every time too and the
+      // stale ones become no-ops rather than being forgotten
+      const boundMql = mql, boundFn = applyAutoTheme;
+      own(() => boundMql.removeEventListener('change', boundFn));
     }
   }
   let currentTheme = options.theme || 'auto';
@@ -266,7 +376,7 @@ export function attachPanel(core, options = {}) {
   let exportBtn = null;
   if (controls.export) {
     exportBtn = btn(doc, t('panel.export'));
-    exportBtn.onclick = () => exportModal(doc, core.exportEnvelope());
+    exportBtn.onclick = () => openModal(exportModal(doc, core.exportEnvelope()));
     panel.appendChild(exportBtn);
   }
   let importBtn = null;
@@ -275,7 +385,7 @@ export function attachPanel(core, options = {}) {
     // shared file, no backend). Merge so an incoming envelope ADDS comments (e.g. an AI participant's
     // anchored replies) without wiping the current set; the panel re-renders via the `change` event.
     importBtn = btn(doc, t('panel.import'), 'tb-sec');
-    importBtn.onclick = () => importModal(doc, core, t);
+    importBtn.onclick = () => openModal(importModal(doc, core, t));
     panel.appendChild(importBtn);
   }
   let themeBtn = null;
@@ -304,7 +414,7 @@ export function attachPanel(core, options = {}) {
   const hintEl = el(doc, 'div', 'tb-hint');
   hintEl.textContent = t('hint.html');
   panel.appendChild(hintEl);
-  target.appendChild(panel);
+  target.appendChild(ownNode(panel));
 
   // ---- the document lane -------------------------------------------------------------------------
   // Every other thread is reached from a mark on the thing it is about. This one is about the whole
@@ -325,7 +435,7 @@ export function attachPanel(core, options = {}) {
     laneComposer = el(doc, 'div', 'tb-lane-composer');   // …and the input, which never hides
     laneHead.onclick = () => toggleLane();
     lane.append(laneHead, laneBody, laneComposer);
-    target.appendChild(lane);
+    target.appendChild(ownNode(lane));
   }
   // The conversation is built with the lane, not on first expand: its composer is visible from the
   // start, so it must exist from the start. The timeline it also owns simply stays hidden until
@@ -400,8 +510,8 @@ export function attachPanel(core, options = {}) {
     const clearOrphan = (cs) => { for (const c of cs) if (c.orphan) toResolve.push(c.id); };   // re-resolved → clear serialized orphan (REQ-004)
     regionOverlays = [];   // rebuilt below for handle hit-testing (REQ-008)
     doc.querySelectorAll('.tb-badge,.tb-pin,.tb-region').forEach((e) => e.remove());
-    doc.querySelectorAll('.tb-mark').forEach((e) => e.classList.remove('tb-mark'));
-    ensurePositioned(root);                            // badges/pins are absolute within root (the document surface)
+    unmarkHosts();   // rebuilt below; releasing through the set keeps detached elements accounted for
+    ensurePositioned(root, own);                            // badges/pins are absolute within root (the document surface)
     const rootRect = root.getBoundingClientRect();
     // a visible fallback spot for an orphan with no live anchor point — top-left of the surface, so an
     // unresolvable anchor is isolated-but-VISIBLE, never silently hidden (REQ-004).
@@ -447,7 +557,7 @@ export function attachPanel(core, options = {}) {
         continue;
       }
       clearOrphan(comments);   // resolved again → clear any stale serialized orphan
-      r.element.classList.add('tb-mark');
+      markHost(r.element);
       const tgt = r.element.tagName === 'TR' ? (r.element.lastElementChild || r.element) : r.element;
       placeBadge(badge, tgt.getBoundingClientRect(), rootRect);
     }
@@ -512,7 +622,7 @@ export function attachPanel(core, options = {}) {
       // NOTE: opening the thread on a plain icon click is handled in endHandleDrag (a no-move pointerup),
       // not via onclick — a left-down on the pin starts a (possible) move drag, and renderMarks would
       // otherwise destroy this element before its click event fired (the "icon click does nothing" bug).
-      ensurePositioned(r.element);
+      ensurePositioned(r.element, own);
       r.element.append(box, pin);
       regionOverlays.push({ box, pin, surfaceEl: r.element, comments: group.comments });
     }
@@ -796,6 +906,7 @@ export function attachPanel(core, options = {}) {
   function openPopup({ anchorLabel, existing, onSave, draftKey, threadKey: initialThreadKey = null, ephemeralDraft }, ev) {
     closePopup();
     popup = el(doc, 'div', 'tb-popup');
+    const mine = popup;   // identity, so a Pane that replaces this one cannot be mistaken for it
     doc.documentElement.classList.add('tb-popup-open');   // lock region affordances while editing (REQ-008): no resize grip on hover, no move cursor
     const conv = createConversation({
       anchorLabel, existing, onSave, draftKey, threadKey: initialThreadKey,
@@ -817,9 +928,16 @@ export function attachPanel(core, options = {}) {
     const dismissPreserve = () => { if (ephemeralDraft) conv.clearDraft(); else conv.preserveDraft(); closePopup(); };
     const onDocDown = (e) => { if (popup && !e.target.closest('.tb-popup')) dismissPreserve(); };
     const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); dismissPreserve(); } };
-    const register = () => { doc.addEventListener('mousedown', onDocDown, true); doc.addEventListener('keydown', onKey, true); };
-    (globalThis.setTimeout || ((f) => f()))(register, 0);   // defer so the opening event doesn't self-dismiss
-    popupCleanup = () => { doc.removeEventListener('mousedown', onDocDown, true); doc.removeEventListener('keydown', onKey, true); };
+    // The same deferred-ownership shape the anchor menu has, and the reason it needs identity rather
+    // than existence: `popupCleanup` holds exactly one remover, so if this Pane has been closed — or
+    // REPLACED, which "is there a Pane?" cannot tell apart — by the time the deferred callback runs, whichever
+    // set of listeners loses that race can never be taken off the document again.
+    const register = () => {
+      if (popup !== mine) return;
+      doc.addEventListener('mousedown', onDocDown, true); doc.addEventListener('keydown', onKey, true);
+    };
+    const cancelRegister = later(register);   // deferred so the opening event doesn't self-dismiss
+    popupCleanup = () => { cancelRegister(); doc.removeEventListener('mousedown', onDocDown, true); doc.removeEventListener('keydown', onKey, true); };
   }
   function openThread(comments, ev) {
     const a = comments[0].anchor;
@@ -883,14 +1001,60 @@ export function attachPanel(core, options = {}) {
     // a registered surface), so the OS menu never fights the gesture. The popup itself opens on pointerup.
     if (e.target.closest('[data-tb-anchor]') || e.target.closest(regionSel) || (root.contains && root.contains(e.target))) e.preventDefault();
   };
-  doc.addEventListener('contextmenu', onContext);
+  onDoc('contextmenu', onContext);
+
+  // A modal is a surface like any other: at most one at a time, and it goes when the panel does.
+  // They used to append unclassed children straight to the body, outside every sweep and every
+  // count — so repeated clicks stacked several, and an import modal opened before teardown could
+  // still write into the core afterwards.
+  let modal = null;
+  /**
+   * Close the current modal. A modal's own dismissal passes ITSELF, because by the time it runs the
+   * modal on screen may be a different one: a successful import emits `change` synchronously, and a
+   * listener that opens another modal from there returns control to the import handler, which would
+   * otherwise close the replacement instead of itself. Called with nothing, it closes whatever is
+   * current — which is what replacing and teardown want.
+   */
+  function closeModal(expected) {
+    if (expected !== undefined && modal !== expected) return;
+    modal?.remove(); modal = null;
+  }
+  own(() => closePopup());
+  own(() => closeAnchorMenu());
+  own(() => clearHighlights(win));
+  // Marks are rebuilt wholesale on every render rather than owned one by one, so they are swept.
+  // `.tb-draw` is the draft rectangle of a gesture still in flight: it becomes a pending region only
+  // on commit, so it is the one mark no surface owns yet.
+  own(() => doc.querySelectorAll('.tb-badge,.tb-pin,.tb-region,.tb-pending,.tb-ctxmenu,.tb-draw').forEach((e) => e.remove()));
+  /**
+   * Mount a modal as the one modal. `activate` runs AFTER it is in the document: focusing or
+   * selecting inside a detached node does nothing, which is how making modals owned quietly broke
+   * the import focus and the export select-all.
+   */
+  function openModal(built) {
+    if (destroyed) return null;
+    closeModal();
+    const { node, activate, bind } = built;
+    bind?.(() => closeModal(node));   // its dismissals are scoped to itself
+    node.classList.add('tb-modal');
+    doc.body.appendChild(node);
+    modal = node;
+    activate?.();
+    return node;
+  }
+  own(() => closeModal());
 
   // ---- anchor context menu (right-click an anchor → Delete anchor) -----------------------------
+  // A destroyed panel has had its stylesheet removed, so anything built afterwards is unstyled
+  // chrome the host never asked for and has no handle to remove. Every public entry point becomes a
+  // no-op rather than half-working.
+  let destroyed = false;
   let anchorMenu = null, anchorMenuCleanup = null;
   function closeAnchorMenu() { anchorMenuCleanup?.(); anchorMenuCleanup = null; anchorMenu?.remove(); anchorMenu = null; }
   function openAnchorMenu(comments, ev) {
     closeAnchorMenu(); closePopup();
     anchorMenu = el(doc, 'div', 'tb-ctxmenu');
+    const mine = anchorMenu;   // identity, so a menu that replaces this one cannot be mistaken for it
     const item = el(doc, 'div', 'tb-ctxitem'); item.textContent = t('menu.delete');
     item.onclick = () => { core.deleteComments(comments.map((c) => c.id)); closeAnchorMenu(); };   // ONE operation: the whole anchor
     anchorMenu.appendChild(item);
@@ -900,8 +1064,16 @@ export function attachPanel(core, options = {}) {
     Object.assign(anchorMenu.style, { left: pos.x + 'px', top: pos.y + 'px' });
     const onDown = (e2) => { if (anchorMenu && !e2.target.closest('.tb-ctxmenu')) closeAnchorMenu(); };
     const onKey = (e2) => { if (e2.key === 'Escape') closeAnchorMenu(); };
-    (globalThis.setTimeout || ((f) => f()))(() => { doc.addEventListener('mousedown', onDown, true); doc.addEventListener('keydown', onKey, true); }, 0);
-    anchorMenuCleanup = () => { doc.removeEventListener('mousedown', onDown, true); doc.removeEventListener('keydown', onKey, true); };
+    // The dismiss handlers register from a DEFERRED CALLBACK, so this menu can be gone — or replaced —
+    // before they do. `anchorMenuCleanup` holds exactly one remover, so whichever menu loses that
+    // race would leave listeners on the document that nothing can ever take off again. Asking "is
+    // there a menu?" cannot tell replaced from closed; only identity can.
+    const register = () => {
+      if (anchorMenu !== mine) return;
+      doc.addEventListener('mousedown', onDown, true); doc.addEventListener('keydown', onKey, true);
+    };
+    const cancelRegister = later(register);
+    anchorMenuCleanup = () => { cancelRegister(); doc.removeEventListener('mousedown', onDown, true); doc.removeEventListener('keydown', onKey, true); };
   }
 
   // right-drag a rectangle over a "surface" to make a region anchor. A surface is a PDF page (from
@@ -1095,7 +1267,7 @@ export function attachPanel(core, options = {}) {
     draw.moved = Math.abs(x - draw.x0) > 4 || Math.abs(y - draw.y0) > 4;
     if (!draw.moved) return;
     if (!drawEl) {
-      drawEl = el(doc, 'div', 'tb-draw'); ensurePositioned(draw.surf); draw.surf.appendChild(drawEl);
+      drawEl = el(doc, 'div', 'tb-draw'); ensurePositioned(draw.surf, own); draw.surf.appendChild(drawEl);
       // capture NOW (drag confirmed) so the rect tracks even if the pointer leaves the surface
       // (N1, NFR-005/007). Doing it here — not on pointerdown — keeps a plain right-click's
       // contextmenu on its real target so the block/range popup still opens.
@@ -1133,26 +1305,31 @@ export function attachPanel(core, options = {}) {
     const d = draw; draw = null;
     if (!finalizeRegion(d, d.lastClientX ?? 0, d.lastClientY ?? 0)) { drawEl?.remove(); drawEl = null; }
   };
-  doc.addEventListener('pointerdown', onPointerDown);
-  doc.addEventListener('pointermove', onMove);
-  doc.addEventListener('pointercancel', onCancel);
-  doc.addEventListener('pointerup', onUp);
-  doc.addEventListener('lostpointercapture', finalizeFromCaptureLoss);
-  win.addEventListener?.('blur', finalizeFromCaptureLoss);
+  onDoc('pointerdown', onPointerDown);
+  onDoc('pointermove', onMove);
+  onDoc('pointercancel', onCancel);
+  onDoc('pointerup', onUp);
+  onDoc('lostpointercapture', finalizeFromCaptureLoss);
+  onWin('blur', finalizeFromCaptureLoss);
   const onCtxPdf = (e) => { if (e.target.closest(regionSel)) e.preventDefault(); };
-  doc.addEventListener('contextmenu', onCtxPdf);
+  onDoc('contextmenu', onCtxPdf);
 
   // ---- auto-reposition: overlays follow viewport resize / zoom / surface re-render (REQ-109) ----
   // recalculateAnchors() re-renders from the normalized rects against current sizes; NFR-009 (within
   // a frame) is the manual-gate visual. A single rAF coalesces bursts so we never mix-scale a frame.
-  let repaintQueued = false;
+  let cancelRepaint = null;
   const queueRecalc = () => {
-    if (repaintQueued) return; repaintQueued = true;
-    const raf = globalThis.requestAnimationFrame || ((f) => (globalThis.setTimeout || ((g) => g()))(f, 0));
-    raf(() => { repaintQueued = false; if (!core._destroyed) core.recalculateAnchors(); });
+    if (cancelRepaint) return;
+    // The scheduled work checked the CORE's lifetime, not this panel's, so a panel torn down with a
+    // repaint in flight still drove one afterwards — visible when a second panel shares the core.
+    cancelRepaint = laterOwned(() => { cancelRepaint = null; if (!destroyed && !core._destroyed) core.recalculateAnchors(); });
   };
   let ro = null;
-  if (typeof globalThis.ResizeObserver === 'function') { ro = new globalThis.ResizeObserver(queueRecalc); try { ro.observe(root); } catch { /* ignore */ } }
+  if (typeof globalThis.ResizeObserver === 'function') {
+    ro = new globalThis.ResizeObserver(queueRecalc);
+    try { ro.observe(root); } catch { /* ignore */ }
+    own(() => { try { ro.disconnect(); } catch { /* ignore */ } });
+  }
   const vv = globalThis.visualViewport || null;
   // A software keyboard shrinks the visual viewport without moving the layout viewport, so a fixed
   // bar would sit behind it. Follow the visual viewport's bottom edge instead.
@@ -1191,17 +1368,19 @@ export function attachPanel(core, options = {}) {
     lane.style.bottom = `calc(16px + env(safe-area-inset-bottom, 0px) + var(--tb-lane-lift, 0px) + ${Math.round(hidden)}px)`;
   };
   if (vv) {
-    vv.addEventListener('resize', queueRecalc); vv.addEventListener('scroll', queueRecalc);
-    vv.addEventListener('resize', placeLane); vv.addEventListener('scroll', placeLane);
+    for (const [type, fn] of [['resize', queueRecalc], ['scroll', queueRecalc], ['resize', placeLane], ['scroll', placeLane]]) {
+      vv.addEventListener(type, fn);
+      own(() => vv.removeEventListener(type, fn));
+    }
   }
-  win.addEventListener?.('resize', queueRecalc);
-  win.addEventListener?.('resize', placeLane);
+  onWin('resize', queueRecalc);
+  onWin('resize', placeLane);
 
   // ---- wire to core + initial render -----------------------------------------------------------
   // one change → re-place the anchors, then let an open thread catch up with what was just said
   const onChange = () => { renderMarks(); broadcast((c) => c.sync()); };
-  const offChange = core.on('change', onChange);
-  const offRecalc = core.on('recalculate', renderMarks);
+  onCore('change', onChange);
+  onCore('recalculate', renderMarks);
   // Flipping an attention flag changes exactly ONE class on the affected anchors. A full renderMarks
   // would rebuild every overlay — throwing away the elements an in-flight region move/resize drag is
   // holding — so the flag is applied as a targeted toggle instead. The flag is re-read from the core
@@ -1213,39 +1392,33 @@ export function attachPanel(core, options = {}) {
     });
     refreshLane();   // the document thread's "mark" is the panel control
   }
-  const offAttention = core.on('attention:change', syncAttention);
-  const offTransport = core.on('transport:change', () => broadcast((c) => c.relabel()));   // Save ⇄ Send, live, on every host
+  onCore('attention:change', syncAttention);
+  onCore('transport:change', () => broadcast((c) => c.relabel()));   // Save ⇄ Send, live, on every host
   if (lane) buildLaneConversation();   // late: the factory closes over drafts/reactions declared above
   if (lane) placeLane();
-  const offReady = core.on('ready', () => { hintEl.textContent = core.surfaces.size ? t('hint.pdf') : t('hint.html'); renderMarks(); });
+  onCore('ready', () => { hintEl.textContent = core.surfaces.size ? t('hint.pdf') : t('hint.html'); renderMarks(); });
   renderMarks();
 
   // ---- PanelInstance ---------------------------------------------------------------------------
   return {
-    setTheme(theme) { currentTheme = theme; applyTheme(theme); if (themeBtn) themeBtn.textContent = themeLabel(); },
-    setReactions(defs) { reactions.length = 0; reactions.push(...defs); },
+    setTheme(theme) { if (destroyed) return; currentTheme = theme; applyTheme(theme); if (themeBtn) themeBtn.textContent = themeLabel(); },
+    setReactions(defs) { if (destroyed) return; reactions.length = 0; reactions.push(...defs); },
     // Update the injected category→color map live (the integrator owns the mapping; Tackback just
     // applies it to the last-speaker tint). Pass `{}` to clear back to the generic per-identity hues.
-    setActorColors(map) { actorColors = { ...(map || {}) }; claimed = claimedColors(actorColors); renderMarks(); broadcast((c) => c.retint()); },
-    setLocale(lang) { const ok = i18n.setLocale(lang); relabel(); return ok; },
-    registerLocale(lang, bundle) { i18n.register(lang, bundle); },
-    toggleMarks() { doc.documentElement.classList.toggle('tb-hide'); },
+    setActorColors(map) { if (destroyed) return; actorColors = { ...(map || {}) }; claimed = claimedColors(actorColors); renderMarks(); broadcast((c) => c.retint()); },
+    setLocale(lang) { if (destroyed) return false; const ok = i18n.setLocale(lang); relabel(); return ok; },
+    registerLocale(lang, bundle) { if (destroyed) return; i18n.register(lang, bundle); },
+    toggleMarks() { if (destroyed) return; doc.documentElement.classList.toggle('tb-hide'); },
     /** Open the conversation about the document as a whole — the lane when it is on, else a Pane. */
-    openDocumentThread() { openDocumentThread(); },
+    openDocumentThread() { if (destroyed) return; openDocumentThread(); },
     /** Expand or collapse the document lane. Returns its resulting state (false when it is off). */
-    toggleDocumentLane(force) { return toggleLane(force); },
+    toggleDocumentLane(force) { return destroyed ? false : toggleLane(force); },
     destroy() {
-      offChange(); offRecalc(); offAttention(); offTransport(); offReady(); offDocSurface();
-      doc.removeEventListener('contextmenu', onContext); doc.removeEventListener('contextmenu', onCtxPdf);
-      doc.removeEventListener('pointerdown', onPointerDown); doc.removeEventListener('pointermove', onMove); doc.removeEventListener('pointerup', onUp); doc.removeEventListener('pointercancel', onCancel);
-      doc.removeEventListener('lostpointercapture', finalizeFromCaptureLoss); win.removeEventListener?.('blur', finalizeFromCaptureLoss);
-      if (ro) try { ro.disconnect(); } catch { /* ignore */ }
-      if (vv) { vv.removeEventListener('resize', queueRecalc); vv.removeEventListener('scroll', queueRecalc); vv.removeEventListener('resize', placeLane); vv.removeEventListener('scroll', placeLane); }
-      win.removeEventListener?.('resize', queueRecalc); win.removeEventListener?.('resize', placeLane);
-      if (mql && applyAutoTheme) mql.removeEventListener('change', applyAutoTheme);
-      closePopup(); closeAnchorMenu(); panel.remove(); lane?.remove(); doc.documentElement.classList.remove('tb-lane-stacked'); styleEl.remove(); themeStyleEl.remove();
-      clearHighlights(win);
-      doc.querySelectorAll('.tb-badge,.tb-pin,.tb-region,.tb-pending,.tb-ctxmenu').forEach((e) => e.remove());
+      if (destroyed) return;   // idempotent: a second teardown must not re-run releases
+      destroyed = true;
+      // Deliberately names nothing. Every surface and every resource registered how to let go of
+      // itself at the point it was taken; this runs that record, newest first.
+      disposeOwned();
     },
   };
 
@@ -1267,43 +1440,58 @@ export function attachPanel(core, options = {}) {
 // ---- tiny DOM helpers ----
 function el(doc, tag, cls) { const e = doc.createElement(tag); if (cls) e.className = cls; return e; }
 function btn(doc, text, cls) { const b = el(doc, 'button', cls); b.textContent = text; return b; }
-function ensurePositioned(elx) { const pos = getComputedStyle(elx).position; if (pos === 'static') elx.style.position = 'relative'; }
+/**
+ * Give a host element a positioning context so an absolutely-placed overlay lands inside it. The
+ * element belongs to the host, so the write is recorded and handed back: restored only if it is still
+ * the value we wrote, because the host may have set its own since.
+ */
+function ensurePositioned(elx, own) {
+  const pos = getComputedStyle(elx).position;
+  if (pos !== 'static') return;
+  const prev = elx.style.position;
+  elx.style.position = 'relative';
+  own?.(() => { if (elx.style.position === 'relative') elx.style.position = prev; });
+}
 // Author → color and "who spoke last" live in ./actors.js (DOM-free, unit-tested), imported above.
 
 // Import modal: paste an exported envelope and merge it in (REQ-204). Merge + skip-on-conflict so an
 // incoming envelope ADDS comments (an AI participant's anchored replies/contributions) without
 // overwriting existing ones. The core emits `change`, so the panel re-renders the new comments in place.
 function importModal(doc, core, t) {
+  let close = () => {};
   const m = el(doc, 'div'); Object.assign(m.style, { position: 'fixed', inset: '0', zIndex: 10001, background: 'rgba(0,0,0,.55)', display: 'flex', alignItems: 'center', justifyContent: 'center' });
   const box = el(doc, 'div'); Object.assign(box.style, { background: 'var(--tb-popup-bg,#fff)', color: 'var(--tb-popup-fg,#111)', borderRadius: '10px', padding: '16px', width: 'min(720px,92vw)', font: '13px system-ui' });
   const ta = doc.createElement('textarea'); ta.placeholder = t('import.placeholder'); Object.assign(ta.style, { width: '100%', height: '52vh', boxSizing: 'border-box', font: '12px ui-monospace,monospace' });
   const msg = el(doc, 'div'); Object.assign(msg.style, { font: '12px system-ui', minHeight: '16px', color: 'var(--tb-accent,#06c)' });
   const load = btn(doc, t('import.load'));
   const cancel = btn(doc, t('popup.cancel') || 'Cancel', 'tb-sec');
-  cancel.onclick = () => m.remove();
+  cancel.onclick = () => close();
   load.onclick = () => {
     let env;
     try { env = JSON.parse(ta.value); } catch (e) { msg.style.color = '#c00'; msg.textContent = t('import.badJson'); return; }
     try {
       const res = core.importEnvelope(env, { mode: 'merge', onConflict: 'skip' });
-      m.remove();
+      close();
     } catch (e) { msg.style.color = '#c00'; msg.textContent = (e && e.message) || String(e); }
   };
   const bar = el(doc, 'div'); bar.style.textAlign = 'right'; bar.style.marginTop = '8px'; bar.append(cancel, load);
-  box.append(ta, msg, bar); m.appendChild(box); doc.body.appendChild(m);
-  m.onclick = (e) => { if (e.target === m) m.remove(); };
-  ta.focus();
+  box.append(ta, msg, bar); m.appendChild(box);
+  m.onclick = (e) => { if (e.target === m) close(); };
+  // Focus AFTER the node is in the document — focusing a detached element does nothing.
+  return { node: m, activate: () => ta.focus(), bind: (fn) => { close = fn; } };
 }
 
 function exportModal(doc, envelope) {
+  let close = () => {};
   const json = JSON.stringify(envelope, null, 2);
   globalThis.navigator?.clipboard?.writeText?.(json).catch(() => {});
   const m = el(doc, 'div'); Object.assign(m.style, { position: 'fixed', inset: '0', zIndex: 10001, background: 'rgba(0,0,0,.55)', display: 'flex', alignItems: 'center', justifyContent: 'center' });
   const box = el(doc, 'div'); Object.assign(box.style, { background: 'var(--tb-popup-bg,#fff)', color: 'var(--tb-popup-fg,#111)', borderRadius: '10px', padding: '16px', width: 'min(720px,92vw)', font: '13px system-ui' });
   const ta = doc.createElement('textarea'); ta.readOnly = true; ta.value = json; Object.assign(ta.style, { width: '100%', height: '52vh', boxSizing: 'border-box', font: '12px ui-monospace,monospace' });
-  const close = btn(doc, 'Close'); close.onclick = () => m.remove();
-  const bar = el(doc, 'div'); bar.style.textAlign = 'right'; bar.style.marginTop = '8px'; bar.appendChild(close);
-  box.append(ta, bar); m.appendChild(box); doc.body.appendChild(m);
-  m.onclick = (e) => { if (e.target === m) m.remove(); };
-  ta.focus(); ta.select();
+  const closeBtn = btn(doc, 'Close'); closeBtn.onclick = () => close();
+  const bar = el(doc, 'div'); bar.style.textAlign = 'right'; bar.style.marginTop = '8px'; bar.appendChild(closeBtn);
+  box.append(ta, bar); m.appendChild(box);
+  m.onclick = (e) => { if (e.target === m) close(); };
+  // Selecting inside a detached node selects nothing, so this runs once it is mounted.
+  return { node: m, activate: () => { ta.focus(); ta.select(); }, bind: (fn) => { close = fn; } };
 }
