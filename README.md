@@ -238,7 +238,21 @@ before the boundary and nothing is emitted. This reports settled visibility; it 
 interaction log. If you need to count impressions, count them from your own handlers.
 
 The panel is what can see a surface, so it is the panel that answers — attach one and the reports
-begin; a core with no panel reports nothing and `visibleThreads()` is empty. Tearing the panel down is
+begin; a core with no panel reports nothing and `visibleThreads()` is empty. One display at a time,
+matching the one-panel-per-document rule above: attaching again replaces the previous answerer rather
+than joining it.
+
+If the display cannot be read at all, the core does not guess: no report is delivered, the last state
+anyone actually observed stands, an `error` is emitted, and **`visibleThreads()` throws
+`TackbackError('ADAPTER_FAILED')`** rather than answering a question about now with something from
+before. Catch it and treat visibility as unknown — keep whatever you last rendered — until a report
+arrives or a later pull succeeds:
+
+```js
+let readable;
+try { readable = tb.visibleThreads(); }
+catch { /* unknown right now — keep the last known and wait for the next report */ }
+``` Tearing the panel down is
 itself a transition: you are told the thread is no longer readable, which is exactly when a consumer
 that raised its update rate needs to hear it.
 

@@ -37,6 +37,13 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
   ordering or timing is affected.
 
 ### Compatibility
+- **`visibleThreads()` can throw.** When the display cannot be read, the core reports nothing rather
+  than guessing — an unreadable display might be showing nothing or might still be showing what it
+  showed, and only that display knows which. The pull throws `TackbackError('ADAPTER_FAILED')`,
+  an `error` is emitted, the last observed state is left standing, and the next successful look
+  repairs it. Callers should treat that as "unknown" and keep what they last rendered.
+- **One display at a time.** Registering a second replaces the first, matching the existing
+  one-panel-per-document rule; the replaced one is never asked again and withdrawing it is a no-op.
 - **Same-turn transients are coalesced away, by design.** Open a thread and close it before the
   boundary and nothing is emitted. This reports settled visibility; it is **not** a lossless
   interaction log. Anything that needs to count impressions or measure how long a thread was open must

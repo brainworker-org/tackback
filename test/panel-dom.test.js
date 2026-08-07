@@ -1370,36 +1370,41 @@ test('visibility: a destroyed panel is no longer asked what is readable', () => 
   } finally { f.restore(); }
 });
 
-test('visibility: two displays showing the same thread make it readable once, not twice', () => {
-  // The objection that a core-level baseline cannot serve more than one display. It can, because the
-  // core never stores what a display returned: it asks every display and merges. One thread shown in
-  // two places is one readable thread, and a consumer resolving read state gets the union of what is
-  // actually on screen rather than whichever display answered last.
+test('visibility: a second display replaces the first rather than joining it', () => {
+  // A document has at most one panel, so this seam reports for at most one display. Registering again
+  // REPLACES: a re-attach after a teardown that did not run must not leave a dead display answering,
+  // and refusing would make that situation unrecoverable. Every cell of "register while registered"
+  // is pinned here rather than left to whichever call happened to come first.
   const f = mountPanel({ instrument: true });
   try {
-    const c = f.core.addComment({ anchor: { type: 'document' }, body: 'in the lane' });
+    f.core.addComment({ anchor: { type: 'document' }, body: 'in the lane' });
     f.panel.toggleDocumentLane(true);
-    const other = f.core.registerThreadVisibility(() => ([
-      { threadKey: 'document', anchor: { type: 'document' }, comments: [c.id, 'seen-only-over-there'] },
-      { threadKey: 'block:elsewhere', anchor: { type: 'block', elementId: 'elsewhere' }, comments: ['x'] },
+    f.env.drainMicrotasks();
+    assert.deepEqual(f.core.visibleThreads().map((e) => e.threadKey), ['document'], 'the panel is the display');
+
+    let firstAsked = 0;
+    const offFirst = f.core.registerThreadVisibility(() => { firstAsked += 1; return []; });
+    f.env.drainMicrotasks();
+    assert.deepEqual(f.core.visibleThreads(), [], 'the newcomer replaced the panel, it did not join it');
+    const askedBefore = firstAsked;
+
+    const offSecond = f.core.registerThreadVisibility(() => ([
+      { threadKey: 'block:b', anchor: { type: 'block', elementId: 'b' }, comments: ['x'] },
     ]));
     f.env.drainMicrotasks();
+    assert.deepEqual(f.core.visibleThreads().map((e) => e.threadKey), ['block:b'], 'and so did the next one');
+    assert.equal(firstAsked, askedBefore, 'the one that was replaced is never asked again');
 
-    const now = f.core.visibleThreads();
-    assert.deepEqual(now.map((e) => e.threadKey), ['block:elsewhere', 'document'], 'one entry per thread');
-    assert.deepEqual(now.find((e) => e.threadKey === 'document').comments, [c.id, 'seen-only-over-there'].sort(),
-      'the union of what both displays are showing');
-
-    const seen = recordVisibility(f.core);
-    other();                                  // the second display goes away
+    offFirst();   // the replaced display withdrawing must not take the live one with it
     f.env.drainMicrotasks();
-    assert.deepEqual(seen[0].closed.map((e) => e.threadKey), ['block:elsewhere'],
-      'only what it alone was showing closes');
-    assert.deepEqual(f.core.visibleThreads().map((e) => e.threadKey), ['document'],
-      'the thread the panel still shows stays open');
+    assert.deepEqual(f.core.visibleThreads().map((e) => e.threadKey), ['block:b'],
+      'withdrawing something already replaced withdraws nothing');
+
+    offSecond();
+    f.env.drainMicrotasks();
+    assert.deepEqual(f.core.visibleThreads(), [], 'and the live one withdrawing leaves nothing readable');
   } finally { f.restore(); }
 });
-
 test('visibility: a surface with nothing written in it yet is still readable', () => {
   // Being open and holding a comment are different facts. A thread the reader has just opened has
   // never been written in, and answering "not readable" while they are looking straight at it makes
@@ -1692,13 +1697,13 @@ test('visibility: an open thread emptied after it moved is reported where it END
     pin.dispatchEvent({ type: 'pointerdown', clientX: 5, clientY: 5, button: 0, pointerId: 1, preventDefault() {}, stopPropagation() {} });
     f.root.dispatchEvent({ type: 'pointerup', clientX: 5, clientY: 5, pointerId: 1, preventDefault() {}, stopPropagation() {} });
     f.core.recordRegionEvent(c.id, { rect: { x: 0.6, y: 0.6, width: 0.2, height: 0.2 } }, 'move');
-    f.env.drainMicrotasks();
-    assert.equal(f.core.visibleThreads()[0]?.anchor.rect.x, 0.6, 'it moved while open');
-
+    // Deliberately NO observation between the move and the deletion. Draining here would let the
+    // answer be captured by the very look the test is meant to do without, and the case only exists
+    // because both happen before anyone asks.
     f.core.deleteComment(c.id);
     f.env.drainMicrotasks();
     const after = f.core.visibleThreads();
-    if (!after.length) return;   // if emptying also closes the surface, there is nothing to remember
+    assert.equal(after.length, 1, 'the surface is still open — emptying is not closing');
     assert.equal(after[0].comments.length, 0, 'still open, now holding nothing');
     assert.equal(after[0].anchor.rect.x, 0.6, 'and still naming where it ended up, not where it began');
   } finally { f.restore(); }

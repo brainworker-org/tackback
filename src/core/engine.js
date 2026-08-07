@@ -70,7 +70,7 @@ class TackbackInstance {
     this._adapterTeardowns = [];
     this._destroyed = false;
     this._transport = options.transport || null;   // descriptor only; core never transports (REQ-205)
-    this._visibilityProviders = new Set();      // displays that can say what is readable — see below
+    this._visibilityProvider = null;            // the one display that can say what is readable
     this._visibilityDelivered = new Map();      // the snapshot subscribers were last told about
     this._visibilityGeneration = 0;             // bumped when a display arrives or withdraws
     this._visibilityRetries = 0;
@@ -452,11 +452,19 @@ class TackbackInstance {
     // A destroyed core keeps nothing: it would never schedule a report for this provider, so adding
     // it only makes the display — and everything its closure holds — reachable from a corpse.
     if (typeof provider !== 'function' || this._destroyed) return () => {};
-    this._visibilityProviders.add(provider);
+    // AT MOST ONE display, because a document has at most one panel — attaching a second to the same
+    // document is already unsupported, and this seam does not get to be more general than the thing
+    // it reports on. Aggregating several would mean deciding, in here, which of two disagreeing
+    // claims about one thread is true and whether an unreadable display should hold up a readable
+    // one: policy about surfaces the core cannot see, invented for a situation that cannot arise.
+    // A later registration REPLACES the earlier one rather than being refused, so re-attaching after
+    // a teardown that did not run cannot leave a dead display answering forever.
+    this._visibilityProvider = provider;
     this._visibilityGeneration += 1;
     this._scheduleVisibility();
     return () => {
-      if (!this._visibilityProviders.delete(provider)) return;
+      if (this._visibilityProvider !== provider) return;   // already replaced; not ours to withdraw
+      this._visibilityProvider = null;
       this._visibilityGeneration += 1;
       this._scheduleVisibility();
     };
@@ -474,7 +482,7 @@ class TackbackInstance {
     // "I could not look" has no honest synchronous answer that is also a value. Handing back the last
     // array the core happened to hold would be answering a question about NOW with something from
     // before, silently — which is the one failure this whole contract exists to make impossible.
-    if (!attempt.ok) throw new TackbackError('ADAPTER_FAILED', 'could not read what is visible', attempt.error);
+    if (!attempt.ok) throw new TackbackError('ADAPTER_FAILED', 'could not read what is visible', { cause: attempt.error });
     return attempt.visible.map(visibilityDTO);
   }
 
@@ -496,7 +504,8 @@ class TackbackInstance {
     const generation = this._visibilityGeneration;
     /** @type {Map<string, any>} */
     const merged = new Map();
-    for (const provider of [...this._visibilityProviders]) {
+    const provider = this._visibilityProvider;
+    if (provider) {
       try {
         const entries = provider();
         for (const e of entries || []) {
@@ -600,7 +609,7 @@ class TackbackInstance {
     for (const t of this._adapterTeardowns.splice(0)) { try { t(); } catch { /* ignore */ } }
     this._surfaces.clear();
     this._attention.clear();
-    this._visibilityProviders.clear();
+    this._visibilityProvider = null;
     this._visibilityDelivered.clear();
     this._emitter.clear();
   }

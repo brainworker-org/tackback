@@ -861,6 +861,12 @@ export function attachPanel(core, options = {}) {
   const sync = () => {
     if (threadKey == null) return;   // nothing to group by yet (an uncommitted region)
     const group = core.listComments().filter((c) => threadKeyOf(c) === threadKey);
+    // Where this thread points, captured every time the store speaks rather than only when someone
+    // asks what is visible. A value that has to outlive its source must be taken no later than the
+    // source disappears: move a thread and empty it before anyone looks, and reading it at looking
+    // time finds nothing and falls back to a place the thread had already left. Reconciliation runs
+    // on every change, so this is the last moment the answer still exists.
+    if (group[0] && group[0].anchor) lastAuthoritative = group[0].anchor;
     const evts = (group[0] && group[0].anchor && group[0].anchor.events) || [];
     // an emptied thread means "remove everything", not "there is nothing to do"
     if (draw(timelineItems(group, evts))) exwrap.scrollTop = exwrap.scrollHeight;
