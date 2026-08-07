@@ -18,6 +18,17 @@ const LIB_VERSION = '0.9.6';
 const nowIso = () => new Date().toISOString();
 
 /**
+ * Whether two visibility entries say the same thing. Both id lists arrive sorted and de-duplicated,
+ * so this compares what was promised to a subscriber rather than how it was assembled.
+ * @param {{anchor:object, comments:string[]}} a
+ * @param {{anchor:object, comments:string[]}|undefined} b
+ */
+const sameEntry = (a, b) => !!b
+  && a.comments.length === b.comments.length
+  && a.comments.every((id, i) => id === b.comments[i])
+  && JSON.stringify(a.anchor ?? null) === JSON.stringify(b.anchor ?? null);
+
+/**
  * @typedef {import('./model.js').Comment} Comment
  * @typedef {import('./model.js').AddCommentInput} AddCommentInput
  */
@@ -40,6 +51,9 @@ class TackbackInstance {
     this._adapterTeardowns = [];
     this._destroyed = false;
     this._transport = options.transport || null;   // descriptor only; core never transports (REQ-205)
+    this._visibilityProviders = new Set();      // displays that can say what is readable — see below
+    this._visibilityDelivered = new Map();      // the snapshot subscribers were last told about
+    this._visibilityScheduled = false;
     this._attention = new Set();   // comment ids currently flagged for ATTENTION — a generic, live UI
                                    // state driven by the integrator; NOT persisted, NOT exported, and
                                    // WITHOUT any built-in meaning (see setAnchorAttention).
@@ -394,6 +408,93 @@ class TackbackInstance {
   /** @param {string} id @returns {boolean} whether the attention flag is set on this comment id */
   hasAttention(id) { return this._attention.has(id); }
 
+  // ---- thread visibility -----------------------------------------------------------------------
+  //
+  // WHICH THREADS ARE READABLE RIGHT NOW, as a settled snapshot rather than as a pair of edges the
+  // consumer has to keep balanced. A dropped or reordered edge is unrecoverable; a snapshot repairs
+  // itself on the next report, which is the whole reason for the shape.
+  //
+  // The core cannot see a surface, so it does not try: a display registers a PROVIDER and the core
+  // asks it, at the moment it needs an answer. That keeps the boundary where it already is — the same
+  // arrangement `reportOrphaned` uses for a fact only the display can determine — while leaving the
+  // subscription on the one object an integration always holds. It also means the last word, when a
+  // display is torn down, is spoken by something that outlives it.
+
+  /**
+   * Register a display's view of what is readable. `provider` returns the currently visible threads;
+   * the core calls it when it needs the answer and never stores what it returned as truth.
+   * @param {() => Array<{threadKey:string, anchor:object, comments:string[]}>} provider
+   * @returns {() => void} deregister — which is itself a transition, and is reported as one
+   */
+  registerThreadVisibility(provider) {
+    if (typeof provider !== 'function') return () => {};
+    this._visibilityProviders.add(provider);
+    this._scheduleVisibility();
+    return () => {
+      if (!this._visibilityProviders.delete(provider)) return;
+      this._scheduleVisibility();
+    };
+  }
+
+  /** Ask for a report to be reconsidered at the next boundary. Reports that change nothing are dropped. */
+  reportThreadVisibility() { this._scheduleVisibility(); }
+
+  /**
+   * The readable threads, right now. Same shape as the event's `visible`, answered without waiting.
+   * @returns {Array<{threadKey:string, anchor:object, comments:string[]}>}
+   */
+  visibleThreads() { return this._projectVisibility(); }
+
+  _projectVisibility() {
+    if (this._destroyed) return [];
+    /** @type {Map<string, {threadKey:string, anchor:object, comments:string[]}>} */
+    const merged = new Map();
+    for (const provider of [...this._visibilityProviders]) {
+      let entries;
+      // A display that throws is isolated the same way a subscriber is: it loses its own say in this
+      // report, and takes nobody else's with it.
+      try { entries = provider(); } catch { continue; }
+      for (const e of entries || []) {
+        if (!e || typeof e.threadKey !== 'string' || !e.threadKey) continue;
+        const prev = merged.get(e.threadKey);
+        const ids = [...new Set(e.comments || [])].sort();
+        if (!prev) { merged.set(e.threadKey, { threadKey: e.threadKey, anchor: e.anchor ?? null, comments: ids }); continue; }
+        // Two displays showing the same thread is one readable thread, not two.
+        prev.comments = [...new Set([...prev.comments, ...ids])].sort();
+      }
+    }
+    return [...merged.values()].sort((a, b) => (a.threadKey < b.threadKey ? -1 : a.threadKey > b.threadKey ? 1 : 0));
+  }
+
+  _scheduleVisibility() {
+    if (this._destroyed || this._visibilityScheduled) return;
+    this._visibilityScheduled = true;
+    const run = () => this._flushVisibility();
+    if (typeof queueMicrotask === 'function') queueMicrotask(run);
+    else Promise.resolve().then(run);
+  }
+
+  _flushVisibility() {
+    this._visibilityScheduled = false;
+    if (this._destroyed) return;
+    const visible = this._projectVisibility();
+    const before = this._visibilityDelivered;
+    const now = new Map(visible.map((e) => [e.threadKey, e]));
+    const opened = visible.filter((e) => !before.has(e.threadKey));
+    const closed = [...before.values()].filter((e) => !now.has(e.threadKey));
+    // Identity is the content, not the membership: a thread the reader is looking at while it grows
+    // never enters or leaves, and a consumer resolving read state from `comments` needs to hear about
+    // it. Comparing keys alone would report nothing for exactly the case the display supports best.
+    const changed = opened.length || closed.length
+      || visible.some((e) => !sameEntry(e, before.get(e.threadKey)));
+    // The baseline is installed BEFORE anyone is called. A handler is free to open or close something
+    // from here, and its report must be diffed against what was just delivered — not overwritten by
+    // this frame writing back a world its own handler has already left.
+    this._visibilityDelivered = now;
+    if (!changed) return;
+    this._emitter.emit('thread:visibility', { visible, opened, closed });
+  }
+
   setAuthor(name) { this._opts.author = name; }
 
   /**
@@ -414,6 +515,8 @@ class TackbackInstance {
     for (const t of this._adapterTeardowns.splice(0)) { try { t(); } catch { /* ignore */ } }
     this._surfaces.clear();
     this._attention.clear();
+    this._visibilityProviders.clear();
+    this._visibilityDelivered.clear();
     this._emitter.clear();
   }
 
@@ -429,6 +532,10 @@ class TackbackInstance {
     this._pruneAttention(comments);   // BEFORE the emit, so listeners never render a ghost flag
     const payload = { comments, changes: diff, source };
     this._emitter.emit('change', payload);
+    // Every mutation can change what a reader is looking at, so every mutation schedules a report.
+    // Scheduling too often costs one comparison that finds nothing; scheduling too rarely leaves the
+    // consumer acting on a world that has moved. Only one of those two errors is recoverable.
+    this._scheduleVisibility();
     Promise.resolve(this._store.persist()).catch((err) =>
       this._fail(err instanceof TackbackError ? err.code : 'STORAGE_SAVE_FAILED', 'persist failed', err));
   }

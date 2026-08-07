@@ -166,6 +166,17 @@ function instrumentEnv({ noRaf = false } = {}) {
     RO: globalThis.ResizeObserver, add: globalThis.addEventListener, rm: globalThis.removeEventListener,
     st: globalThis.setTimeout, ct: globalThis.clearTimeout,
     mm: globalThis.matchMedia, vv: globalThis.visualViewport,
+    qm: globalThis.queueMicrotask, err: console.error,
+  };
+  // A count is not an identity. One listener removed and a different one added of the same type
+  // returns every total to its baseline while ownership is wrong, so the bags carry identity too.
+  // The number is stable for the same function object, which is all a before/after comparison needs.
+  const marks = new WeakMap();
+  let nextMark = 0;
+  const idOf = (fn) => {
+    if (typeof fn !== 'function' && typeof fn !== 'object') return String(fn);
+    if (!marks.has(fn)) marks.set(fn, ++nextMark);
+    return `fn${marks.get(fn)}`;
   };
   const listenerBag = () => {
     const m = new Map();
@@ -173,9 +184,11 @@ function instrumentEnv({ noRaf = false } = {}) {
       add: (t, fn) => { if (!m.has(t)) m.set(t, []); m.get(t).push(fn); },
       remove: (t, fn) => m.set(t, (m.get(t) || []).filter((f) => f !== fn)),
       count: () => [...m.values()].reduce((n, a) => n + a.length, 0),
+      identity: () => [...m.entries()].flatMap(([t, a]) => a.map((f) => `${t}:${idOf(f)}`)).sort(),
     };
   };
-  const env = { frames: new Map(), timers: new Map(), observers: new Set(), ran: [] };
+  const env = { frames: new Map(), timers: new Map(), observers: new Set(), ran: [], micro: [], handlerErrors: [] };
+  env.idOf = idOf;
   const savedCSS = globalThis.CSS, savedHighlight = globalThis.Highlight;
   globalThis.CSS = { highlights: new Map() };
   globalThis.Highlight = class { constructor(...r) { this.ranges = r; } };
@@ -206,17 +219,57 @@ function instrumentEnv({ noRaf = false } = {}) {
   // executed under test — the same blind spot as measuring a guard with the feature switched off.
   globalThis.visualViewport = { addEventListener: vv.add, removeEventListener: vv.remove, height: 768, offsetTop: 0 };
   globalThis.matchMedia = () => ({ matches: false, addEventListener: mql.add, removeEventListener: mql.remove });
+  // Work deferred to the microtask boundary is invisible to a test that can only wait on the real
+  // queue: it runs between assertions rather than where the test asks for it. A queue the test drains
+  // itself is the only way to say "now the boundary has been reached" and mean it.
+  globalThis.queueMicrotask = (fn) => { env.micro.push(fn); env.ran.push(fn); };
+  // The emitter isolates a throwing subscriber and reports it to the console, which means an
+  // assertion that fails inside a handler is swallowed and its test passes regardless. Capturing the
+  // report is what turns that back into a failure — see `assertNoHandlerErrors`.
+  console.error = (...args) => {
+    if (typeof args[0] === 'string' && args[0].startsWith('[tackback]')) { env.handlerErrors.push(args); return; }
+    saved.err(...args);
+  };
+
+  /**
+   * Run queued microtasks until the queue stays empty. A flush that schedules another flush is the
+   * design here, so draining once is not reaching the boundary; the cap turns a scheduling loop into
+   * a named failure instead of a hung suite.
+   */
+  env.drainMicrotasks = (cap = 50) => {
+    let rounds = 0;
+    while (env.micro.length) {
+      if (++rounds > cap) throw new Error(`microtask queue did not settle within ${cap} rounds`);
+      const fns = env.micro.slice(); env.micro.length = 0;
+      fns.forEach((f) => f());
+    }
+    return rounds;
+  };
+  /** Fail if any subscriber threw — including an assertion the emitter's try/catch would have eaten. */
+  env.assertNoHandlerErrors = (where = 'handlers') => {
+    if (!env.handlerErrors.length) return;
+    const [first] = env.handlerErrors;
+    const cause = first[first.length - 1];
+    throw new Error(`${where}: a subscriber threw and the emitter swallowed it — ${cause?.message || cause}`, { cause });
+  };
 
   env.flushFrames = () => { const fns = [...env.frames.values()]; env.frames.clear(); fns.forEach((f) => f()); };
   env.flushTimers = () => { const fns = [...env.timers.values()]; env.timers.clear(); fns.forEach((f) => f()); };
-  env.flush = () => { env.flushTimers(); env.flushFrames(); };
+  env.flush = () => { env.flushTimers(); env.flushFrames(); env.drainMicrotasks(); };
   /** Run EVERY callback that was ever scheduled, including ones since cancelled. */
-  env.runStale = () => { const fns = env.ran.slice(); env.ran.length = 0; env.frames.clear(); env.timers.clear(); fns.forEach((f) => { try { f(); } catch { /* a stale callback may legitimately throw */ } }); };
+  env.runStale = () => { const fns = env.ran.slice(); env.ran.length = 0; env.frames.clear(); env.timers.clear(); env.micro.length = 0; fns.forEach((f) => { try { f(); } catch { /* a stale callback may legitimately throw */ } }); };
   /** Everything the environment can count, as one comparable snapshot. */
   env.census = (doc) => ({
     docListeners: Object.fromEntries(Object.entries(doc.listeners).map(([t, a]) => [t, a.length]).filter(([, n]) => n)),
     windowListeners: win.count(), viewportListeners: vv.count(), mediaQueryListeners: mql.count(),
     observers: env.observers.size, pendingFrames: env.frames.size, pendingTimers: env.timers.size,
+    pendingMicrotasks: env.micro.length,
+    // The same registrations again, by identity rather than by total. A count returning to its
+    // baseline says nothing about WHOSE listener is installed; these say which function is on which
+    // target, so releasing one and installing another cannot pass as a clean teardown.
+    docListenerIds: Object.entries(doc.listeners).flatMap(([t, a]) => a.map((f) => `${t}:${idOf(f)}`)).sort(),
+    windowListenerIds: win.identity(), viewportListenerIds: vv.identity(), mediaQueryListenerIds: mql.identity(),
+    observerTargets: [...env.observers].map((o) => o.targets.map((t) => `${t?.tagName || '?'}#${t?.id || ''}`).sort().join(',')).sort(),
     captures: [...doc.captures].sort(),
     headChildren: (doc.head.children || []).filter((c) => c.tagName).length,
     bodyChildren: (doc.body.children || []).filter((c) => c.tagName).map((c) => `${c.tagName}.${c.className || ''}`).sort(),
@@ -244,6 +297,7 @@ function instrumentEnv({ noRaf = false } = {}) {
     globalThis.ResizeObserver = saved.RO; globalThis.addEventListener = saved.add;
     globalThis.removeEventListener = saved.rm;
     globalThis.matchMedia = saved.mm; globalThis.visualViewport = saved.vv;
+    globalThis.queueMicrotask = saved.qm; console.error = saved.err;
     globalThis.CSS = savedCSS; globalThis.Highlight = savedHighlight;
   };
   return env;
@@ -285,6 +339,12 @@ function mountPanel({ comments = [], controls, instrument = false, setup, noRaf 
     // TWO measurements, because one hid the thing it was meant to reveal. Flushing before counting
     // executes and empties the pending work, so `pendingTimers` and `pendingFrames` could never
     // report anything left scheduled at the moment of teardown.
+    // Microtasks are the exception, and only they: work deferred to the microtask boundary is still
+    // THIS turn, so "at the moment of teardown" for it means "once the boundary is reached". Teardown
+    // deliberately schedules there — a display's last word is that it is showing nothing — so a queue
+    // that is empty here would mean that word was never spoken. Frames and timers are next-turn work
+    // that teardown is supposed to have CANCELLED, which is why they are still measured un-run.
+    env.drainMicrotasks();
     assert.deepEqual(env.census(doc), before, `${where}: not given back at the moment of teardown`);
     // …and then run every callback that was ever scheduled, INCLUDING the ones teardown cancelled.
     // Flushing alone proves cancellation, because cancelling removes the callback from the queue —
@@ -320,6 +380,68 @@ function assertAtMostOne(f, where) {
 const docComment = (over = {}) => ({
   id: 'd1', anchor: { type: 'document' }, body: 'about the whole thing',
   createdAt: '2026-08-06T10:00:00.000Z', ...over,
+});
+
+// ---- the instrument, measured by something other than itself -----------------------------------
+//
+// These tests are about the harness, not the panel. A meter that cannot be made to read wrong is not
+// evidence that the thing it measures is right, and every capability below exists to catch a defect
+// class that the previous harness reported as clean. So each one is exercised against a deliberate
+// fault first: if these pass while the fault is present, the capability is decoration.
+
+test('harness: an assertion that fails inside a subscriber is reported, not swallowed', () => {
+  const f = mountPanel({ instrument: true });
+  try {
+    f.core.on('comment:add', () => { assert.equal(1, 2, 'deliberate'); });
+    f.core.addComment({ anchor: { type: 'document' }, body: 'x' });
+    // The emitter isolates a throwing subscriber, so the failure above did NOT propagate: this line
+    // is reached, and without the capture the test would end green having asserted a falsehood.
+    assert.throws(() => f.env.assertNoHandlerErrors('subscriber'), /swallowed/);
+  } finally { f.restore(); }
+});
+
+test('harness: with no subscriber throwing, the same check stays silent', () => {
+  const f = mountPanel({ instrument: true });
+  try {
+    f.core.on('comment:add', () => {});
+    f.core.addComment({ anchor: { type: 'document' }, body: 'x' });
+    f.env.assertNoHandlerErrors('subscriber');
+  } finally { f.restore(); }
+});
+
+test('harness: draining reaches the boundary even when a microtask schedules another', () => {
+  const f = mountPanel({ instrument: true });
+  try {
+    const order = [];
+    queueMicrotask(() => { order.push('first'); queueMicrotask(() => order.push('second')); });
+    assert.deepEqual(order, [], 'nothing runs until the test asks for the boundary');
+    const rounds = f.env.drainMicrotasks();
+    assert.deepEqual(order, ['first', 'second'], 'work scheduled from the drain still ran');
+    assert.ok(rounds >= 2, 'a single pass would have stopped after "first"');
+  } finally { f.restore(); }
+});
+
+test('harness: a microtask that reschedules itself forever fails by name, not by hanging', () => {
+  const f = mountPanel({ instrument: true });
+  try {
+    const again = () => queueMicrotask(again);
+    queueMicrotask(again);
+    assert.throws(() => f.env.drainMicrotasks(5), /did not settle within 5 rounds/);
+  } finally { f.restore(); }
+});
+
+test('harness: the census sees a listener swapped for another of the same type', () => {
+  const f = mountPanel({ instrument: true });
+  try {
+    const mine = () => {};
+    f.doc.addEventListener('keydown', mine);
+    const before = f.env.census(f.doc);
+    f.doc.removeEventListener('keydown', mine);
+    f.doc.addEventListener('keydown', () => {});
+    const after = f.env.census(f.doc);
+    assert.deepEqual(after.docListeners, before.docListeners, 'the totals are identical — this is the blind spot');
+    assert.notDeepEqual(after.docListenerIds, before.docListenerIds, 'identity is what tells the two apart');
+  } finally { f.restore(); }
 });
 
 // ---- the document thread's entry point ---------------------------------------------------------
@@ -1024,5 +1146,196 @@ test('panel: a modal dismissing itself does not close the one that replaced it',
       'and it is the export modal, not the import one');
     f.panel.destroy();
     f.assertEnvironmentRestored('a modal replaced from inside its own dismissal');
+  } finally { f.restore(); }
+});
+
+// ---- thread visibility: the contract, written before the mechanism ------------------------------
+//
+// These encode the settled decisions rather than the implementation, so they stay meaningful if the
+// mechanism is rewritten. The shape they are protecting: the core announces WHICH THREADS ARE
+// READABLE NOW, as a settled snapshot projected from live state at a microtask boundary — never as a
+// ledger accumulated at each transition, and never from the middle of a surface mutation.
+
+/** Subscribe without asserting inside the handler — the emitter would swallow anything that threw. */
+function recordVisibility(core) {
+  const seen = [];
+  core.on('thread:visibility', (p) => seen.push(p));
+  return seen;
+}
+const keysOf = (entries) => entries.map((e) => e.threadKey).sort();
+
+test('visibility: opening a thread is announced at the boundary, not from inside the opening', () => {
+  const f = mountPanel({ controls: { docLane: false }, instrument: true });
+  try {
+    f.core.addComment({ anchor: { type: 'document' }, body: 'readable' });
+    const seen = recordVisibility(f.core);
+    f.panel.openDocumentThread();
+    assert.deepEqual(seen, [], 'nothing is emitted from inside the mutation that opened it');
+    f.env.drainMicrotasks();
+    assert.equal(seen.length, 1, 'exactly one report, at the boundary');
+    assert.deepEqual(keysOf(seen[0].visible), ['document']);
+    assert.deepEqual(keysOf(seen[0].opened), ['document']);
+    assert.deepEqual(seen[0].closed, []);
+    f.env.assertNoHandlerErrors('visibility subscriber');
+  } finally { f.restore(); }
+});
+
+test('visibility: the pull accessor answers the same question without waiting', () => {
+  const f = mountPanel({ controls: { docLane: false }, instrument: true });
+  try {
+    assert.deepEqual(f.core.visibleThreads(), [], 'nothing is open yet');
+    f.core.addComment({ anchor: { type: 'document' }, body: 'readable' });
+    f.panel.openDocumentThread();
+    assert.deepEqual(keysOf(f.core.visibleThreads()), ['document'], 'answered before any boundary');
+  } finally { f.restore(); }
+});
+
+test('visibility: a core with no panel has no surfaces, and says so without erroring', () => {
+  const core = Tackback.mount({ document: { id: 'headless-fixture' } });
+  const seen = recordVisibility(core);
+  core.addComment({ anchor: { type: 'document' }, body: 'nobody is showing this' });
+  assert.deepEqual(core.visibleThreads(), [], 'a headless core shows nothing');
+  assert.deepEqual(seen, [], 'and announces nothing');
+  core.destroy();
+});
+
+test('visibility: destroying the panel with a thread open reports the EMPTY snapshot', () => {
+  // The decisive case for where this contract lives. A consumer that raised its update rate while a
+  // thread was open must be told the thread is gone, and the panel's own destruction is precisely
+  // when it cannot tell them itself.
+  const f = mountPanel({ controls: { docLane: false }, instrument: true });
+  try {
+    f.core.addComment({ anchor: { type: 'document' }, body: 'readable' });
+    f.panel.openDocumentThread();
+    f.env.drainMicrotasks();
+    const seen = recordVisibility(f.core);
+
+    f.panel.destroy();
+    f.env.drainMicrotasks();
+    assert.equal(seen.length, 1, 'destruction is a transition, and transitions are reported');
+    assert.deepEqual(seen[0].visible, [], 'nothing is readable once the panel is gone');
+    assert.deepEqual(keysOf(seen[0].closed), ['document']);
+    assert.deepEqual(f.core.visibleThreads(), [], 'and the pull agrees');
+  } finally { f.restore(); }
+});
+
+test('visibility: a COLLAPSED lane is not visible, though its conversation is registered', () => {
+  // The lane's conversation stays registered while it is folded away, so the set of registered
+  // conversations is not the set of readable threads. Deriving from it would report a thread the
+  // reader cannot see — and would light nothing, forever, for the one they can.
+  const f = mountPanel({ instrument: true });
+  try {
+    f.core.addComment({ anchor: { type: 'document' }, body: 'in the lane' });
+    f.panel.toggleDocumentLane(false);
+    f.env.drainMicrotasks();
+    assert.deepEqual(f.core.visibleThreads(), [], 'folded away is not readable');
+    f.panel.toggleDocumentLane(true);
+    f.env.drainMicrotasks();
+    assert.deepEqual(keysOf(f.core.visibleThreads()), ['document'], 'expanded is');
+  } finally { f.restore(); }
+});
+
+test('visibility: a comment arriving in an OPEN thread is reported, though membership did not change', () => {
+  // The gap this contract exists to close. The reader is looking at the thread while it grows; the
+  // set of open threads never changes, so a membership-only contract says nothing and whatever the
+  // consumer drives from it — an unread marker, a read cursor — stays wrong in front of them.
+  const f = mountPanel({ controls: { docLane: false }, instrument: true });
+  try {
+    f.core.addComment({ anchor: { type: 'document' }, body: 'first' });
+    f.panel.openDocumentThread();
+    f.env.drainMicrotasks();
+    const seen = recordVisibility(f.core);
+
+    const arrived = f.core.addComment({ anchor: { type: 'document' }, body: 'arrived while open' });
+    f.env.drainMicrotasks();
+    assert.equal(seen.length, 1, 'the changed content is reported');
+    assert.deepEqual(seen[0].opened, [], 'nothing opened');
+    assert.deepEqual(seen[0].closed, [], 'and nothing closed');
+    const entry = seen[0].visible.find((e) => e.threadKey === 'document');
+    assert.ok(entry.comments.includes(arrived.id), 'the new comment id is in the readable set');
+  } finally { f.restore(); }
+});
+
+test('visibility: a report identical to the last one is not sent again', () => {
+  const f = mountPanel({ controls: { docLane: false }, instrument: true });
+  try {
+    f.core.addComment({ anchor: { type: 'document' }, body: 'first' });
+    f.panel.openDocumentThread();
+    f.env.drainMicrotasks();
+    const seen = recordVisibility(f.core);
+    f.core.setAnchorAttention('nonexistent', true);   // a change that moves nothing visible
+    f.env.drainMicrotasks();
+    assert.deepEqual(seen, [], 'the same snapshot twice is one fact, not two');
+  } finally { f.restore(); }
+});
+
+test('visibility: opening and closing within one turn settles to nothing, and says nothing', () => {
+  const f = mountPanel({ controls: { docLane: false }, instrument: true });
+  try {
+    f.core.addComment({ anchor: { type: 'document' }, body: 'brief' });
+    const seen = recordVisibility(f.core);
+    f.panel.openDocumentThread();
+    // The dismiss registration is deferred, so that the very interaction which opened the Pane cannot
+    // immediately close it. Frames and timers only — draining microtasks here would deliver the
+    // opening report and destroy the premise, which is that both events happen inside ONE turn.
+    f.env.flushTimers(); f.env.flushFrames();
+    f.root.dispatchEvent({ type: 'keydown', key: 'Escape', preventDefault() {} });
+    f.env.drainMicrotasks();
+    assert.deepEqual(seen, [], 'this is settled visibility, not an interaction log');
+  } finally { f.restore(); }
+});
+
+test('visibility: a handler that closes during the flush is diffed against what was delivered', () => {
+  // What this pins is that the baseline is committed at all: a handler that closes the thread it was
+  // just told about produces a SECOND report, diffed against the first. Leave the baseline unwritten
+  // and the second flush sees nothing to compare against and stays silent.
+  //
+  // It does NOT pin the ORDER of that commit against the emit, and reverting the order does not turn
+  // it red — because a flush is never re-entered from inside itself. A handler that changes a surface
+  // schedules the next flush onto the queue rather than running one, so the frame that wrote a stale
+  // baseline would always be the same frame that delivered it. The order is kept as written anyway:
+  // it costs nothing, and it is the order that stays correct if a synchronous path is ever added.
+  const f = mountPanel({ controls: { docLane: false }, instrument: true });
+  try {
+    f.core.addComment({ anchor: { type: 'document' }, body: 'readable' });
+    const seen = [];
+    let once = false;
+    f.core.on('thread:visibility', (p) => {
+      seen.push(p);
+      if (once) return;
+      once = true;
+      f.root.dispatchEvent({ type: 'keydown', key: 'Escape', preventDefault() {} });
+    });
+    f.panel.openDocumentThread();
+    f.env.flushTimers(); f.env.flushFrames();   // install the deferred dismissal before the handler uses it
+    f.env.drainMicrotasks();
+
+    assert.equal(seen.length, 2, 'the handler-driven close is a second transition');
+    assert.deepEqual(keysOf(seen[0].opened), ['document']);
+    assert.deepEqual(keysOf(seen[1].closed), ['document'], 'diffed against the delivered snapshot');
+    assert.deepEqual(seen[1].visible, []);
+    f.env.assertNoHandlerErrors('re-entrant visibility subscriber');
+  } finally { f.restore(); }
+});
+
+test('visibility: a destroyed panel is no longer asked what is readable', () => {
+  // Not the same claim as "it reports empty". A provider left registered keeps a destroyed panel —
+  // and everything its closure holds — reachable from the core, and goes on answering from detached
+  // nodes that still carry the state they had when they were torn out. No count anywhere moves, which
+  // is exactly why this needs its own test rather than the environment meter.
+  const f = mountPanel({ instrument: true });
+  try {
+    f.core.addComment({ anchor: { type: 'document' }, body: 'in the lane' });
+    f.panel.toggleDocumentLane(true);
+    f.env.drainMicrotasks();
+    assert.deepEqual(f.core.visibleThreads().map((e) => e.threadKey), ['document'], 'open before teardown');
+
+    f.panel.destroy();
+    f.env.drainMicrotasks();
+    const seen = recordVisibility(f.core);
+    f.core.addComment({ anchor: { type: 'document' }, body: 'arrives after the panel is gone' });
+    f.env.drainMicrotasks();
+    assert.deepEqual(f.core.visibleThreads(), [], 'nothing answers for a panel that no longer exists');
+    assert.deepEqual(seen, [], 'and the core has nothing to announce');
   } finally { f.restore(); }
 });

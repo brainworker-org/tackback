@@ -462,6 +462,7 @@ export function attachPanel(core, options = {}) {
     lane.classList.toggle('tb-open', open);
     laneHead.setAttribute('aria-expanded', open ? 'true' : 'false');
     if (open) { laneConv.sync(); laneConv.focus(); }
+    core.reportThreadVisibility();
     return open;
   }
   // The head is the lane's mark: the same utterance count a badge carries, and the same attention
@@ -661,6 +662,36 @@ export function attachPanel(core, options = {}) {
     popupCleanup?.(); popupCleanup = null; popupConv?.dispose(); popupConv = null; popup?.remove(); popup = null;
     if (pendingRegionEl) { pendingRegionEl.remove(); pendingRegionEl = null; }
     doc.documentElement.classList.remove('tb-popup-open');   // region affordances (resize grip / move cursor) re-enabled
+    core.reportThreadVisibility();
+  }
+
+  /**
+   * What this panel is showing a reader RIGHT NOW, projected from live state each time it is asked.
+   *
+   * Deliberately not a ledger kept up to date at each transition: a projection that is asked one
+   * moment late is merely late, while a ledger that missed one transition is wrong until something
+   * else happens to correct it. Every path that changes a surface only has to say "something moved",
+   * and even forgetting that costs a delayed report rather than a false one.
+   *
+   * The registered conversations are NOT the answer — the lane keeps its conversation registered
+   * while it is folded away, so that set includes a thread the reader cannot see. What is readable is
+   * a Pane that is open, and a lane that is expanded.
+   */
+  function visibleThreads() {
+    const out = [];
+    const add = (key) => {
+      // A conversation with no identity yet — an uncommitted region — is absent rather than present
+      // with nulls. It appears in the report after its first commit gives it a thread to belong to.
+      if (!key || out.some((e) => e.threadKey === key)) return;
+      const group = core.listComments().filter((c) => threadKeyOf(c) === key);
+      if (!group.length) return;
+      const ids = [];
+      for (const c of group) { ids.push(c.id); for (const r of c.replies || []) ids.push(r.id); }
+      out.push({ threadKey: key, anchor: group[0].anchor, comments: ids });
+    };
+    if (popup && popupConv) add(popupConv.identity());
+    if (laneOpen()) add('document');
+    return out;
   }
   // ---- the conversation view --------------------------------------------------------------------
   // One thread, rendered and composed: the timeline rows, the input, the reactions, the commit
@@ -897,6 +928,9 @@ export function attachPanel(core, options = {}) {
       sync, relabel, retint: () => { for (const r of tinted) applyTint(r); },
       preserveDraft, clearDraft,
       focus: () => ta.focus(),
+      // Read, never stored: a conversation adopts its identity at its first commit, so anything that
+      // remembered this at construction time would name an uncommitted draft forever.
+      identity: () => threadKey,
       dispose: () => conversations.delete(handle),
     };
     conversations.add(handle);
@@ -917,6 +951,7 @@ export function attachPanel(core, options = {}) {
     popupConv = conv;
     popup.append(...conv.nodes);
     doc.body.appendChild(popup);
+    core.reportThreadVisibility();
     const vw = globalThis.innerWidth || 1024, vh = globalThis.innerHeight || 768;
     const pos = clampToViewport(ev?.clientX ?? 120, ev?.clientY ?? 120, popup.offsetWidth, popup.offsetHeight, vw, vh);
     Object.assign(popup.style, { left: pos.x + 'px', top: pos.y + 'px' });
@@ -1379,6 +1414,9 @@ export function attachPanel(core, options = {}) {
   // ---- wire to core + initial render -----------------------------------------------------------
   // one change → re-place the anchors, then let an open thread catch up with what was just said
   const onChange = () => { renderMarks(); broadcast((c) => c.sync()); };
+  // Registering is itself the first transition, and deregistering at teardown is the last one: the
+  // report that this panel is showing nothing has to be spoken by something that outlives the panel.
+  own(core.registerThreadVisibility(visibleThreads));
   onCore('change', onChange);
   onCore('recalculate', renderMarks);
   // Flipping an attention flag changes exactly ONE class on the affected anchors. A full renderMarks
