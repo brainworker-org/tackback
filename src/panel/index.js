@@ -679,7 +679,7 @@ export function attachPanel(core, options = {}) {
    */
   function visibleThreads() {
     const out = [];
-    const add = (key, anchor) => {
+    const add = (key, anchor, remember) => {
       // A conversation with no identity yet — an uncommitted region — is absent rather than present
       // with nulls. It appears in the report after its first commit gives it a thread to belong to.
       if (!key || out.some((e) => e.threadKey === key)) return;
@@ -689,14 +689,24 @@ export function attachPanel(core, options = {}) {
       // presence out of the store would call both of those "not readable" while the reader is looking
       // straight at them, and would report the second as a closing that never happened.
       const ids = [];
+      let live = null;
       for (const c of core.listComments()) {
         if (threadKeyOf(c) !== key) continue;
+        if (!live) live = c.anchor;
         ids.push(c.id);
         for (const r of c.replies || []) ids.push(r.id);
       }
-      out.push({ threadKey: key, anchor, comments: ids });
+      // Where a thread POINTS is the store's to say for as long as the store has anything to say
+      // about it: a region that was moved, or a comment replaced under the same key by an import,
+      // changes its place without changing its identity, and a remembered anchor would go on naming
+      // where it used to be. So it is read here, on every look, and only remembered as the answer for
+      // afterwards — when the last comment is gone there is nowhere else the surface's place could
+      // come from. Remembering it at a few known moments instead would mean naming every path that
+      // can move an anchor, and missing one is the whole class this projection exists to avoid.
+      if (live) remember?.(live);
+      out.push({ threadKey: key, anchor: live || remember?.() || anchor, comments: ids });
     };
-    if (popup && popupConv) add(popupConv.identity(), popupConv.anchorOf());
+    if (popup && popupConv) add(popupConv.identity(), popupConv.anchorOf(), popupConv.anchorMemo);
     if (laneOpen()) add('document', { type: 'document' });
     return out;
   }
@@ -719,6 +729,7 @@ export function attachPanel(core, options = {}) {
   // stays open when its last comment is deleted — so neither its identity nor its place can be
   // reconstructed from the store.
   let anchor = initialAnchor;
+  let lastAuthoritative = null;   // where the store last said this thread points, for when it empties
   const draft = (draftKey != null && drafts.get(draftKey)) || null;
   let reactionId = draft?.reaction || '';
   const anchorEl = el(doc, 'div', 'tb-anchor'); anchorEl.textContent = '📍 ' + anchorLabel;
@@ -946,6 +957,8 @@ export function attachPanel(core, options = {}) {
       // remembered this at construction time would name an uncommitted draft forever.
       identity: () => threadKey,
       anchorOf: () => anchor,
+      // Set with a value to record the last place authority named; called with none to read it back.
+      anchorMemo: (a) => { if (a) lastAuthoritative = a; return lastAuthoritative; },
       dispose: () => conversations.delete(handle),
     };
     conversations.add(handle);

@@ -72,7 +72,9 @@ class TackbackInstance {
     this._transport = options.transport || null;   // descriptor only; core never transports (REQ-205)
     this._visibilityProviders = new Set();      // displays that can say what is readable — see below
     this._visibilityDelivered = new Map();      // the snapshot subscribers were last told about
-    this._visibilityLast = new Map();           // each display's last good answer, kept for when one fails
+    this._visibilityGeneration = 0;             // bumped when a display arrives or withdraws
+    this._visibilityRetries = 0;
+    this._visibilityRetryPending = false;
     this._visibilityScheduled = false;
     this._attention = new Set();   // comment ids currently flagged for ATTENTION — a generic, live UI
                                    // state driven by the integrator; NOT persisted, NOT exported, and
@@ -451,10 +453,11 @@ class TackbackInstance {
     // it only makes the display — and everything its closure holds — reachable from a corpse.
     if (typeof provider !== 'function' || this._destroyed) return () => {};
     this._visibilityProviders.add(provider);
+    this._visibilityGeneration += 1;
     this._scheduleVisibility();
     return () => {
       if (!this._visibilityProviders.delete(provider)) return;
-      this._visibilityLast.delete(provider);   // deregistering IS the intent to withdraw its answer
+      this._visibilityGeneration += 1;
       this._scheduleVisibility();
     };
   }
@@ -466,45 +469,62 @@ class TackbackInstance {
    * The readable threads, right now. Same shape as the event's `visible`, answered without waiting.
    * @returns {Array<{threadKey:string, anchor:object, comments:string[]}>}
    */
-  visibleThreads() { return this._projectVisibility().map(visibilityDTO); }
+  visibleThreads() {
+    const attempt = this._observeVisibility();
+    // "I could not look" has no honest synchronous answer that is also a value. Handing back the last
+    // array the core happened to hold would be answering a question about NOW with something from
+    // before, silently — which is the one failure this whole contract exists to make impossible.
+    if (!attempt.ok) throw new TackbackError('ADAPTER_FAILED', 'could not read what is visible', attempt.error);
+    return attempt.visible.map(visibilityDTO);
+  }
 
-  _projectVisibility() {
-    if (this._destroyed) return [];
-    /** @type {Map<string, {threadKey:string, anchor:object, comments:string[]}>} */
+  /**
+   * ONE observation attempt, whole or not at all.
+   *
+   * Asking every display, narrowing what each returns, and rebuilding it as the core's own are not
+   * three steps that can partly succeed — they are one act of looking. If any part of it fails, the
+   * core has not seen the world; it has seen part of the world and would have to invent the rest.
+   * Both ways of inventing it are wrong, and neither can be right in principle: whether an unreadable
+   * display currently shows nothing or still shows what it last showed is a fact only that display
+   * knows. So the attempt is voided instead, the last ACTUALLY OBSERVED state stands untouched, and
+   * the next successful look repairs everything at once — late rather than wrong, which is the same
+   * rule the projection itself is built on.
+   * @returns {{ok:true, visible:any[]} | {ok:false, error:unknown}}
+   */
+  _observeVisibility() {
+    if (this._destroyed) return { ok: true, visible: [] };
+    const generation = this._visibilityGeneration;
+    /** @type {Map<string, any>} */
     const merged = new Map();
     for (const provider of [...this._visibilityProviders]) {
-      let entries;
       try {
-        entries = provider();
-        this._visibilityLast.set(provider, entries);
-      } catch (err) {
-        // A display that fails has not stopped showing anything — it has stopped ANSWERING, and those
-        // are opposite facts. Dropping it here would put every thread only it was showing into
-        // `closed` and then install that as the truth future diffs are measured from, so a moment's
-        // failure would be indistinguishable from the reader closing everything, and nothing would
-        // repair it until something else happened to schedule a report. Its last good answer stands
-        // until it answers again or withdraws.
-        entries = this._visibilityLast.get(provider);
-        this._fail('ADAPTER_FAILED', 'a display could not report what is visible', err);
-      }
-      for (const e of entries || []) {
-        if (!e || typeof e.threadKey !== 'string' || !e.threadKey) continue;
-        // A display supplies facts, not values the core will hand on: the ids are narrowed to what
-        // was promised, and the anchor is rebuilt as the core's own so that neither the display's
-        // state nor a stored comment can be reached through a report.
-        const ids = [...new Set((Array.isArray(e.comments) ? e.comments : [])
-          .filter((id) => typeof id === 'string' && id))].sort();
-        const prev = merged.get(e.threadKey);
-        if (!prev) {
-          const anchor = canonical(e.anchor ?? null);
-          merged.set(e.threadKey, { threadKey: e.threadKey, anchor, comments: ids, sig: JSON.stringify(anchor) });
-          continue;
+        const entries = provider();
+        for (const e of entries || []) {
+          if (!e || typeof e.threadKey !== 'string' || !e.threadKey) continue;
+          // A display supplies facts, not values the core will hand on. Narrowing and rebuilding
+          // happen HERE, inside the attempt: a value that cannot be canonicalized is a look that
+          // failed, not a report to publish with a hole in it.
+          const ids = [...new Set((Array.isArray(e.comments) ? e.comments : [])
+            .filter((id) => typeof id === 'string' && id))].sort();
+          const prev = merged.get(e.threadKey);
+          if (!prev) {
+            const anchor = canonical(e.anchor ?? null);
+            merged.set(e.threadKey, { threadKey: e.threadKey, anchor, comments: ids, sig: JSON.stringify(anchor) });
+            continue;
+          }
+          // Two displays showing the same thread is one readable thread, not two.
+          prev.comments = [...new Set([...prev.comments, ...ids])].sort();
         }
-        // Two displays showing the same thread is one readable thread, not two.
-        prev.comments = [...new Set([...prev.comments, ...ids])].sort();
+      } catch (error) {
+        return { ok: false, error };
       }
     }
-    return [...merged.values()].sort((a, b) => (a.threadKey < b.threadKey ? -1 : a.threadKey > b.threadKey ? 1 : 0));
+    // A display that arrived or withdrew while we were looking means this look spans two different
+    // worlds. Nothing is reported from a composite of them.
+    if (generation !== this._visibilityGeneration) return { ok: false, error: null };
+    const visible = [...merged.values()]
+      .sort((a, b) => (a.threadKey < b.threadKey ? -1 : a.threadKey > b.threadKey ? 1 : 0));
+    return { ok: true, visible };
   }
 
   _scheduleVisibility() {
@@ -518,7 +538,17 @@ class TackbackInstance {
   _flushVisibility() {
     this._visibilityScheduled = false;
     if (this._destroyed) return;
-    const visible = this._projectVisibility();
+    const attempt = this._observeVisibility();
+    if (!attempt.ok) {
+      // Nothing is installed and nothing is announced. Every mutation re-arms a report, so a bounded
+      // retry is only there to cover a stretch in which nothing else happens; the correctness comes
+      // from the baseline still being the last state anyone actually saw.
+      if (this._visibilityRetries < 3) { this._visibilityRetries += 1; this._retryVisibilityLater(); }
+      if (attempt.error) this._fail('ADAPTER_FAILED', 'a display could not report what is visible', attempt.error);
+      return;
+    }
+    this._visibilityRetries = 0;
+    const visible = attempt.visible;
     const before = this._visibilityDelivered;
     const now = new Map(visible.map((e) => [e.threadKey, e]));
     const opened = visible.filter((e) => !before.has(e.threadKey));
@@ -538,6 +568,16 @@ class TackbackInstance {
     this._emitter.emit('thread:visibility', {
       visible: visible.map(visibilityDTO), opened: opened.map(visibilityDTO), closed: closed.map(visibilityDTO),
     });
+  }
+
+  _retryVisibilityLater() {
+    // Its own flag, deliberately. Sharing the ordinary one would let a retry waiting on a later turn
+    // swallow a report that a mutation has just asked for now — the retry is a floor under liveness,
+    // never a ceiling on it.
+    if (this._visibilityRetryPending) return;
+    this._visibilityRetryPending = true;
+    const run = () => { this._visibilityRetryPending = false; if (!this._destroyed) this._flushVisibility(); };
+    if (typeof setTimeout === 'function') setTimeout(run, 0); else queueMicrotask(run);
   }
 
   setAuthor(name) { this._opts.author = name; }
@@ -562,7 +602,6 @@ class TackbackInstance {
     this._attention.clear();
     this._visibilityProviders.clear();
     this._visibilityDelivered.clear();
-    this._visibilityLast.clear();
     this._emitter.clear();
   }
 

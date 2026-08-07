@@ -1557,3 +1557,92 @@ test('harness: a test that never asks still fails when a subscriber threw', () =
   }
   assert.ok(threw, 'teardown, not the test, is what caught it');
 });
+
+test('visibility: a display that cannot be read gives no answer at all, rather than an old one', () => {
+  // The failure the first repair introduced. Retaining each display's last good answer only reads
+  // correctly while nothing changed; when the surface really has closed and the read of it fails, the
+  // old answer is a statement about the present that nobody observed. Whether an unreadable display
+  // shows nothing or still shows what it showed is a fact only that display has, so the core stops
+  // claiming to know rather than guessing — and guesses in both directions have now been wrong.
+  const f = mountPanel({ instrument: true });
+  const errors = [];
+  try {
+    let showing = [{ threadKey: 'block:a', anchor: { type: 'block', elementId: 'a' }, comments: ['c'] }];
+    let failing = false;
+    f.core.on('error', (e) => errors.push(e));
+    f.core.registerThreadVisibility(() => { if (failing) throw new Error('unreadable'); return showing; });
+    f.env.drainMicrotasks();
+    assert.deepEqual(f.core.visibleThreads().map((e) => e.threadKey), ['block:a']);
+
+    const seen = recordVisibility(f.core);
+    showing = [];            // it really did close…
+    failing = true;          // …and the read of that fails
+    f.core.reportThreadVisibility();
+    f.env.drainMicrotasks();
+    assert.throws(() => f.core.visibleThreads(), /could not read/, 'the pull refuses rather than lies');
+    assert.deepEqual(seen, [], 'and nothing was announced from an unobserved world');
+    assert.ok(errors.length >= 1, 'the failure is reported');
+
+    failing = false;
+    f.core.reportThreadVisibility();
+    f.env.drainMicrotasks();
+    assert.deepEqual(f.core.visibleThreads(), [], 'the next real look repairs it');
+    assert.deepEqual(seen.at(-1).closed.map((e) => e.threadKey), ['block:a'], 'and only then is it closed');
+  } finally { f.restore(); }
+});
+
+test('visibility: recovery is a fresh observation, not the cache answering forever', () => {
+  const f = mountPanel({ instrument: true });
+  try {
+    let asked = 0, failing = false;
+    let showing = [{ threadKey: 'block:a', anchor: { type: 'block', elementId: 'a' }, comments: ['c1'] }];
+    f.core.on('error', () => {});
+    f.core.registerThreadVisibility(() => { asked += 1; if (failing) throw new Error('unreadable'); return showing; });
+    f.env.drainMicrotasks();
+    const before = asked;
+
+    failing = true; f.core.reportThreadVisibility(); f.env.drainMicrotasks();
+    failing = false;
+    showing = [{ threadKey: 'block:a', anchor: { type: 'block', elementId: 'a' }, comments: ['c1', 'c2'] }];
+    const seen = recordVisibility(f.core);
+    f.core.reportThreadVisibility(); f.env.drainMicrotasks();
+    assert.ok(asked > before, 'it was actually asked again');
+    assert.deepEqual(seen.at(-1).visible[0].comments, ['c1', 'c2'], 'and the new answer is what came back');
+  } finally { f.restore(); }
+});
+
+test('visibility: a display that withdraws while being read does not get announced first', () => {
+  // A look that spans a display arriving or leaving describes two different worlds at once. Reporting
+  // the composite would announce a thread as opened and then immediately closed, which is precisely
+  // the "announced from the middle of something changing" this contract exists to rule out.
+  const f = mountPanel({ instrument: true });
+  try {
+    const seen = recordVisibility(f.core);
+    let off = null;
+    off = f.core.registerThreadVisibility(() => {
+      off?.();                                   // withdraws itself mid-observation
+      return [{ threadKey: 'block:gone', anchor: { type: 'block', elementId: 'gone' }, comments: ['x'] }];
+    });
+    f.env.drainMicrotasks();
+    assert.deepEqual(seen.flatMap((p) => p.opened.map((e) => e.threadKey)), [],
+      'nothing that had already withdrawn was ever announced as open');
+    assert.deepEqual(f.core.visibleThreads(), []);
+  } finally { f.restore(); }
+});
+
+test('visibility: an anchor the core cannot rebuild is a failed look, not a crash', () => {
+  // Rebuilding a display's answer as the core's own is part of LOOKING, not something done to a
+  // finished observation — so a value that cannot be rebuilt fails the attempt like any other unread,
+  // instead of escaping as an uncaught error out of a scheduled callback nobody can catch.
+  const f = mountPanel({ instrument: true });
+  const errors = [];
+  try {
+    const cyclic = { type: 'block', elementId: 'a' };
+    cyclic.self = cyclic;
+    f.core.on('error', (e) => errors.push(e));
+    f.core.registerThreadVisibility(() => ([{ threadKey: 'block:a', anchor: cyclic, comments: ['c'] }]));
+    f.env.drainMicrotasks();
+    assert.throws(() => f.core.visibleThreads(), /could not read/);
+    assert.ok(errors.length >= 1, 'reported as an error rather than thrown into the void');
+  } finally { f.restore(); }
+});
