@@ -24,11 +24,11 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
   it grows** is reported again when its contents change, though it never opened or closed.
 
   Reports settle at the microtask boundary from a state that has finished moving, so several changes
-  in one turn arrive as one report and nothing is announced from the middle of a surface changing. A
+  in one turn arrive as one report and nothing is announced while a Pane or the lane is still changing. A
   thread with no identity yet — an uncommitted region — is **absent** rather than reported with nulls,
   and appears once its first commit gives it one.
 
-  The panel is what can see a surface, so the panel is what answers: attach one and reports begin, and
+  The panel is what can see its own Panes and lane, so the panel is what answers: attach one and reports begin, and
   a core with no panel reports nothing. Tearing the panel down is itself a transition, so a consumer
   that raised its update rate while a thread was open is told when that stops being true.
 
@@ -62,11 +62,11 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
   Pane and the theme, locale, reaction and colour setters still ran — producing chrome the host never
   asked for and could not remove. Every public method is now a no-op afterwards, and `destroy()` is
   idempotent.
-- **Deferred dismiss handlers can no longer outlive the surface that scheduled them.** Both the Pane
+- **Deferred dismiss handlers can no longer outlive the Pane or menu that scheduled them.** Both the Pane
   and the anchor menu register theirs from a deferred callback against a single cleanup slot, so one that was closed
   — or replaced by another within the same tick — before the deferred callback ran left a mouse and a key listener
   on the document that nothing could take off again. Each registration now checks it still belongs to
-  the surface on screen; asking whether *some* surface exists cannot tell replaced from closed.
+  the one on screen; asking whether *some* Pane exists cannot tell replaced from closed.
 - **A destroy that happens during a core event no longer lets the panel run afterwards.** The emitter
   snapshots its listeners before invoking them, so unsubscribing during a dispatch does not remove the
   panel from the run already in progress: an integrator calling `destroy()` from its own `change`
@@ -76,7 +76,7 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
   searching the document, so a block the host removed while the panel was alive was never found —
   and re-attaching that element later brought the panel's class back with it. It is now released
   through the elements themselves.
-- **Modals are a surface like any other.** They appended unclassed children straight to the document
+- **Modals belong to the panel like anything else it puts on screen.** They appended unclassed children straight to the document
   body, outside every sweep: repeated clicks stacked several, and an import modal opened before
   teardown could still write into the core afterwards. At most one at a time now, and it closes with
   the panel.

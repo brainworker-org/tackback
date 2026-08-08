@@ -229,7 +229,7 @@ contents change, even though it never opened or closed: that is the case a plain
 cannot express, and the reason this is a snapshot.
 
 Reports settle at the microtask boundary from a state that has finished moving, so several changes in
-one turn arrive as one report, and nothing is ever announced from the middle of a surface changing. A
+one turn arrive as one report, and nothing is ever announced while a Pane or the lane is still changing. A
 thread with no identity yet — an uncommitted region — is simply **absent**, and appears once its first
 commit gives it one.
 
@@ -237,7 +237,7 @@ Because it is a snapshot, **same-turn transients are coalesced away**: open a th
 before the boundary and nothing is emitted. This reports settled visibility; it is not a lossless
 interaction log. If you need to count impressions, count them from your own handlers.
 
-The panel is what can see a surface, so it is the panel that answers — attach one and the reports
+The panel is what can see its own Panes and lane, so it is the panel that answers — attach one and the reports
 begin; a core with no panel reports nothing and `visibleThreads()` is empty. One display at a time,
 matching the one-panel-per-document rule above: attaching again replaces the previous answerer rather
 than joining it.
