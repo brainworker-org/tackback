@@ -37,6 +37,9 @@ const sameEntry = (a, b) => !!b
  * @template T @param {T} v @returns {T}
  */
 const canonical = (v) => {
+  // A function or a symbol would survive a copy by REFERENCE while being invisible to the signature —
+  // shared with whoever handed it over, and unable to count as a change. Neither belongs in a fact.
+  if (typeof v === 'function' || typeof v === 'symbol') return null;
   if (v === null || v === undefined || typeof v !== 'object') return v === undefined ? null : v;
   if (Array.isArray(v)) return /** @type {any} */ (v.map(canonical));
   const out = /** @type {any} */ ({});
@@ -510,6 +513,12 @@ class TackbackInstance {
         const entries = provider();
         for (const e of entries || []) {
           if (!e || typeof e.threadKey !== 'string' || !e.threadKey) continue;
+          // An entry promises to name a PLACE. One that names nothing, or names it with a kind this
+          // build does not know, cannot be published as though it did — and quietly dropping it would
+          // report a thread the reader is looking at as gone. It fails the look instead.
+          if (!isValidAnchor(e.anchor)) {
+            throw new TackbackError('INVALID_ANCHOR', `visible thread ${e.threadKey} has no usable anchor`);
+          }
           // A display supplies facts, not values the core will hand on. Narrowing and rebuilding
           // happen HERE, inside the attempt: a value that cannot be canonicalized is a look that
           // failed, not a report to publish with a hole in it.

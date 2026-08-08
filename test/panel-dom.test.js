@@ -1708,3 +1708,88 @@ test('visibility: an open thread emptied after it moved is reported where it END
     assert.equal(after[0].anchor.rect.x, 0.6, 'and still naming where it ended up, not where it began');
   } finally { f.restore(); }
 });
+
+test('visibility: the core keeps looking by itself for a while, then stops and says why', () => {
+  // The retry exists so that a display which is briefly unreadable is not left un-looked-at until
+  // something unrelated happens. It is bounded on purpose: the core cannot know when the condition
+  // has passed, and looking forever would spend every turn measuring the same failure. What is being
+  // pinned here is that it does look again without being asked, and that it does give up.
+  const f = mountPanel({ instrument: true });
+  try {
+    let asked = 0;
+    f.core.on('error', () => {});
+    f.core.registerThreadVisibility(() => { asked += 1; throw new Error('unreadable'); });
+    f.env.drainMicrotasks();
+    const afterFirst = asked;
+    assert.equal(afterFirst, 1, 'one look, which failed');
+
+    for (let i = 0; i < 10; i += 1) { f.env.flushTimers(); f.env.drainMicrotasks(); }
+    assert.ok(asked > afterFirst, 'it looked again without being asked');
+    const settled = asked;
+    for (let i = 0; i < 10; i += 1) { f.env.flushTimers(); f.env.drainMicrotasks(); }
+    assert.equal(asked, settled, 'and it stopped rather than looking forever');
+  } finally { f.restore(); }
+});
+
+test('visibility: an anchor shaped wrong is a failed look, like one that cannot be rebuilt', () => {
+  // A cycle is not the only way an answer can be unusable. What the core promises subscribers is an
+  // entry that names a place; an entry that names nothing cannot be published as though it did.
+  const f = mountPanel({ instrument: true });
+  try {
+    f.core.on('error', () => {});
+    let anchor = null;
+    f.core.registerThreadVisibility(() => ([{ threadKey: 'block:a', anchor, comments: ['c'] }]));
+    f.env.drainMicrotasks();
+    assert.throws(() => f.core.visibleThreads(), /could not read/, 'no anchor at all');
+
+    anchor = { type: 'block' };                 // a kind that says where, without saying where
+    assert.throws(() => f.core.visibleThreads(), /could not read/, 'a block that names no element');
+
+    anchor = { type: 'not-a-kind', elementId: 'a' };
+    assert.throws(() => f.core.visibleThreads(), /could not read/, 'a kind this build does not know');
+
+    anchor = { type: 'block', elementId: 'a' };
+    assert.deepEqual(f.core.visibleThreads().map((e) => e.threadKey), ['block:a'], 'and a real one works');
+  } finally { f.restore(); }
+});
+
+test('visibility: every part of a report is the subscriber\'s own, not just the visible list', () => {
+  const f = mountPanel({ instrument: true });
+  try {
+    f.core.addComment({ anchor: { type: 'document' }, body: 'held' });
+    f.panel.toggleDocumentLane(true);
+    f.env.drainMicrotasks();
+    const seen = recordVisibility(f.core);
+    f.panel.toggleDocumentLane(false);
+    f.env.drainMicrotasks();
+
+    const report = seen[0];
+    assert.deepEqual(report.visible, [], 'nothing visible after folding away');
+    report.closed[0].threadKey = 'rewritten';
+    report.closed[0].comments.push('invented');
+    report.closed[0].anchor.type = 'rewritten';
+
+    f.panel.toggleDocumentLane(true);
+    f.env.drainMicrotasks();
+    const reopened = seen.at(-1);
+    assert.deepEqual(reopened.opened.map((e) => e.threadKey), ['document'], 'the reopen names the real thread');
+    assert.equal(reopened.opened[0].anchor.type, 'document', 'with the real anchor');
+    assert.equal(f.core.visibleThreads()[0].anchor.type, 'document', 'and the pull agrees');
+  } finally { f.restore(); }
+});
+
+test('visibility: a callable smuggled into an anchor is not carried into the report', () => {
+  // It would survive a copy by reference — shared with whoever handed it over — while being invisible
+  // to the comparison, so changing it could never count as a change. A fact is made of values.
+  const f = mountPanel({ instrument: true });
+  try {
+    const smuggled = () => 'reachable';
+    f.core.registerThreadVisibility(() => ([
+      { threadKey: 'block:a', anchor: { type: 'block', elementId: 'a', probe: smuggled }, comments: ['c'] },
+    ]));
+    f.env.drainMicrotasks();
+    const [entry] = f.core.visibleThreads();
+    assert.equal(entry.threadKey, 'block:a', 'the entry itself is fine');
+    assert.notEqual(entry.anchor.probe, smuggled, 'but nothing callable came with it');
+  } finally { f.restore(); }
+});
