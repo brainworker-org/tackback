@@ -11,6 +11,7 @@ import { computeCapture, resolveRegionRect } from '../core/resolution.js';
 import { classifyGesture, popupCommit, canCommit, nextSendState, answersSend, applyHandleDrag, resolveLaneLayout } from './interaction.js';
 import { actorColorOf as resolveActorColor, claimedColors, authorKey as tbAuthorKey, lastSpeaker } from './actors.js';
 import { threadKeyOf, timelineItems, utteranceCount, planInsertions, anchorLabelSpec } from './thread.js';
+import { createHost } from './host.js';
 import { documentSurface, DOCUMENT_SURFACE_ID } from '../core/media.js';
 import { normalizeRegion, buildQuoteSelector, resolveQuoteSelector } from '../core/anchor.js';
 import { selectionOffsetsWithin, offsetsToRange, paintHighlights, clearHighlights } from './range.js';
@@ -421,6 +422,7 @@ export function attachPanel(core, options = {}) {
   // document, so it has no such thing — it gets a bar of its own across the bottom, which doubles as
   // its mark: the count and the attention tint live on the head, visible without opening anything.
   let lane = null, laneHead = null, laneTitle = null, laneCount = null, laneBody = null, laneComposer = null, laneConv = null;
+  let laneHost = null;
   if (controls.docLane) {
     lane = el(doc, 'div', 'tb-lane');
     // a real <button>: the thing it replaced was one, and focusability, Enter/Space and the
@@ -448,21 +450,23 @@ export function attachPanel(core, options = {}) {
       existing: [],
       draftKey: anchorKey({ type: 'document' }),
       threadKey: 'document',
+      anchor: { type: 'document' },
       // the lane is not a popup: committing never dismisses it, so "close" is a no-op here
       onClose: () => {},
       onSave: (body, reaction) => core.addComment({ anchor: { type: 'document' }, body, reaction }),
     });
     laneBody.appendChild(laneConv.timeline);
     laneComposer.append(...laneConv.composer);
+    laneHost = createHost({ collapsible: true }, () => core.reportThreadVisibility());
+    laneHost.attach(laneConv, lane);
+    hosts.add(laneHost);
   }
-  function laneOpen() { return !!lane && lane.classList.contains('tb-open'); }
+  function laneOpen() { return !!laneHost && laneHost.timelineOpen(); }
   function toggleLane(force) {
-    if (!lane) return false;
-    const open = force === undefined ? !laneOpen() : !!force;
-    lane.classList.toggle('tb-open', open);
+    if (!lane || !laneHost) return false;
+    const open = laneHost.setOpen(force);
     laneHead.setAttribute('aria-expanded', open ? 'true' : 'false');
     if (open) { laneConv.sync(); laneConv.focus(); }
-    core.reportThreadVisibility();
     return open;
   }
   // The head is the lane's mark: the same utterance count a badge carries, and the same attention
@@ -638,8 +642,23 @@ export function attachPanel(core, options = {}) {
   }
 
   // ---- popup -----------------------------------------------------------------------------------
+  // Everything a thread is currently shown in. One question — timelineOpen() — is asked of each,
+  // rather than each kind of host being asked in its own way somewhere else.
+  const hosts = new Set();
+  /**
+   * The ONLY way a host ends. Releasing has three parts that must not come apart: the host dies, it
+   * leaves the set, and its root leaves the page. A dead host still in the set would report itself
+   * unreadable forever and no test would notice, so the path is one path rather than a rule.
+   */
+  function releaseHost(host) {
+    if (!host) return;
+    const el = host.dispose();
+    hosts.delete(host);
+    el?.remove();
+  }
   let popup = null;
   let popupCleanup = null;
+  let popupHost = null;    // the host wrapping the open Pane, if any
   let popupConv = null;    // the conversation the open Pane hosts, if any
   // Every conversation currently on screen. It used to be three singleton slots, which encoded
   // "at most one, and it dies" — so adding a second, persistent host meant hand-editing every
@@ -659,7 +678,8 @@ export function attachPanel(core, options = {}) {
   // The pending region's lifetime IS the popup's: closing the popup (outside-click, Escape, Cancel,
   // empty save) removes the dashed rect, so no orphaned region ever lingers (Keisuke 2026-06-15).
   function closePopup() {
-    popupCleanup?.(); popupCleanup = null; popupConv?.dispose(); popupConv = null; popup?.remove(); popup = null;
+    popupCleanup?.(); popupCleanup = null;
+    releaseHost(popupHost); popupHost = null; popupConv = null; popup = null;
     if (pendingRegionEl) { pendingRegionEl.remove(); pendingRegionEl = null; }
     doc.documentElement.classList.remove('tb-popup-open');   // region affordances (resize grip / move cursor) re-enabled
     core.reportThreadVisibility();
@@ -706,8 +726,11 @@ export function attachPanel(core, options = {}) {
       if (live) remember?.(live);
       out.push({ threadKey: key, anchor: live || remember?.() || anchor, comments: ids });
     };
-    if (popup && popupConv) add(popupConv.identity(), popupConv.anchorOf(), popupConv.anchorMemo);
-    if (laneOpen()) add('document', { type: 'document' });
+    // ONE question, asked of every host. Which kind of host it is no longer decides how to ask.
+    for (const host of hosts) {
+      if (!host.timelineOpen()) continue;
+      add(host.identity(), host.anchorOf(), host.anchorMemo);
+    }
     return out;
   }
   // ---- the conversation view --------------------------------------------------------------------
@@ -983,6 +1006,9 @@ export function attachPanel(core, options = {}) {
       afterCommit: () => { if (pendingRegionEl) { pendingRegionEl.remove(); pendingRegionEl = null; } },
     });
     popupConv = conv;
+    popupHost = createHost({ collapsible: false }, () => core.reportThreadVisibility());
+    popupHost.attach(conv, popup);
+    hosts.add(popupHost);
     popup.append(...conv.nodes);
     doc.body.appendChild(popup);
     core.reportThreadVisibility();

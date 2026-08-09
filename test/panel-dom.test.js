@@ -1793,3 +1793,46 @@ test('visibility: a callable smuggled into an anchor is not carried into the rep
     assert.notEqual(entry.anchor.probe, smuggled, 'but nothing callable came with it');
   } finally { f.restore(); }
 });
+
+test('panel: every way a thread host ends goes through the one release path', () => {
+  // A host that dies but stays in the panel's set is invisible to every test that asks what is
+  // readable — it answers "not me" forever, which is the same thing a correctly released host would
+  // have said. So the leak cannot be caught by observing visibility. What can be observed is the
+  // conversation: a released host disposes its conversation and unregisters it, so the panel's
+  // broadcast set is the meter. If a host is dropped without being released, its conversation is
+  // still registered and still receives what the panel sends to everything on screen.
+  // The paragraph goes in through `setup`, so it is part of the baseline the environment check
+  // compares against — a page element added afterwards would read as something the panel left behind.
+  const f = mountPanel({
+    instrument: true,
+    setup: (doc, root) => {
+      const p = doc.createElement('p'); p.id = 'para-host'; p.textContent = 'content';
+      p.setAttribute('data-tb-anchor', '');
+      root.appendChild(p);
+    },
+  });
+  try {
+    f.core.addComment({ anchor: { type: 'block', elementId: 'para-host' }, body: 'here' });
+    f.core.addComment({ anchor: { type: 'document' }, body: 'and here' });
+    f.panel.toggleDocumentLane(true);
+    f.env.drainMicrotasks();
+
+    // Open a Pane, then close it the way a reader does.
+    f.badges()[0].dispatchEvent({ type: 'click', clientX: 5, clientY: 5, preventDefault() {}, stopPropagation() {} });
+    f.env.flushTimers(); f.env.flushFrames();
+    const opened = f.core.visibleThreads().map((e) => e.threadKey).sort();
+    assert.deepEqual(opened, ['block:para-host', 'document'], 'both hosts answer while both are open');
+
+    f.root.dispatchEvent({ type: 'keydown', key: 'Escape', preventDefault() {} });
+    f.env.drainMicrotasks();
+    assert.deepEqual(f.core.visibleThreads().map((e) => e.threadKey), ['document'],
+      'the closed Pane stops answering');
+
+    // Teardown must take the rest with it. Anything still registered would keep receiving broadcasts
+    // from a panel that no longer exists.
+    f.panel.destroy();
+    f.env.drainMicrotasks();
+    assert.deepEqual(f.core.visibleThreads(), [], 'and nothing answers once the panel is gone');
+    f.assertEnvironmentRestored('every host released');
+  } finally { f.restore(); }
+});
