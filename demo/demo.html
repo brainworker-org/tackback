@@ -386,6 +386,18 @@
     b.classList.toggle('on', scenario === 'conversation');
     applyScenario();
   });
+  // ATTENTION is driven from here and from nowhere else, because that is what it is: a flag an
+  // integrator raises for its own reason. It deliberately does NOT follow arrival — that was the
+  // wiring this demo had to remove. Raising it while something is also unread is the point of the
+  // button: attention FILLS, unread RINGS, and an anchor that is both wears both, so an integration
+  // still using attention for something of its own is never made to choose.
+  let attentionOn = false;
+  mkBtn('Attention: off', (b) => {
+    attentionOn = !attentionOn;
+    b.textContent = 'Attention: ' + (attentionOn ? 'on' : 'off');
+    b.classList.toggle('on', attentionOn);
+    for (const c of tb.listComments()) tb.setAnchorAttention(c.id, attentionOn);
+  });
   document.body.appendChild(bar);
 
   // ── expose for verification drivers (folds in the old umd-harness smoke role) ────────────────────
