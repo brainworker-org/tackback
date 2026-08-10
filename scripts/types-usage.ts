@@ -8,19 +8,27 @@
 //
 // Written against `../types/index.js`, which is what the package's `types` entry resolves to.
 
+// Everything comes from the ONE entry point a consumer installs. Reaching into a subpath the package
+// does not publish would let a type look reachable here and be unreachable for them.
 import { Tackback, parseEnvelope, buildEnvelope, TackbackError } from '../types/index.js';
-import type { StoredDocument, StorageAdapter } from '../types/core/storage.js';
-import type { Comment, Anchor } from '../types/core/model.js';
+import type {
+  StoredDocument, StoredProgress, StorageAdapter, MountOptions, Comment, Anchor,
+} from '../types/index.js';
 
 // ---- an adapter, written by hand, keeping everything it is given -----------------------------------
 // The obligation the contract states: the environment-local records round-trip like any other field.
 let held: StoredDocument | null = null;
+let progress: StoredProgress | null = null;
 const mine: StorageAdapter = {
   load: () => held,
   save: (doc) => { held = doc; },
+  // Answering later is allowed everywhere, including here — anything backed by a server has to.
+  loadProgress: () => Promise.resolve(progress),
+  saveProgress: (p) => { progress = p; },
 };
 
-const tb = Tackback.mount({ document: { id: 'guide' }, storage: mine, author: { id: 'kei', kind: 'human' } });
+const options: MountOptions = { document: { id: 'guide' }, storage: mine, author: { id: 'kei', kind: 'human' } };
+const tb = Tackback.mount(options);
 
 // ---- writing ---------------------------------------------------------------------------------------
 const where: Anchor = { type: 'block', elementId: 'intro' };

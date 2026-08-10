@@ -17,6 +17,13 @@ import { TackbackError } from './errors.js';
 const LIB_VERSION = '0.9.7';
 const nowIso = () => new Date().toISOString();
 
+/**
+ * A stored progress record that exists and cannot be read. Distinct from having none: nothing stored
+ * means this document predates progress and what is in it counts as seen, while a record that cannot
+ * be read means nothing is known — and nothing known must never be turned into 'already read'.
+ */
+const UNREADABLE = Symbol('unreadable progress');
+
 /** How many times the core looks again by itself before handing an unreadable display back. */
 const VISIBILITY_RETRIES = 3;
 
@@ -99,10 +106,19 @@ class TackbackInstance {
     this._arrival = new Map();       // utterance id → the order it reached here (a positive integer)
     this._observed = new Map();      // thread key → how far that thread has been seen
     this._arrivalNext = 1;
+    this._staged = [];               // ids seen but not yet numbered — see _stageArrival
     this._lastUnreadSig = '[]';      // the last unread snapshot announced, as JSON, to suppress repeats
     this._loadFaults = [];           // entries refused while restoring; reported just before `ready`
-    this._saveChain = Promise.resolve();
-    this._persistQueued = false;
+    // A channel each. Sharing one queue would have kept them apart in storage and in failure while
+    // joining them in TIME: a progress write that never settles would stop the document from being
+    // attempted at all, which is the same coupling arriving by a different road.
+    this._docChain = Promise.resolve(); this._docQueued = false;
+    this._progressChain = Promise.resolve(); this._progressQueued = false;
+    // Each record is pending while its revision is ahead of what has actually landed. A plain flag
+    // cannot say this: a write that succeeds would clear changes that arrived after its snapshot was
+    // taken, and those changes would then be pending in nobody's book.
+    this._documentRev = 0; this._documentSaved = 0;   // bumped only by a real change, never by reading
+    this._progressRev = 0; this._progressSaved = 0;
 
     const key = options.storageKey || `tackback::${this._doc.id}`;
     // The engine writes environment-local state itself, so it holds the adapter too. The store keeps
@@ -110,6 +126,22 @@ class TackbackInstance {
     // lifetimes behind one save.
     const adapter = options.storage || localStorageAdapter(key);
     this._envAdapter = adapter;
+    // The progress pair is optional, but it is a PAIR: one half alone is a capability that half works
+    // — writes that nothing reads back, or reads of something nothing writes — and neither says so.
+    // Taken as absent, and said out loud, rather than left to be discovered as unread that will not
+    // persist for reasons nobody can see.
+    const canRead = typeof adapter.loadProgress === 'function';
+    const canWrite = typeof adapter.saveProgress === 'function';
+    // Tracked as a capability rather than by rebuilding the adapter without the two methods. A copy
+    // keeps only own properties, so an adapter whose operations are methods on a class would lose the
+    // document ones too — disabling progress by silently disabling everything.
+    this._progressCapable = canRead && canWrite;
+    if (canRead !== canWrite) {
+      this._loadFaults.push({
+        code: 'ADAPTER_FAILED',
+        message: `storage adapter has ${canRead ? 'loadProgress' : 'saveProgress'} but not ${canRead ? 'saveProgress' : 'loadProgress'}; reading progress will not be kept`,
+      });
+    }
     // Restoration is intercepted rather than pushed into the store: what comes back from an adapter is
     // outside input like any envelope, and only what survives validation may reach the store at all.
     const hydrate = (d) => this._hydrateEnv(d);
@@ -139,7 +171,7 @@ class TackbackInstance {
         // synchronous adapter finishes loading inside the constructor, before the caller has had a
         // chance to subscribe — reporting there would mean the only listeners who could hear about
         // corrupt stored data are the ones who did not exist yet.
-        for (const fault of this._loadFaults.splice(0)) this._fail('IMPORT_ENTRY_DROPPED', fault.message);
+        for (const fault of this._loadFaults.splice(0)) this._fail(fault.code || 'IMPORT_ENTRY_DROPPED', fault.message);
         // One look, armed before `ready` and taken after it: whatever was restored as unread reaches a
         // subscriber as an ordinary report rather than as a special case for starting up.
         this._scheduleVisibility();
@@ -754,6 +786,11 @@ class TackbackInstance {
   _flushVisibility() {
     this._visibilityScheduled = false;
     if (this._destroyed) return;
+    // FIRST, and whether or not the look succeeds. What has arrived is known regardless of whether
+    // anything can be seen, and a display that cannot be read must not be able to hold up the fact
+    // that something came in — that is the half this version exists to deliver.
+    const numbered = this._finalizeArrivals();
+    if (numbered) this._progressRev += 1;
     const attempt = this._observeVisibility();
     if (!attempt.ok) {
       // Nothing is installed and nothing is announced. Every mutation re-arms a report, so a bounded
@@ -804,7 +841,9 @@ class TackbackInstance {
     // catching up to do are different questions: the same threads reported again after a reload is a
     // report that changes nothing and moves everything. Putting this after the return would make the
     // reader's progress depend on something moving on screen.
-    if (this._advanceObserved(visible)) this._schedulePersist();
+    // Numbering and observation settled together, so the record written from here is the whole of
+    // this turn rather than half of it.
+    if (this._advanceObserved(visible) || numbered) this._schedulePersist();
     if (changed) {
       // Built fresh for this delivery. What a subscriber is given is not the baseline the next diff is
       // measured against, so nothing it does to the payload can rewrite what the core believes it said.
@@ -862,10 +901,16 @@ class TackbackInstance {
   /** Persist (async, decoupled) + emit the unified `change` with a diff payload. */
   _commit(diff, source) {
     const comments = this._store.list();
-    // Every path that changes anything meets here, which is why numbering happens here and nowhere
-    // else. Spreading it over the entry points would mean each new one had to remember, and the way
-    // it fails when someone does not is that an utterance is displayed and never counted as new.
-    this._ensureArrival(comments);
+    // Every path that changes anything meets here, which is why arrivals are NOTICED here and nowhere
+    // else. Spreading it over the entry points would mean each new one had to remember, and the way it
+    // fails when someone does not is that an utterance is displayed and never counted as new.
+    //
+    // Noticed, not numbered. Numbering is what makes something unread, and it happens where observation
+    // settles — see _finalizeArrivals. Doing it here put the two cursors on different boundaries, so
+    // between them every synchronous question got an answer the event contract said was impossible: an
+    // utterance the reader had open counted as unread, and nothing ever corrected it, because from the
+    // core's side nothing had changed.
+    this._stageArrival(comments);
     this._pruneEnvState(comments);
     this._pruneAttention(comments);   // BEFORE the emit, so listeners never render a ghost flag
     // Every mutation can change what a reader is looking at, so every mutation schedules a report.
@@ -878,7 +923,7 @@ class TackbackInstance {
     this._scheduleVisibility();
     const payload = { comments, changes: diff, source };
     this._emitter.emit('change', payload);
-    this._schedulePersist();
+    this._schedulePersist(true);
   }
 
   /**
@@ -894,6 +939,55 @@ class TackbackInstance {
         if (!this._arrival.has(r.id)) this._arrival.set(r.id, this._arrivalNext++);
       }
     }
+  }
+
+  /**
+   * Note which utterances are new, in the order they arrived, without numbering them yet.
+   *
+   * The ORDER is taken here and not rediscovered later, because later means scanning the finished
+   * document, which is in the order the document happens to be stored in rather than the order things
+   * reached this environment. Several utterances can arrive in one turn — one envelope carries as many
+   * as it likes — and the numbers are what "arrival order" MEANS to anything reading them back.
+   * @param {readonly import('./model.js').Comment[]} comments
+   */
+  _stageArrival(comments) {
+    const pending = new Set(this._staged);
+    const note = (id) => { if (!this._arrival.has(id) && !pending.has(id)) { this._staged.push(id); pending.add(id); } };
+    for (const c of comments) {
+      note(c.id);
+      for (const r of c.replies || []) note(r.id);
+    }
+  }
+
+  /**
+   * Hand out the numbers, in the order the arrivals were noticed.
+   *
+   * Called at the settling boundary and nowhere else, so that becoming numbered and becoming observed
+   * are one event rather than two with a gap between them. Anything staged that has since been deleted
+   * is dropped rather than numbered: it never survived to be read, and a number for it would only have
+   * to be pruned again.
+   * @returns {boolean} whether anything was numbered
+   */
+  _finalizeArrivals() {
+    if (!this._staged.length) return false;
+    const staged = this._staged;
+    this._staged = [];
+    let numbered = false;
+    for (const id of staged) {
+      if (this._arrival.has(id) || !this._holds(id)) continue;
+      this._arrival.set(id, this._arrivalNext++);
+      numbered = true;
+    }
+    return numbered;
+  }
+
+  /** Whether this utterance — comment or reply — is still in the document. */
+  _holds(id) {
+    if (this._store.has(id)) return true;
+    for (const c of this._store.list()) {
+      for (const r of c.replies || []) if (r.id === id) return true;
+    }
+    return false;
   }
 
   /**
@@ -918,13 +1012,34 @@ class TackbackInstance {
     for (const key of this._observed.keys()) if (!threads.has(key)) this._observed.delete(key);
   }
 
-  /** Everything worth keeping, as one whole. Written in full every time, so a save never depends on
-   *  an earlier one having landed. */
+  /** The document, as one whole. Written in full, so a save never depends on an earlier one landing. */
   _snapshotStored() {
+    // The document says which SHAPE it was written in — that reading progress is kept in a record of
+    // its own. Not what anybody read, so it is still the document's to carry: without it, a document
+    // written by this build whose very first progress write never landed is indistinguishable from one
+    // written before progress existed, and everything in it silently counts as already seen.
+    const doc = { schemaVersion: 1, documentId: this._doc.id, comments: [...this._store.list()] };
+    // Present only when progress can actually be kept, and then only as `true`. An adapter with
+    // nowhere to put a record will never have one, so declaring that one is expected turns a
+    // permanent, ordinary arrangement into "the write must have failed" — everything unread, every
+    // time, for ever. Absent means what it has always meant, whether written by a build that predates
+    // progress or by one that cannot keep it: one shape for that, not two that must both be
+    // remembered as meaning the same thing.
+    if (this._progressCapable) doc.keepsProgress = true;
+    return doc;
+  }
+
+  /**
+   * What THIS reader has got to. Kept apart from the document on purpose.
+   *
+   * They are written by different acts and belong to different people: comments are what somebody
+   * wrote, progress is how far somebody has read. Putting them in one indivisible write meant that
+   * reading — which cannot change a comment — nevertheless wrote every comment the reader happened to
+   * be holding, and so undid what another instance had written since. Separating the two removes the
+   * ability rather than guarding against its use.
+   */
+  _snapshotProgress() {
     return {
-      schemaVersion: 1,
-      documentId: this._doc.id,
-      comments: [...this._store.list()],
       arrival: Object.fromEntries(this._arrival),
       observed: Object.fromEntries(this._observed),
       arrivalNext: this._arrivalNext,
@@ -939,20 +1054,67 @@ class TackbackInstance {
    * finish in whatever order the storage feels like, and an older snapshot landing last quietly puts
    * a thread back to unread. Coalescing because the intermediate states have no value — every save
    * carries everything, so the last one is the only one that has to arrive.
+   *
+   * @param {boolean} [documentToo] whether the DOCUMENT changed. Reading never sets it, and that is
+   *   the whole of the guarantee: an instance that has not written anything cannot write anything.
    */
-  _schedulePersist() {
-    if (this._persistQueued) return;
-    this._persistQueued = true;
-    this._saveChain = this._saveChain
-      .then(() => {
-        this._persistQueued = false;
-        if (this._destroyed) return undefined;   // a queued save has nothing left to be about
-        return this._envAdapter.save(this._snapshotStored());
-      })
-      // A failed save is a durability failure, not a meaning one: the reader did read it. Memory keeps
-      // what it knows, the failure is reported, and the next save — every change and every observation
-      // schedules one — carries the whole state again and catches up on its own.
-      .catch((err) => this._fail(err instanceof TackbackError ? err.code : 'STORAGE_SAVE_FAILED', 'persist failed', err));
+  _schedulePersist(documentToo = false) {
+    if (documentToo) this._documentRev += 1;
+    this._progressRev += 1;
+    this._pump('progress');
+    this._pump('document');
+  }
+
+  /**
+   * Keep one record's writes moving, one at a time, on its own channel.
+   *
+   * Serial WITHIN a record because two writes of the same thing finishing out of order would put an
+   * older snapshot last, quietly undoing what the newer one said. Independent BETWEEN records because
+   * they are different people's work: one that is slow, or that never answers at all, must not be able
+   * to hold the other up. While a write is in flight any number of further requests collapse into a
+   * single later one, which then writes the state as it is then.
+   * @param {'document'|'progress'} which
+   */
+  _pump(which) {
+    const isDocument = which === 'document';
+    if (isDocument ? this._docQueued : this._progressQueued) return;
+    if (isDocument) this._docQueued = true; else this._progressQueued = true;
+    const run = async () => {
+      if (isDocument) this._docQueued = false; else this._progressQueued = false;
+      if (this._destroyed) return;   // a queued write has nothing left to be about
+      await this._writeRecord(which);
+    };
+    if (isDocument) this._docChain = this._docChain.then(run);
+    else this._progressChain = this._progressChain.then(run);
+  }
+
+  /**
+   * Write one record, and keep it pending until its OWN write lands.
+   *
+   * A failed save is a durability failure, not a meaning one: the reader did read it, the author did
+   * write it. Memory keeps what it knows, the failure is reported once, and because the record stays
+   * pending the next save — every change and every observation schedules one — carries it again.
+   * Clearing the flag before the write succeeded is how a comment gets stranded with nothing left to
+   * remember that it was never stored.
+   * @param {'document'|'progress'} which
+   */
+  async _writeRecord(which) {
+    const isDocument = which === 'document';
+    const rev = isDocument ? this._documentRev : this._progressRev;
+    if (rev === (isDocument ? this._documentSaved : this._progressSaved)) return;
+    // An adapter with nowhere to keep progress is not failing — it has no such record. Nothing is
+    // pending, because nothing was ever going to be written.
+    if (!isDocument && !this._progressCapable) { this._progressSaved = rev; return; }
+    try {
+      // The revision is read BEFORE the snapshot and only recorded after the write lands, so anything
+      // that changes while the write is in flight stays ahead of what was stored and is written again.
+      await (isDocument
+        ? this._envAdapter.save(this._snapshotStored())
+        : this._envAdapter.saveProgress(this._snapshotProgress()));
+      if (isDocument) this._documentSaved = rev; else this._progressSaved = rev;
+    } catch (err) {
+      this._fail(err instanceof TackbackError ? err.code : 'STORAGE_SAVE_FAILED', 'persist failed', err);
+    }
   }
 
   /**
@@ -966,19 +1128,83 @@ class TackbackInstance {
    * @param {import('./storage.js').StoredDocument|null} doc
    */
   _hydrateEnv(doc) {
+    // The order below is the order these decisions actually depend on each other in, and it has to
+    // be: asking for progress first means an adapter that answers late — or never — holds up
+    // decisions that never needed it. There is nothing for progress to apply to when there is no
+    // document, and nothing to believe when the document's own shape cannot be read.
     if (!doc) { this._arrivalNext = 1; return doc; }
+    const declaration = this._readDeclaration(doc);
+    // Neither of these consults the record, so neither waits for one.
+    if (declaration === 'malformed' || !this._progressCapable) return this._hydrateWith(doc, declaration, null);
+    let kept;
+    // A load that throws is a record that EXISTS and cannot be read — a different thing from none.
+    const unreadable = () => {
+      this._loadFaults.push({ code: 'STORAGE_LOAD_FAILED', message: 'stored reading progress could not be read; nothing is taken as read' });
+      return this._hydrateWith(doc, declaration, UNREADABLE);
+    };
+    try { kept = this._envAdapter.loadProgress(); } catch { return unreadable(); }
+    // Only here does waiting begin, and only on something whose answer is going to be used.
+    return (kept && typeof kept.then === 'function')
+      ? kept.then((p) => this._hydrateWith(doc, declaration, p), unreadable)
+      : this._hydrateWith(doc, declaration, kept);
+  }
+
+  /**
+   * Whether this document says reading progress is kept in a record of its own.
+   *
+   * It decides whether an ABSENT record means no record was ever expected — the one answer that
+   * counts everything as seen — so a value nobody recognises must not be able to pass for no value.
+   * Stored data is reachable by hand and through adapters that were never typed, and corrupted format
+   * metadata quietly clearing marks is the failure this field exists to prevent. Presence is asked
+   * separately from value, because a property that is THERE holding undefined is not one that was
+   * never written.
+   * @param {import('./storage.js').StoredDocument} doc
+   * @returns {'absent'|'present'|'malformed'}
+   */
+  _readDeclaration(doc) {
+    if (!Object.prototype.hasOwnProperty.call(doc, 'keepsProgress')) return 'absent';
+    if (doc.keepsProgress === true) return 'present';
+    this._loadFaults.push({
+      code: 'STORAGE_LOAD_FAILED',
+      message: 'stored document declares an unrecognised progress format; nothing is taken as read',
+    });
+    return 'malformed';
+  }
+
+  /**
+   * @param {import('./storage.js').StoredDocument|null} doc
+   * @param {'absent'|'present'|'malformed'} declaration what the document says about its own shape
+   * @param {any} progress the stored progress, `null` if there is none or none was asked for, or
+   *   UNREADABLE if there is one that could not be read
+   */
+  _hydrateWith(doc, declaration, progress) {
     // An adapter's answer is outside input, exactly like an envelope, and gets the same check.
     const { comments, faults } = sanitizeComments(doc.comments);
     this._loadFaults.push(...faults);
-    // No environment metadata AT ALL means this was written before there was any — not that nothing
-    // has been read. Reading it as "nothing has been read" would turn every thread in every document
-    // unread on the day this version ships, which is the exact state the feature exists to end.
-    // One field present is enough to mean the opposite: this writer knew about reading, and a thread
-    // it does not mention is one nobody has opened.
-    const legacy = doc.arrival === undefined && doc.observed === undefined && doc.arrivalNext === undefined;
+    // What may be called ALREADY READ. The shape has already been read — that decision came first,
+    // because it does not need the record and must not wait for one — so what is left is what the
+    // record itself says, and whether it may be believed at all.
+    //
+    // A shape that could not be read stops the record being believed rather than merely being
+    // reported alongside it: validation that announces a problem and then trusts what it could not
+    // validate is a comment, not a boundary, and the record is the one thing able to say "read".
+
+    // Then, and only for a shape that could be read, what the record itself says. A malformed shape
+    // stops the record being believed at all rather than merely being reported alongside it —
+    // validation that announces a problem and then trusts what it could not validate is a comment,
+    // not a boundary.
+    const nothingStored = progress === null || progress === undefined;
+    const kept = (declaration !== 'malformed' && progress && progress !== UNREADABLE) ? progress : null;
+
+    // The one cell that counts as read without a record: nothing was ever expected here. Written
+    // before progress existed, or somewhere it cannot be kept — the same thing for this decision, so
+    // one shape covers both. Everything else leaves the reader to look again, because a document that
+    // expected a record and has none, and one whose record cannot be read, are both ignorance; and
+    // turning ignorance into "already read" is how a reader stops being told about anything at all.
+    const legacy = nothingStored && declaration === 'absent';
     const counts = (v) => Number.isSafeInteger(v) && v >= 1;
 
-    const declared = (doc.arrival && typeof doc.arrival === 'object') ? doc.arrival : {};
+    const declared = (kept && typeof kept.arrival === 'object' && kept.arrival) ? kept.arrival : {};
     const byNumber = new Map();
     for (const [id, v] of Object.entries(declared)) {
       if (!counts(v)) continue;                       // not a number that could have been handed out
@@ -995,11 +1221,11 @@ class TackbackInstance {
     for (const v of this._arrival.values()) if (v > highest) highest = v;
     // Never hand out a number twice, whatever the stored counter says. A reused number is read as
     // already-seen by whatever cursor is sitting above it.
-    this._arrivalNext = Math.max(counts(doc.arrivalNext) ? doc.arrivalNext : 1, highest + 1);
+    this._arrivalNext = Math.max(counts(kept?.arrivalNext) ? kept.arrivalNext : 1, highest + 1);
     this._ensureArrival(comments);
 
     const issued = this._arrivalNext - 1;
-    const observed = (doc.observed && typeof doc.observed === 'object') ? doc.observed : {};
+    const observed = (kept && typeof kept.observed === 'object' && kept.observed) ? kept.observed : {};
     for (const [key, v] of Object.entries(observed)) {
       // Structurally wrong — not an integer, or not positive — is treated as never written, which in a
       // record that knows about reading means unread.
@@ -1099,8 +1325,22 @@ class TackbackInstance {
   }
 }
 
+/**
+ * What mounting takes. Only `document` is really needed; everything else has a working default.
+ * @typedef {object} MountOptions
+ * @property {{ id?: string, title?: string, revisionHash?: string, source?: string|null }} [document]
+ * @property {import('./storage.js').StorageAdapter} [storage] where comments and reading progress are kept
+ * @property {string} [storageKey] names the default storage instead of deriving it from the document
+ * @property {boolean} [readOnly] the DOCUMENT does not change; the reader still records what they read
+ * @property {import('./model.js').Author} [author] who new comments are attributed to
+ * @property {object} [root] the content box region anchors are measured against
+ * @property {any[]} [reactions] the reaction set, if not the built-in one
+ * @property {any[]} [mediaAdapters] surfaces to register at mount
+ * @property {object} [transport] a descriptor the panel shows; the core never transports anything
+ */
+
 export const Tackback = {
-  /** @param {object} options @returns {TackbackInstance} */
+  /** @param {MountOptions} [options] @returns {TackbackInstance} */
   mount(options) { return new TackbackInstance(options); },
   version: LIB_VERSION,
 };

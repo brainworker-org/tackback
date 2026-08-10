@@ -41,10 +41,38 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
   the reader leaves no trace — and a reader who cannot comment is exactly who unread is for. Their
   progress is written through the adapter you supplied. An adapter assuming "readOnly means no save"
   has that assumption broken in this version.
-- **The storage adapter contract gains two requirements**, because environment-local state now lives
-  in it: one storage belongs to **one environment** (a server-backed adapter shared between viewers
-  would make one person's reading everybody's), and **one instance at a time** may hold it (numbering
-  is per instance). The default localStorage adapter satisfies both.
+- **The storage adapter gains an optional second record.** What a reader has got to is saved through
+  `loadProgress` / `saveProgress`, never folded into the document write. That separation is the
+  guarantee rather than a tidiness choice: an instance that has only read cannot write a comment, so
+  it can never undo what another one wrote — which a single combined write made possible, silently,
+  whenever the same document was open twice. The two are also written INDEPENDENTLY, on a channel each:
+  neither failing stops the other being attempted, neither being slow (or never answering) holds the
+  other up, and each stays pending until its own write lands. Within a record the writes stay serial,
+  so an older snapshot can never land on top of a newer one. An adapter
+  supplying neither method (or only one, which is reported and counts as neither) keeps nothing
+  between mounts: whatever is already stored becomes the baseline this reader is taken to have seen.
+  Its comments are never at risk either way. The built-in adapters implement both, keeping progress
+  under its own key.
+- **Restoring asks four questions, in order.** Is there a document; can its own shape be read; can
+  this adapter reach a progress record; and only then, what does the record say. Each is asked only
+  when the one before leaves the question open, so nothing waits on an answer it was never going to
+  use. A document declares its shape with `keepsProgress`, present only when the adapter can actually
+  keep a record — so one written where progress cannot be kept is not mistaken for one whose write
+  failed. Absent is its only other value, and a value nobody recognises means the shape itself cannot
+  be read: reported, and the record not believed.
+
+  **Exactly one outcome counts as read without a record saying so**: a document that never declared
+  one. Declared and missing, present and unreadable, out of reach — all leave everything to be looked
+  at again. Unknown is never turned into already-read, because a mark that should be there and is not
+  is the failure this version exists to remove. An `error` names the cases that are actually broken —
+  a document shape that cannot be read, a record that cannot be read, half a progress pair — and stays
+  quiet about the two that are merely uncertain: a declared record that has not landed yet, and an
+  adapter with no progress pair at all. The declaration says how what is
+  stored is arranged, not anything about a reader, so it stays with the document and out of the
+  export envelope.
+- **Two requirements come with progress**: one storage belongs to **one environment** (a server-backed
+  adapter shared between viewers would make one person's reading everybody's), and arrival numbering
+  assumes **one live instance at a time** per environment.
 - **An import may no longer change which utterance is which.** Every utterance needs a non-empty id,
   unique across the document, and stays in the thread it was written into. An entry breaking either —
   an id-less reply, an id already in use, a known utterance carried to another anchor, or one the same
@@ -52,17 +80,21 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
   and continues; a **replace** is refused whole (`IMPORT_REPLACE_REJECTED`, document untouched, and
   `allowPartial` does not override it), because taking the good half of a complete-state declaration
   composes a document neither side asked for. Moving an utterance means burying the old id and
-  creating a new one. A stored document from your adapter is checked the same way, and its errors
-  arrive just before `ready`.
+  creating a new one. A stored document from your adapter is checked for the same things about
+  identity, with its errors arriving just before `ready` — but **not** for anchors: an import asks to
+  change the document now and must supply anchors this build can place, while a stored anchor of an
+  unknown kind was written by a newer build and is kept rather than destroyed.
 - **`thread:visibility` is a snapshot** (see below) and now also drives reading — it is the single
   input to it. No new reporting path was added.
 
 ### Known limitations
-- **Unread does not survive a downgrade.** The three stored fields are optional, so 0.9.6 reads 0.9.7
-  data — and drops them when it saves. Returning to 0.9.7 afterwards, the document reads as predating
-  unread tracking and everything in it counts as seen.
-- **One instance per environment.** Two instances on one storage hand out the same numbers and
-  overwrite each other's snapshots. Reconciling them is not attempted here.
+- **An older build ignores unread rather than corrupting it.** Progress is its own record, which 0.9.6
+  neither reads nor writes, so the document round-trips through it untouched. What an older build
+  cannot do is advance anything: come back and the progress is as you left it, while whatever arrived
+  meanwhile reads as new.
+- **One instance per environment, for numbering.** Two live instances hand out the same arrival
+  numbers, so what each has read is its own. They can no longer destroy each other's comments — that was
+  what separating the two records removed — but reconciling their numbering is not attempted here.
 - **A failed save is not retried by itself.** It is reported, memory is unaffected, and the next save
   carries everything. If nothing changes and nothing is read after it, that state is not written.
 - **Unread is carried by colour and shape only** — no screen-reader text, no motion, no sound.

@@ -2066,12 +2066,13 @@ test('T44: what was unread before the reload is rung on the first paint', async 
       { id: 'c1', anchor: { type: 'block', elementId: 'p1' }, body: 'read', createdAt: '2026-08-10T00:00:00.000Z' },
       { id: 'c2', anchor: { type: 'block', elementId: 'p2' }, body: 'not read', createdAt: '2026-08-10T00:00:00.000Z' },
     ],
-    arrival: { c1: 1, c2: 2 }, observed: { 'block:p1': 1 }, arrivalNext: 3,
   };
+  const progress = { arrival: { c1: 1, c2: 2 }, observed: { 'block:p1': 1 }, arrivalNext: 3 };
   const f = mountPanel({
     instrument: true,
     setup: twoBlocks,
-    storage: { load: () => new Promise((r) => { release = () => r(seed); }), save: () => {} },
+    storage: { load: () => new Promise((r) => { release = () => r(seed); }), save: () => {},
+      loadProgress: () => progress, saveProgress: () => {} },
   });
   try {
     release();

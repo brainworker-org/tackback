@@ -649,11 +649,10 @@ export function attachPanel(core, options = {}) {
     countEl.textContent = t('panel.count', { n: utteranceCount(core.listComments()) });   // utterances, so the panel total agrees with the badges
     refreshLane();
     // The badges were just rebuilt, so whatever ring they had went with them. Asked again rather than
-    // carried over — the answer lives in one place and this is a redraw, not a second opinion. Twice:
-    // now, so the redraw is not left blank, and again at the boundary, because a redraw driven by a
-    // change is happening before that change's effect on the reader's progress has been worked out.
+    // carried over — the answer lives in one place and this is a redraw, not a second opinion. Once is
+    // enough: the core settles arrival and observation together, so what it answers during a redraw is
+    // the settled picture rather than the middle of a turn.
     syncUnread();
-    syncUnreadAtBoundary();
     orphanedIds.clear(); for (const id of currentOrphans) orphanedIds.add(id);   // transition set for the next render (all kinds)
     // apply the collected orphan/resolve mutations AFTER the render pass (no mid-iteration re-entry).
     // reportOrphaned is idempotent + transition-guarded; markResolved is a no-op on a non-orphan — so the
@@ -1522,22 +1521,6 @@ export function attachPanel(core, options = {}) {
    * That is also why the same targeted-toggle shape as attention is right here: rebuilding every
    * overlay would throw away the elements an in-flight region drag is holding.
    */
-  /**
-   * Ask again once the turn has finished moving.
-   *
-   * A redraw happens inside the change that caused it, which is BEFORE the reader's progress has been
-   * worked out for that turn — so painting from the answer available then can ring a thread the reader
-   * has open. The correction never arrives on its own: from the core's side nothing changed (it was
-   * clear before and clear after), so there is nothing for it to announce. Asking once more at the
-   * boundary is the panel's own job, and it is cheap because the answer is derived either way.
-   */
-  let unreadAskPending = false;
-  function syncUnreadAtBoundary() {
-    if (unreadAskPending) return;
-    unreadAskPending = true;
-    const ask = () => { unreadAskPending = false; if (!destroyed) syncUnread(); };
-    if (typeof queueMicrotask === 'function') queueMicrotask(ask); else Promise.resolve().then(ask);
-  }
   function syncUnread() {
     const unread = new Set(core.unreadThreads().map((e) => e.threadKey));
     doc.querySelectorAll('.tb-badge,.tb-pin').forEach((node) => {
