@@ -88,10 +88,12 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
   input to it. No new reporting path was added.
 
 ### Known limitations
-- **An older build ignores unread rather than corrupting it.** Progress is its own record, which 0.9.6
-  neither reads nor writes, so the document round-trips through it untouched. What an older build
-  cannot do is advance anything: come back and the progress is as you left it, while whatever arrived
-  meanwhile reads as new.
+- **An older build ignores unread rather than corrupting it — but it does not carry the declaration.**
+  Progress is its own record, which 0.9.6 neither reads nor writes, so the record itself is safe there:
+  come back and the progress is as you left it, while whatever arrived meanwhile reads as new. The
+  document is a different matter. An older build rebuilds it from the fields it knows, so **any save
+  from one drops the declaration that progress is kept beside it** — the record survives and is still
+  believed, and only the document forgets that one was expected. What that costs is the next entry.
 - **A progress record that goes missing can read as one that was never there.** A document says
   whether it was written with progress beside it, and that declaration is what separates "nothing was
   ever kept here" — the one state that counts as read — from "something is missing". An older build

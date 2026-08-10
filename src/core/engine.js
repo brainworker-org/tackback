@@ -1185,14 +1185,9 @@ class TackbackInstance {
     // because it does not need the record and must not wait for one — so what is left is what the
     // record itself says, and whether it may be believed at all.
     //
-    // A shape that could not be read stops the record being believed rather than merely being
+    // A shape that could not be read stops the record being believed at all, rather than merely being
     // reported alongside it: validation that announces a problem and then trusts what it could not
     // validate is a comment, not a boundary, and the record is the one thing able to say "read".
-
-    // Then, and only for a shape that could be read, what the record itself says. A malformed shape
-    // stops the record being believed at all rather than merely being reported alongside it —
-    // validation that announces a problem and then trusts what it could not validate is a comment,
-    // not a boundary.
     const nothingStored = progress === null || progress === undefined;
     const kept = (declaration !== 'malformed' && progress && progress !== UNREADABLE) ? progress : null;
 
