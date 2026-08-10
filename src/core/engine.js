@@ -1018,15 +1018,15 @@ class TackbackInstance {
     // its own. Not what anybody read, so it is still the document's to carry: without it, a document
     // written by this build whose very first progress write never landed is indistinguishable from one
     // written before progress existed, and everything in it silently counts as already seen.
-    return {
-      schemaVersion: 1,
-      documentId: this._doc.id,
-      // Only when progress can actually be kept. An adapter with nowhere to put one will never have a
-      // record, so claiming that one is expected turns a permanent, ordinary arrangement into "the
-      // write must have failed" — and everything reads as unread every time, for ever.
-      keepsProgress: this._progressCapable,
-      comments: [...this._store.list()],
-    };
+    const doc = { schemaVersion: 1, documentId: this._doc.id, comments: [...this._store.list()] };
+    // Present only when progress can actually be kept, and then only as `true`. An adapter with
+    // nowhere to put a record will never have one, so declaring that one is expected turns a
+    // permanent, ordinary arrangement into "the write must have failed" — everything unread, every
+    // time, for ever. Absent means what it has always meant, whether written by a build that predates
+    // progress or by one that cannot keep it: one shape for that, not two that must both be
+    // remembered as meaning the same thing.
+    if (this._progressCapable) doc.keepsProgress = true;
+    return doc;
   }
 
   /**
@@ -1166,7 +1166,7 @@ class TackbackInstance {
     // Three things, not two. A document that predates progress has neither marker nor record, and
     // what is in it is what the reader has lived with. A document written by THIS shape with no record
     // is one whose progress never landed — nothing is known, and unknown is never 'already seen'.
-    const legacy = nothingStored && !doc.keepsProgress;
+    const legacy = nothingStored && doc.keepsProgress !== true;
     const counts = (v) => Number.isSafeInteger(v) && v >= 1;
 
     const declared = (kept && typeof kept.arrival === 'object' && kept.arrival) ? kept.arrival : {};

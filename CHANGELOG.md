@@ -58,9 +58,10 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
   no record: written before any of this, and what is in it counts as seen. The marker with no record:
   progress never landed. An unreadable record: nothing is known. Only the first answers "already
   seen" — the other two leave everything to be looked at again, because unknown is never turned into
-  read. The marker is written only when the adapter can actually keep a record, so an adapter with
-  nowhere to put one is not read as one whose write failed. It says how what is stored is arranged,
-  not anything about a reader, so it stays with the document and out of the export envelope.
+  read. The marker is present only when the adapter can actually keep a record — an adapter with
+  nowhere to put one is not read as one whose write failed — and absent is its only other value, so
+  there is one shape for that rather than two meaning the same. It says how what is stored is
+  arranged, not anything about a reader, so it stays with the document and out of the export envelope.
 - **Two requirements come with progress**: one storage belongs to **one environment** (a server-backed
   adapter shared between viewers would make one person's reading everybody's), and arrival numbering
   assumes **one live instance at a time** per environment.

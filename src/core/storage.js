@@ -40,9 +40,11 @@ import { TackbackError } from './errors.js';
  * @property {1} schemaVersion
  * @property {string} documentId
  * @property {import('./model.js').Comment[]} comments
- * @property {boolean} [keepsProgress] written by a build that keeps reading progress in its own
- *   record. It describes the SHAPE of what is stored, not anything about a reader, and it is what
- *   tells a missing progress record apart from a document written before progress existed.
+ * @property {true} [keepsProgress] present when this document was written somewhere that keeps
+ *   reading progress in a record of its own. It describes the SHAPE of what is stored, not anything
+ *   about a reader, and it is what tells a missing progress record apart from a document written
+ *   where there was never any such record. Absent is the only other value — one shape for that, not
+ *   two that mean the same thing.
  */
 
 /**

@@ -1743,44 +1743,65 @@ test('a document kept by an adapter that cannot hold progress does not claim it 
 // Capability comes first, because without it the record is never consulted — so those rows have no
 // record axis rather than an empty one.
 
-test('restoring: the whole table of shape × capability × record', async () => {
-  const stored = (over = {}) => ({ schemaVersion: 1, documentId: 'd', comments: [entry('c1', 'p1')], ...over });
-  const usable = { arrival: { c1: 1 }, observed: {}, arrivalNext: 2 };          // c1 arrived, unread
-  const read = { arrival: { c1: 1 }, observed: { 'block:p1': 1 }, arrivalNext: 2 };
+// ---- the whole domain, not the cases somebody happened to hit -------------------------------------
+//
+// Restoring is decided by three things at once: whether the stored document DECLARES that reading
+// progress is kept in a record of its own, whether this adapter can reach such a record, and what
+// state that record is in. Every defect found in this area was one unenumerated cell of that product,
+// found by reproducing it. Reproduction finds the cell somebody walked into; it cannot find the cell
+// nobody has.
+//
+// The axes, and why each is shaped this way:
+//
+//   DECLARATION   absent | present. There is no third value: a document written where progress cannot
+//                 be kept looks exactly like one written before progress existed, because for the
+//                 purpose of this decision it IS the same — there is no record here and there never
+//                 was going to be one.
+//   CAPABILITY    unavailable | complete. Half a pair counts as unavailable, and is reported; that
+//                 reporting is checked on its own elsewhere, not here.
+//   RECORD        only when capability is complete, because otherwise it is never consulted. Four
+//                 states, not three: a readable record that says UNREAD and one that says READ are
+//                 different answers, and separating them is what stops the declaration deciding for
+//                 them. Rows that move the declaration and the record's content together can be
+//                 satisfied by an implementation where the declaration decides and the record is
+//                 ignored — which is a different library that passes the same table.
+
+test('restoring: every reachable combination of declaration, capability and record', async () => {
+  const doc = (declared) => (declared
+    ? { schemaVersion: 1, documentId: 'd', keepsProgress: true, comments: [entry('c1', 'p1')] }
+    : { schemaVersion: 1, documentId: 'd', comments: [entry('c1', 'p1')] });
+  const SAYS_UNREAD = { arrival: { c1: 1 }, observed: {}, arrivalNext: 2 };
+  const SAYS_READ = { arrival: { c1: 1 }, observed: { 'block:p1': 1 }, arrivalNext: 2 };
 
   const CASES = [
-    // no capability — the record is never reached, so there is no record axis here
-    ['no marker  · cannot keep progress · —',
-      stored(), 'none', null, 0,
-      'written before any of this: what is in it is what the reader has lived with'],
-    ['marker     · cannot keep progress · —',
-      stored({ keepsProgress: true }), 'none', null, 1,
-      'a record was expected and this adapter cannot reach it — nothing is known, so nothing is seen'],
+    // declaration absent — nothing here says a separate record was ever expected
+    ['absent · unavailable',            false, 'unavailable', null, 0,
+      'no record was ever expected here: what is stored is what the reader has lived with'],
+    ['absent · complete · no record',   false, 'complete', null, 0,
+      'the same, and being able to look changes nothing about what is there to find'],
+    ['absent · complete · unreadable',  false, 'complete', 'unreadable', 1,
+      'a record IS here and cannot be read: nothing is known'],
+    ['absent · complete · says unread', false, 'complete', SAYS_UNREAD, 1,
+      'the record is believed — and it is the record that answers, not the declaration'],
+    ['absent · complete · says read',   false, 'complete', SAYS_READ, 0,
+      'believed here too: an undeclared document with a record that says read, is read'],
 
-    // can keep progress
-    ['no marker  · can keep progress · no record',
-      stored(), 'capable', null, 0,
-      'still the old shape: no marker and no record means it predates progress'],
-    ['no marker  · can keep progress · unreadable',
-      stored(), 'capable', 'unreadable', 1,
-      'a record is there and cannot be read: nothing is known'],
-    ['no marker  · can keep progress · readable, nothing read',
-      stored(), 'capable', usable, 1,
-      'the record is believed, and it says nothing has been read'],
-    ['marker     · can keep progress · no record',
-      stored({ keepsProgress: true }), 'capable', null, 1,
-      'the document expected a record and there is none: the write never landed'],
-    ['marker     · can keep progress · unreadable',
-      stored({ keepsProgress: true }), 'capable', 'unreadable', 1,
+    // declaration present — this document was written where a record is kept
+    ['present · unavailable',            true, 'unavailable', null, 1,
+      'a record was expected and this adapter cannot reach it: nothing is known'],
+    ['present · complete · no record',   true, 'complete', null, 1,
+      'expected, reachable, and not there: the write never landed'],
+    ['present · complete · unreadable',  true, 'complete', 'unreadable', 1,
       'nothing is known'],
-    ['marker     · can keep progress · readable, already read',
-      stored({ keepsProgress: true }), 'capable', read, 0,
-      'the record is believed, and it says this was read'],
+    ['present · complete · says unread', true, 'complete', SAYS_UNREAD, 1,
+      'believed'],
+    ['present · complete · says read',   true, 'complete', SAYS_READ, 0,
+      'believed — a declared document with a record that says read, is read'],
   ];
 
-  for (const [name, doc, capability, record, expected, why] of CASES) {
-    const adapter = { load: () => doc, save: () => {} };
-    if (capability === 'capable') {
+  for (const [name, declared, capability, record, expected, why] of CASES) {
+    const adapter = { load: () => doc(declared), save: () => {} };
+    if (capability === 'complete') {
       adapter.loadProgress = () => {
         if (record === 'unreadable') throw new Error('corrupt');
         return record;
@@ -1797,20 +1818,23 @@ test('restoring: the whole table of shape × capability × record', async () => 
   }
 });
 
-test('restoring: only one cell of the table ever answers "already seen"', async () => {
-  // The shape of the table, stated as a rule rather than as eight numbers: reading is claimed for a
-  // document ONLY when a record says so, or when there was never any such thing as a record. Every
-  // other cell — expected and missing, present and unreadable, unreachable — leaves the reader to
-  // look again. Unknown is never turned into read, and this is where that could quietly stop being
-  // true without any single case failing.
+test('restoring: what may be called read, stated as a rule rather than as ten numbers', async () => {
+  // A table of expected numbers can go on being satisfied while the principle underneath it quietly
+  // stops holding, and no individual row would fail. The principle: reading is claimed only where a
+  // record SAYS so, or where no record was ever expected. Everywhere else — expected and missing,
+  // present and unreadable, out of reach — the reader is left to look again, because unknown is never
+  // turned into read.
   const comments = [entry('c1', 'p1')];
-  const seenWithoutARecord = [];
-  for (const marker of [false, true]) {
-    for (const capable of [false, true]) {
+  const claimedRead = [];
+  for (const declared of [false, true]) {
+    for (const capability of ['unavailable', 'complete']) {
       for (const record of [null, 'unreadable']) {
-        if (!capable && record === 'unreadable') continue;   // never consulted
-        const adapter = { load: () => ({ schemaVersion: 1, documentId: 'd', keepsProgress: marker, comments }), save: () => {} };
-        if (capable) {
+        if (capability === 'unavailable' && record === 'unreadable') continue;   // never consulted
+        const stored = declared
+          ? { schemaVersion: 1, documentId: 'd', keepsProgress: true, comments }
+          : { schemaVersion: 1, documentId: 'd', comments };
+        const adapter = { load: () => stored, save: () => {} };
+        if (capability === 'complete') {
           adapter.loadProgress = () => { if (record === 'unreadable') throw new Error('corrupt'); return null; };
           adapter.saveProgress = () => {};
         }
@@ -1818,11 +1842,14 @@ test('restoring: only one cell of the table ever answers "already seen"', async 
         core.on('error', () => {});
         await core.ready;
         await quiet();
-        if (core.unreadCount('block:p1') === 0) seenWithoutARecord.push(`marker=${marker} capable=${capable} record=${record}`);
+        if (core.unreadCount('block:p1') === 0) claimedRead.push(`declared=${declared} capability=${capability} record=${record}`);
         core.destroy();
       }
     }
   }
-  assert.deepEqual(seenWithoutARecord, ['marker=false capable=false record=null', 'marker=false capable=true record=null'],
-    'the only cells that count as seen without a record are the ones with no marker — the old shape');
+  // No record says anything in any of these, so the only cells that may claim reading are the ones
+  // where none was ever expected.
+  assert.deepEqual(claimedRead,
+    ['declared=false capability=unavailable record=null', 'declared=false capability=complete record=null'],
+    'with no record speaking, only an undeclared document counts as read');
 });
