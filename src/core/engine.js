@@ -14,8 +14,44 @@ import { TackbackError } from './errors.js';
 
 // MUST equal package.json "version" (export envelope's generator.version comes from here);
 // export.test.js asserts they match so they can't drift.
-const LIB_VERSION = '0.9.6';
+const LIB_VERSION = '0.9.7';
 const nowIso = () => new Date().toISOString();
+
+/** How many times the core looks again by itself before handing an unreadable display back. */
+const VISIBILITY_RETRIES = 3;
+
+/**
+ * Whether two visibility entries say the same thing. Both id lists arrive sorted and de-duplicated,
+ * so this compares what was promised to a subscriber rather than how it was assembled.
+ * @param {{anchor:object, comments:string[]}} a
+ * @param {{anchor:object, comments:string[]}|undefined} b
+ */
+const sameEntry = (a, b) => !!b
+  && a.comments.length === b.comments.length
+  && a.comments.every((id, i) => id === b.comments[i])
+  && a.sig === b.sig;
+
+/**
+ * A value rebuilt as the core's own, with object keys in a defined order and absent optionals
+ * dropped. Two jobs at once, and they are the same job: what a subscriber receives shares nothing
+ * with what a display handed over or with what the core will diff against next time, and two anchors
+ * that MEAN the same thing compare equal however their properties happen to be ordered — a fresh
+ * import can spell an anchor differently without that counting as a change.
+ * @template T @param {T} v @returns {T}
+ */
+const canonical = (v) => {
+  // A function or a symbol would survive a copy by REFERENCE while being invisible to the signature —
+  // shared with whoever handed it over, and unable to count as a change. Neither belongs in a fact.
+  if (typeof v === 'function' || typeof v === 'symbol') return null;
+  if (v === null || v === undefined || typeof v !== 'object') return v === undefined ? null : v;
+  if (Array.isArray(v)) return /** @type {any} */ (v.map(canonical));
+  const out = /** @type {any} */ ({});
+  for (const k of Object.keys(v).sort()) { if (v[k] !== undefined) out[k] = canonical(v[k]); }
+  return out;
+};
+
+/** A visibility entry as a subscriber sees it: freshly built every time, sharing nothing. */
+const visibilityDTO = (e) => ({ threadKey: e.threadKey, anchor: canonical(e.anchor), comments: e.comments.slice() });
 
 /**
  * @typedef {import('./model.js').Comment} Comment
@@ -40,6 +76,13 @@ class TackbackInstance {
     this._adapterTeardowns = [];
     this._destroyed = false;
     this._transport = options.transport || null;   // descriptor only; core never transports (REQ-205)
+    this._visibilityProvider = null;            // the one display that can say what is readable
+    this._visibilityDelivered = new Map();      // the snapshot subscribers were last told about
+    this._visibilityGeneration = 0;             // bumped when a display arrives or withdraws
+    this._visibilityRetries = 0;                // attempts spent on the CURRENT failure, not ever
+    this._visibilityReported = false;           // whether this failure has already been announced
+    this._visibilityRetryPending = false;
+    this._visibilityScheduled = false;
     this._attention = new Set();   // comment ids currently flagged for ATTENTION — a generic, live UI
                                    // state driven by the integrator; NOT persisted, NOT exported, and
                                    // WITHOUT any built-in meaning (see setAnchorAttention).
@@ -394,6 +437,206 @@ class TackbackInstance {
   /** @param {string} id @returns {boolean} whether the attention flag is set on this comment id */
   hasAttention(id) { return this._attention.has(id); }
 
+  // ---- thread visibility -----------------------------------------------------------------------
+  //
+  // WHICH THREADS ARE READABLE RIGHT NOW, as a settled snapshot rather than as a pair of edges the
+  // consumer has to keep balanced. A dropped or reordered edge is unrecoverable; a snapshot repairs
+  // itself on the next report, which is the whole reason for the shape.
+  //
+  // The core cannot see a surface, so it does not try: a display registers a PROVIDER and the core
+  // asks it, at the moment it needs an answer. That keeps the boundary where it already is — the same
+  // arrangement `reportOrphaned` uses for a fact only the display can determine — while leaving the
+  // subscription on the one object an integration always holds. It also means the last word, when a
+  // display is torn down, is spoken by something that outlives it.
+
+  /**
+   * Register a display's view of what is readable. `provider` returns the currently visible threads;
+   * the core calls it when it needs the answer and never stores what it returned as truth.
+   * @param {() => Array<{threadKey:string, anchor:object, comments:string[]}>} provider
+   * @returns {() => void} deregister — which is itself a transition, and is reported as one
+   */
+  registerThreadVisibility(provider) {
+    // A destroyed core keeps nothing: it would never schedule a report for this provider, so adding
+    // it only makes the display — and everything its closure holds — reachable from a corpse.
+    if (typeof provider !== 'function' || this._destroyed) return () => {};
+    // AT MOST ONE display, because a document has at most one panel — attaching a second to the same
+    // document is already unsupported, and this seam does not get to be more general than the thing
+    // it reports on. Aggregating several would mean deciding, in here, which of two disagreeing
+    // claims about one thread is true and whether an unreadable display should hold up a readable
+    // one: policy about surfaces the core cannot see, invented for a situation that cannot arise.
+    // A later registration REPLACES the earlier one rather than being refused, so re-attaching after
+    // a teardown that did not run cannot leave a dead display answering forever.
+    this._visibilityProvider = provider;
+    this._newVisibilityEpisode();
+    this._scheduleVisibility();
+    return () => {
+      if (this._visibilityProvider !== provider) return;   // already replaced; not ours to withdraw
+      this._visibilityProvider = null;
+      this._newVisibilityEpisode();
+      this._scheduleVisibility();
+    };
+  }
+
+  /**
+   * A different display is a different world, so it starts with the whole budget and the right to be
+   * complained about once. Carrying either across would let a display that was never asked more than
+   * once inherit a verdict earned by the one before it — and the failure it inherits is exactly the
+   * one that would have made a fresh look worth taking.
+   */
+  _newVisibilityEpisode() {
+    this._visibilityGeneration += 1;
+    this._visibilityRetries = 0;
+    this._visibilityReported = false;
+  }
+
+  /** Ask for a report to be reconsidered at the next boundary. Reports that change nothing are dropped. */
+  reportThreadVisibility() { this._scheduleVisibility(); }
+
+  /**
+   * The readable threads, right now. Same shape as the event's `visible`, answered without waiting.
+   * @returns {Array<{threadKey:string, anchor:object, comments:string[]}>}
+   */
+  visibleThreads() {
+    const attempt = this._observeVisibility();
+    // "I could not look" has no honest synchronous answer that is also a value. Handing back the last
+    // array the core happened to hold would be answering a question about NOW with something from
+    // before, silently — which is the one failure this whole contract exists to make impossible.
+    if (!attempt.ok) throw new TackbackError('ADAPTER_FAILED', 'could not read what is visible', { cause: attempt.error });
+    return attempt.visible.map(visibilityDTO);
+  }
+
+  /**
+   * ONE observation attempt, whole or not at all.
+   *
+   * Asking every display, narrowing what each returns, and rebuilding it as the core's own are not
+   * three steps that can partly succeed — they are one act of looking. If any part of it fails, the
+   * core has not seen the world; it has seen part of the world and would have to invent the rest.
+   * Both ways of inventing it are wrong, and neither can be right in principle: whether an unreadable
+   * display currently shows nothing or still shows what it last showed is a fact only that display
+   * knows. So the attempt is voided instead, the last ACTUALLY OBSERVED state stands untouched, and
+   * the next successful look repairs everything at once — late rather than wrong, which is the same
+   * rule the projection itself is built on.
+   * @returns {{ok:true, visible:any[]} | {ok:false, error:unknown}}
+   */
+  _observeVisibility() {
+    if (this._destroyed) return { ok: true, visible: [] };
+    const generation = this._visibilityGeneration;
+    /** @type {Map<string, any>} */
+    const merged = new Map();
+    const provider = this._visibilityProvider;
+    if (provider) {
+      try {
+        const entries = provider();
+        for (const e of entries || []) {
+          if (!e || typeof e.threadKey !== 'string' || !e.threadKey) continue;
+          // An entry promises to name a PLACE. One that names nothing, or names it with a kind this
+          // build does not know, cannot be published as though it did — and quietly dropping it would
+          // report a thread the reader is looking at as gone. It fails the look instead.
+          if (!isValidAnchor(e.anchor)) {
+            throw new TackbackError('INVALID_ANCHOR', `visible thread ${e.threadKey} has no usable anchor`);
+          }
+          // A display supplies facts, not values the core will hand on. Narrowing and rebuilding
+          // happen HERE, inside the attempt: a value that cannot be canonicalized is a look that
+          // failed, not a report to publish with a hole in it.
+          const ids = [...new Set((Array.isArray(e.comments) ? e.comments : [])
+            .filter((id) => typeof id === 'string' && id))].sort();
+          const prev = merged.get(e.threadKey);
+          if (!prev) {
+            const anchor = canonical(e.anchor ?? null);
+            merged.set(e.threadKey, { threadKey: e.threadKey, anchor, comments: ids, sig: JSON.stringify(anchor) });
+            continue;
+          }
+          // Two displays showing the same thread is one readable thread, not two.
+          prev.comments = [...new Set([...prev.comments, ...ids])].sort();
+        }
+      } catch (error) {
+        return { ok: false, error };
+      }
+    }
+    // A display that arrived or withdrew while we were looking means this look spans two different
+    // worlds. Nothing is reported from a composite of them.
+    if (generation !== this._visibilityGeneration) return { ok: false, error: null };
+    const visible = [...merged.values()]
+      .sort((a, b) => (a.threadKey < b.threadKey ? -1 : a.threadKey > b.threadKey ? 1 : 0));
+    // A LOOK THAT SUCCEEDED ends the failure it succeeded after — here, where looking happens, and so
+    // for whoever took it. Ending the episode on the scheduled path alone made a pull a second kind of
+    // success that did not count: a display could recover in full view of the caller and still be
+    // carrying the verdict earned before, with no attempts left and nothing said when it failed again.
+    this._visibilityRetries = 0;
+    this._visibilityReported = false;
+    return { ok: true, visible };
+  }
+
+  _scheduleVisibility() {
+    if (this._destroyed || this._visibilityScheduled) return;
+    this._visibilityScheduled = true;
+    const run = () => this._flushVisibility();
+    if (typeof queueMicrotask === 'function') queueMicrotask(run);
+    else Promise.resolve().then(run);
+  }
+
+  _flushVisibility() {
+    this._visibilityScheduled = false;
+    if (this._destroyed) return;
+    const attempt = this._observeVisibility();
+    if (!attempt.ok) {
+      // Nothing is installed and nothing is announced. Every mutation re-arms a report, so a bounded
+      // retry is only there to cover a stretch in which nothing else happens; the correctness comes
+      // from the baseline still being the last state anyone actually saw.
+      //
+      // A look VOIDED because the display changed underneath it is not a display that failed, and is
+      // not anyone's to answer for: the arrival or withdrawal has already begun a fresh episode and
+      // asked for another report. Belt and braces — every generation change goes through
+      // `_newVisibilityEpisode`, so nothing is left to spend here anyway — but the rule is written
+      // where the decision is made rather than inferred from somewhere else.
+      if (!attempt.error) return;
+      if (this._visibilityRetries < VISIBILITY_RETRIES) {
+        this._visibilityRetries += 1;
+        this._retryVisibilityLater();
+        return;
+      }
+      // Out of attempts, so responsibility passes to the caller — which is what the error MEANS, and
+      // why it is not said earlier: a display that is unreadable for a moment and readable by the
+      // next look never needed anyone told. It is said ONCE, because "this display cannot be read"
+      // is one fact and does not become several by being rediscovered on every later mutation.
+      // Saying it again takes a successful look in between, or a different display.
+      if (this._visibilityReported) return;
+      this._visibilityReported = true;
+      this._fail('ADAPTER_FAILED', 'a display could not report what is visible', attempt.error);
+      return;
+    }
+    const visible = attempt.visible;
+    const before = this._visibilityDelivered;
+    const now = new Map(visible.map((e) => [e.threadKey, e]));
+    const opened = visible.filter((e) => !before.has(e.threadKey));
+    const closed = [...before.values()].filter((e) => !now.has(e.threadKey));
+    // Identity is the content, not the membership: a thread the reader is looking at while it grows
+    // never enters or leaves, and a consumer resolving read state from `comments` needs to hear about
+    // it. Comparing keys alone would report nothing for exactly the case the display supports best.
+    const changed = opened.length || closed.length
+      || visible.some((e) => !sameEntry(e, before.get(e.threadKey)));
+    // The baseline is installed BEFORE anyone is called. A handler is free to open or close something
+    // from here, and its report must be diffed against what was just delivered — not overwritten by
+    // this frame writing back a world its own handler has already left.
+    this._visibilityDelivered = now;
+    if (!changed) return;
+    // Built fresh for this delivery. What a subscriber is given is not the baseline the next diff is
+    // measured against, so nothing it does to the payload can rewrite what the core believes it said.
+    this._emitter.emit('thread:visibility', {
+      visible: visible.map(visibilityDTO), opened: opened.map(visibilityDTO), closed: closed.map(visibilityDTO),
+    });
+  }
+
+  _retryVisibilityLater() {
+    // Its own flag, deliberately. Sharing the ordinary one would let a retry waiting on a later turn
+    // swallow a report that a mutation has just asked for now — the retry is a floor under liveness,
+    // never a ceiling on it.
+    if (this._visibilityRetryPending) return;
+    this._visibilityRetryPending = true;
+    const run = () => { this._visibilityRetryPending = false; if (!this._destroyed) this._flushVisibility(); };
+    if (typeof setTimeout === 'function') setTimeout(run, 0); else queueMicrotask(run);
+  }
+
   setAuthor(name) { this._opts.author = name; }
 
   /**
@@ -414,6 +657,8 @@ class TackbackInstance {
     for (const t of this._adapterTeardowns.splice(0)) { try { t(); } catch { /* ignore */ } }
     this._surfaces.clear();
     this._attention.clear();
+    this._visibilityProvider = null;
+    this._visibilityDelivered.clear();
     this._emitter.clear();
   }
 
@@ -429,6 +674,10 @@ class TackbackInstance {
     this._pruneAttention(comments);   // BEFORE the emit, so listeners never render a ghost flag
     const payload = { comments, changes: diff, source };
     this._emitter.emit('change', payload);
+    // Every mutation can change what a reader is looking at, so every mutation schedules a report.
+    // Scheduling too often costs one comparison that finds nothing; scheduling too rarely leaves the
+    // consumer acting on a world that has moved. Only one of those two errors is recoverable.
+    this._scheduleVisibility();
     Promise.resolve(this._store.persist()).catch((err) =>
       this._fail(err instanceof TackbackError ? err.code : 'STORAGE_SAVE_FAILED', 'persist failed', err));
   }

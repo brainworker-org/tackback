@@ -11,6 +11,7 @@ import { computeCapture, resolveRegionRect } from '../core/resolution.js';
 import { classifyGesture, popupCommit, canCommit, nextSendState, answersSend, applyHandleDrag, resolveLaneLayout } from './interaction.js';
 import { actorColorOf as resolveActorColor, claimedColors, authorKey as tbAuthorKey, lastSpeaker } from './actors.js';
 import { threadKeyOf, timelineItems, utteranceCount, planInsertions, anchorLabelSpec } from './thread.js';
+import { createHost } from './host.js';
 import { documentSurface, DOCUMENT_SURFACE_ID } from '../core/media.js';
 import { normalizeRegion, buildQuoteSelector, resolveQuoteSelector } from '../core/anchor.js';
 import { selectionOffsetsWithin, offsetsToRange, paintHighlights, clearHighlights } from './range.js';
@@ -421,6 +422,7 @@ export function attachPanel(core, options = {}) {
   // document, so it has no such thing — it gets a bar of its own across the bottom, which doubles as
   // its mark: the count and the attention tint live on the head, visible without opening anything.
   let lane = null, laneHead = null, laneTitle = null, laneCount = null, laneBody = null, laneComposer = null, laneConv = null;
+  let laneHost = null;
   if (controls.docLane) {
     lane = el(doc, 'div', 'tb-lane');
     // a real <button>: the thing it replaced was one, and focusability, Enter/Space and the
@@ -448,18 +450,26 @@ export function attachPanel(core, options = {}) {
       existing: [],
       draftKey: anchorKey({ type: 'document' }),
       threadKey: 'document',
+      anchor: { type: 'document' },
       // the lane is not a popup: committing never dismisses it, so "close" is a no-op here
       onClose: () => {},
       onSave: (body, reaction) => core.addComment({ anchor: { type: 'document' }, body, reaction }),
     });
     laneBody.appendChild(laneConv.timeline);
     laneComposer.append(...laneConv.composer);
+    laneHost = createHost({ collapsible: true }, () => core.reportThreadVisibility());
+    laneHost.attach(laneConv, lane);
+    hosts.add(laneHost);
+    // The lane outlives every Pane, so the only end it has is the panel's own. Registering that end
+    // here is what makes releaseHost the one path in fact and not just in the comment above it: the
+    // lane's node is already given back by the sweep, so without this its host would simply stop
+    // being reachable — alive, holding a conversation, and never told.
+    own(() => releaseHost(laneHost));
   }
-  function laneOpen() { return !!lane && lane.classList.contains('tb-open'); }
+  function laneOpen() { return !!laneHost && laneHost.timelineOpen(); }
   function toggleLane(force) {
-    if (!lane) return false;
-    const open = force === undefined ? !laneOpen() : !!force;
-    lane.classList.toggle('tb-open', open);
+    if (!lane || !laneHost) return false;
+    const open = laneHost.setOpen(force);
     laneHead.setAttribute('aria-expanded', open ? 'true' : 'false');
     if (open) { laneConv.sync(); laneConv.focus(); }
     return open;
@@ -637,8 +647,23 @@ export function attachPanel(core, options = {}) {
   }
 
   // ---- popup -----------------------------------------------------------------------------------
+  // Everything a thread is currently shown in. One question — timelineOpen() — is asked of each,
+  // rather than each kind of host being asked in its own way somewhere else.
+  const hosts = new Set();
+  /**
+   * The ONLY way a host ends. Releasing has three parts that must not come apart: the host dies, it
+   * leaves the set, and its root leaves the page. A dead host still in the set would report itself
+   * unreadable forever and no test would notice, so the path is one path rather than a rule.
+   */
+  function releaseHost(host) {
+    if (!host) return;
+    const el = host.dispose();
+    hosts.delete(host);
+    el?.remove();
+  }
   let popup = null;
   let popupCleanup = null;
+  let popupHost = null;    // the host wrapping the open Pane, if any
   let popupConv = null;    // the conversation the open Pane hosts, if any
   // Every conversation currently on screen. It used to be three singleton slots, which encoded
   // "at most one, and it dies" — so adding a second, persistent host meant hand-editing every
@@ -658,9 +683,60 @@ export function attachPanel(core, options = {}) {
   // The pending region's lifetime IS the popup's: closing the popup (outside-click, Escape, Cancel,
   // empty save) removes the dashed rect, so no orphaned region ever lingers (Keisuke 2026-06-15).
   function closePopup() {
-    popupCleanup?.(); popupCleanup = null; popupConv?.dispose(); popupConv = null; popup?.remove(); popup = null;
+    popupCleanup?.(); popupCleanup = null;
+    releaseHost(popupHost); popupHost = null; popupConv = null; popup = null;
     if (pendingRegionEl) { pendingRegionEl.remove(); pendingRegionEl = null; }
     doc.documentElement.classList.remove('tb-popup-open');   // region affordances (resize grip / move cursor) re-enabled
+    core.reportThreadVisibility();
+  }
+
+  /**
+   * What this panel is showing a reader RIGHT NOW, projected from live state each time it is asked.
+   *
+   * Deliberately not a ledger kept up to date at each transition: a projection that is asked one
+   * moment late is merely late, while a ledger that missed one transition is wrong until something
+   * else happens to correct it. Every path that changes a surface only has to say "something moved",
+   * and even forgetting that costs a delayed report rather than a false one.
+   *
+   * The registered conversations are NOT the answer — the lane keeps its conversation registered
+   * while it is folded away, so that set includes a thread the reader cannot see. What is readable is
+   * a Pane that is open, and a lane that is expanded.
+   */
+  function visibleThreads() {
+    const out = [];
+    const add = (key, anchor, remember) => {
+      // A conversation with no identity yet — an uncommitted region — is absent rather than present
+      // with nulls. It appears in the report after its first commit gives it a thread to belong to.
+      if (!key || out.some((e) => e.threadKey === key)) return;
+      // The OPEN SURFACE is the fact being reported; its comments are what it currently holds, and
+      // holding none is an ordinary state. A block the reader has just opened has never been written
+      // in, and deleting the last comment from an expanded lane does not fold the lane away — reading
+      // presence out of the store would call both of those "not readable" while the reader is looking
+      // straight at them, and would report the second as a closing that never happened.
+      const ids = [];
+      let live = null;
+      for (const c of core.listComments()) {
+        if (threadKeyOf(c) !== key) continue;
+        if (!live) live = c.anchor;
+        ids.push(c.id);
+        for (const r of c.replies || []) ids.push(r.id);
+      }
+      // Where a thread POINTS is the store's to say for as long as the store has anything to say
+      // about it: a region that was moved, or a comment replaced under the same key by an import,
+      // changes its place without changing its identity, and a remembered anchor would go on naming
+      // where it used to be. So it is read here, on every look, and only remembered as the answer for
+      // afterwards — when the last comment is gone there is nowhere else the surface's place could
+      // come from. Remembering it at a few known moments instead would mean naming every path that
+      // can move an anchor, and missing one is the whole class this projection exists to avoid.
+      if (live) remember?.(live);
+      out.push({ threadKey: key, anchor: live || remember?.() || anchor, comments: ids });
+    };
+    // ONE question, asked of every host. Which kind of host it is no longer decides how to ask.
+    for (const host of hosts) {
+      if (!host.timelineOpen()) continue;
+      add(host.identity(), host.anchorOf(), host.anchorMemo);
+    }
+    return out;
   }
   // ---- the conversation view --------------------------------------------------------------------
   // One thread, rendered and composed: the timeline rows, the input, the reactions, the commit
@@ -671,10 +747,17 @@ export function attachPanel(core, options = {}) {
   // The host supplies only what is genuinely its own: how to close, and what to clean up after a
   // commit. Everything a conversation knows about itself stays in here.
   function createConversation({ anchorLabel, existing, onSave, draftKey, threadKey: initialThreadKey = null,
+                                anchor: initialAnchor = null,
                                 onClose = () => {}, afterCommit = () => {} }) {
   // the thread this Pane belongs to (thread.js). A brand-new region has none until its first
   // comment exists — it is adopted below, on commit.
   let threadKey = initialThreadKey;
+  // What this Pane POINTS AT, held by the surface rather than looked up from whatever comments are
+  // left. A thread the reader has open is open whether or not anything is written in it yet, and
+  // stays open when its last comment is deleted — so neither its identity nor its place can be
+  // reconstructed from the store.
+  let anchor = initialAnchor;
+  let lastAuthoritative = null;   // where the store last said this thread points, for when it empties
   const draft = (draftKey != null && drafts.get(draftKey)) || null;
   let reactionId = draft?.reaction || '';
   const anchorEl = el(doc, 'div', 'tb-anchor'); anchorEl.textContent = '📍 ' + anchorLabel;
@@ -806,6 +889,12 @@ export function attachPanel(core, options = {}) {
   const sync = () => {
     if (threadKey == null) return;   // nothing to group by yet (an uncommitted region)
     const group = core.listComments().filter((c) => threadKeyOf(c) === threadKey);
+    // Where this thread points, captured every time the store speaks rather than only when someone
+    // asks what is visible. A value that has to outlive its source must be taken no later than the
+    // source disappears: move a thread and empty it before anyone looks, and reading it at looking
+    // time finds nothing and falls back to a place the thread had already left. Reconciliation runs
+    // on every change, so this is the last moment the answer still exists.
+    if (group[0] && group[0].anchor) lastAuthoritative = group[0].anchor;
     const evts = (group[0] && group[0].anchor && group[0].anchor.events) || [];
     // an emptied thread means "remove everything", not "there is nothing to do"
     if (draw(timelineItems(group, evts))) exwrap.scrollTop = exwrap.scrollHeight;
@@ -862,6 +951,7 @@ export function attachPanel(core, options = {}) {
     // synchronously. Syncing here catches both, into the same batch, so the settlement below judges
     // them as if they had arrived like any other. draw() is keyed, so nothing is drawn twice.
     if (created && threadKey == null) threadKey = threadKeyOf(created);
+    if (created && created.anchor) anchor = created.anchor;   // a committed region's anchor is the real one
     inFlight = drawnDuringCommit;
     try { sync(); } finally { inFlight = null; }
     if (commit.closeOnCommit) return onClose();   // …and only now is dismissal the host's call
@@ -897,26 +987,36 @@ export function attachPanel(core, options = {}) {
       sync, relabel, retint: () => { for (const r of tinted) applyTint(r); },
       preserveDraft, clearDraft,
       focus: () => ta.focus(),
+      // Read, never stored: a conversation adopts its identity at its first commit, so anything that
+      // remembered this at construction time would name an uncommitted draft forever.
+      identity: () => threadKey,
+      anchorOf: () => anchor,
+      // Set with a value to record the last place authority named; called with none to read it back.
+      anchorMemo: (a) => { if (a) lastAuthoritative = a; return lastAuthoritative; },
       dispose: () => conversations.delete(handle),
     };
     conversations.add(handle);
     return handle;
   }
 
-  function openPopup({ anchorLabel, existing, onSave, draftKey, threadKey: initialThreadKey = null, ephemeralDraft }, ev) {
+  function openPopup({ anchorLabel, existing, onSave, draftKey, threadKey: initialThreadKey = null, anchor = null, ephemeralDraft }, ev) {
     closePopup();
     popup = el(doc, 'div', 'tb-popup');
     const mine = popup;   // identity, so a Pane that replaces this one cannot be mistaken for it
     doc.documentElement.classList.add('tb-popup-open');   // lock region affordances while editing (REQ-008): no resize grip on hover, no move cursor
     const conv = createConversation({
-      anchorLabel, existing, onSave, draftKey, threadKey: initialThreadKey,
+      anchorLabel, existing, onSave, draftKey, threadKey: initialThreadKey, anchor,
       onClose: closePopup,
       // the saved region is now a committed overlay (rendered via `change`); drop the pending draft rect
       afterCommit: () => { if (pendingRegionEl) { pendingRegionEl.remove(); pendingRegionEl = null; } },
     });
     popupConv = conv;
+    popupHost = createHost({ collapsible: false }, () => core.reportThreadVisibility());
+    popupHost.attach(conv, popup);
+    hosts.add(popupHost);
     popup.append(...conv.nodes);
     doc.body.appendChild(popup);
+    core.reportThreadVisibility();
     const vw = globalThis.innerWidth || 1024, vh = globalThis.innerHeight || 768;
     const pos = clampToViewport(ev?.clientX ?? 120, ev?.clientY ?? 120, popup.offsetWidth, popup.offsetHeight, vw, vh);
     Object.assign(popup.style, { left: pos.x + 'px', top: pos.y + 'px' });
@@ -941,7 +1041,7 @@ export function attachPanel(core, options = {}) {
   }
   function openThread(comments, ev) {
     const a = comments[0].anchor;
-    openPopup({ anchorLabel: anchorLabelOf(a), existing: comments, draftKey: anchorKey(a), threadKey: threadKeyOf(comments[0]), onSave: (body, reaction) => core.addComment({ anchor: a, body, reaction, threadId: comments[0].threadId || (a.type === 'region' || a.type === 'range' ? comments[0].id : undefined) }) }, ev);
+    openPopup({ anchorLabel: anchorLabelOf(a), existing: comments, draftKey: anchorKey(a), threadKey: threadKeyOf(comments[0]), anchor: a, onSave: (body, reaction) => core.addComment({ anchor: a, body, reaction, threadId: comments[0].threadId || (a.type === 'region' || a.type === 'range' ? comments[0].id : undefined) }) }, ev);
   }
   // Open the conversation about the document as a whole. Public on the PanelInstance too, so an
   // integrator that hides the control can still reach the thread — the panel's standing rule is that
@@ -955,6 +1055,7 @@ export function attachPanel(core, options = {}) {
       existing,
       draftKey: anchorKey(a),
       threadKey: 'document',
+      anchor: a,
       onSave: (body, reaction) => core.addComment({ anchor: a, body, reaction }),
     }, ev);
   }
@@ -989,7 +1090,7 @@ export function attachPanel(core, options = {}) {
     } else {
       anchor = { type: 'block', elementId: elx.id };
     }
-    openPopup({ anchorLabel: anchorLabelOf(anchor), existing: [], draftKey: anchorKey(anchor), threadKey: threadKeyOf({ anchor }), onSave: (body, reaction) => core.addComment({ anchor, body, reaction, snapshot }) }, e);
+    openPopup({ anchorLabel: anchorLabelOf(anchor), existing: [], draftKey: anchorKey(anchor), threadKey: threadKeyOf({ anchor }), anchor, onSave: (body, reaction) => core.addComment({ anchor, body, reaction, snapshot }) }, e);
   };
   const onContext = (e) => {
     if (e.target.closest('.tb-popup,.tb-panel,.tb-lane')) return;
@@ -1243,7 +1344,7 @@ export function attachPanel(core, options = {}) {
     rectEl.className = 'tb-pending';
     // openPopup clamps {clientX,clientY} into the viewport — a drag that ended below/above the visible
     // area still pops up at the nearest edge (never an invisible popup + a lingering dashed region).
-    openPopup({ anchorLabel: anchorLabelOf(anchor), existing: [], draftKey: anchorKey(anchor), ephemeralDraft: true, onSave: (body, reaction) => core.addComment({ anchor, body, reaction }) }, { clientX, clientY });
+    openPopup({ anchorLabel: anchorLabelOf(anchor), existing: [], draftKey: anchorKey(anchor), anchor, ephemeralDraft: true, onSave: (body, reaction) => core.addComment({ anchor, body, reaction }) }, { clientX, clientY });
     pendingRegionEl = rectEl;
     return true;
   }
@@ -1379,6 +1480,9 @@ export function attachPanel(core, options = {}) {
   // ---- wire to core + initial render -----------------------------------------------------------
   // one change → re-place the anchors, then let an open thread catch up with what was just said
   const onChange = () => { renderMarks(); broadcast((c) => c.sync()); };
+  // Registering is itself the first transition, and deregistering at teardown is the last one: the
+  // report that this panel is showing nothing has to be spoken by something that outlives the panel.
+  own(core.registerThreadVisibility(visibleThreads));
   onCore('change', onChange);
   onCore('recalculate', renderMarks);
   // Flipping an attention flag changes exactly ONE class on the affected anchors. A full renderMarks

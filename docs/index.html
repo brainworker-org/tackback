@@ -346,7 +346,7 @@
   // A seam nobody can observe is a seam nobody can trust.
   const EVENTS = ['ready', 'change', 'comment:add', 'comment:update', 'comment:delete', 'comments:delete',
     'attention:change', 'transport:change', 'anchor:orphaned', 'recalculate', 'rev:mismatch',
-    'submit:batch', 'error'];
+    'submit:batch', 'thread:visibility', 'error'];
   const logEl = document.getElementById('event-log');
   const logLines = [];
   const summarize = (name, e) => {
@@ -360,6 +360,14 @@
       const parts = [['added', d.added], ['updated', d.updated], ['removed', d.removed]]
         .filter(([, v]) => v && v.length).map(([k, v]) => `${k} ${v.length}`);
       return `${parts.join(', ') || 'no net change'} · source ${e.source}`;
+    }
+    // A snapshot is only worth having if the settled set is readable at a glance, so that is what is
+    // shown; the difference is appended so a viewer can watch the library compute what an open/close
+    // pair would have handed them to compute themselves.
+    if (name === 'thread:visibility') {
+      const shown = e.visible.map((v) => `${v.threadKey} (${v.comments.length})`).join(', ') || 'nothing readable';
+      const moved = [e.opened.length ? `+${e.opened.length}` : '', e.closed.length ? `-${e.closed.length}` : ''].filter(Boolean).join(' ');
+      return moved ? `${shown}  [${moved}]` : shown;
     }
     if (name === 'comments:delete') return `${e.ids.length} in one act`;
     if (name === 'comment:delete') return e.id;

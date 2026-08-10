@@ -13,7 +13,7 @@ any HTML, including Markdown rendered to HTML.
 > multi-participant timeline, actor colors, attention, and the Save/Send scenarios — run
 > `demo/demo.html`: `npm run build`, serve the package root over http, and open it.
 
-> **Version 0.9.6 (staging).** Pre-1.0: the API is functional and tested but may still change before
+> **Version 0.9.7 (staging).** Pre-1.0: the API is functional and tested but may still change before
 > the 1.0 stable release. The public API is the **JavaScript** API called in the browser (not an HTTP API).
 
 ## Install
@@ -202,6 +202,95 @@ tb.on('attention:change', ({ id, on }) => {/* … */});
 The flag is **session-only**: never persisted, never written into the export envelope, so a per-viewer
 UI state can't leak into a shared file. It lives as long as its comment — deleting or wiping the comment
 drops it, and re-importing that comment id starts unflagged. Restyle it via the `--tb-attention` token.
+
+### Which threads a reader can see
+
+A flag like attention is only half of it: something has to decide when to *clear* it. That takes
+knowing which threads are actually in front of the reader right now, and Tackback reports it as a
+**settled snapshot** rather than as open/close edges you would have to keep balanced yourself:
+
+```js
+tb.on('thread:visibility', ({ visible, opened, closed }) => {
+  // visible: [{ threadKey, anchor, comments: [id, …] }] — everything readable right now
+  // opened / closed: the difference from the last report, computed for you
+  //
+  // Resolve read state from `visible`, not from `opened`. A thread the reader is watching while it
+  // grows is reported with `opened` and `closed` both empty — that is the case an open/close pair
+  // cannot express, and reading only `opened` walks straight past it.
+  for (const t of visible) markRead(t.comments);
+});
+
+tb.visibleThreads();   // → the same array, answered on the spot
+```
+
+`comments` carries every utterance id in the thread, replies included — the ids you would resolve a
+read cursor against. A thread the reader is *watching while it grows* is reported again when its
+contents change, even though it never opened or closed: that is the case a plain open/close pair
+cannot express, and the reason this is a snapshot.
+
+Reports settle at the microtask boundary from a state that has finished moving, so several changes in
+one turn arrive as one report, and nothing is ever announced while a Pane or the lane is still changing. A
+thread with no identity yet — an uncommitted region — is simply **absent**, and appears once its first
+commit gives it one.
+
+Because it is a snapshot, **same-turn transients are coalesced away**: open a thread and close it
+before the boundary and nothing is emitted. This reports settled visibility; it is not a lossless
+interaction log. If you need to count impressions, count them from your own handlers.
+
+The panel is what can see its own Panes and lane, so it is the panel that answers — attach one and the
+reports begin; a core with no panel reports nothing and `visibleThreads()` is empty. If you show
+threads some other way, you can answer instead of it (below).
+
+If the display cannot be read at all, the core does not guess: no report is delivered and the last
+state anyone actually observed stands, rather than a question about now being answered with something
+from before. The two ways of asking say so differently, and each says it once:
+
+- **A pull refuses.** `visibleThreads()` throws `TackbackError('ADAPTER_FAILED')` — you asked, so you
+  are told directly. It emits nothing; the exception is the answer.
+- **A scheduled report goes quiet, then hands the failure back.** The core looks again a few times on
+  its own first, so a display that is unreadable for a moment and readable by the next look costs
+  nobody anything. When those are spent, **one** `error` is emitted. It stays one for as long as the
+  situation is one: later changes re-ask and find the same thing, and do not report it again. A
+  successful look, or a different display, starts the count over.
+
+```js
+let readable;
+try { readable = tb.visibleThreads(); }
+catch { /* unknown right now — keep the last known and wait for the next report */ }
+```
+
+Recovery is the display's to signal. Every store mutation already asks for a fresh look, so an
+integration that keeps writing recovers on its own; if nothing is being written, call
+`tb.reportThreadVisibility()` when the display becomes readable again. The core cannot know when the
+condition that made a display unreadable has passed.
+
+**Answering it yourself.** The panel registers as a display; anything else that puts threads on screen
+can do the same. The provider is asked at the moment an answer is needed and its return value is never
+kept as truth, so it may be a plain projection of whatever is currently shown:
+
+```js
+const stopAnswering = tb.registerThreadVisibility(() => myOpenThreads.map((t) => ({
+  threadKey: t.key,             // the thread's identity, as `visible` reports it
+  anchor: t.anchor,             // where it points — a valid anchor, never null
+  comments: t.utteranceIds,     // every utterance id the reader can see in it, replies included
+})));
+
+tb.reportThreadVisibility();    // "something moved" — the core decides whether that changed anything
+stopAnswering();                // at teardown; withdrawing is itself a transition and is reported
+```
+
+Registering again **replaces** the previous display rather than joining it, matching the
+one-panel-per-document rule above — the replaced one is never asked again, and its withdrawal function
+becomes a no-op. Throwing from the provider, or returning an entry whose anchor is missing or of a kind
+this build does not know, is treated as a failed look, not as a partial one: nothing is published from
+an answer the core could only half use.
+
+**What "readable" does and does not mean.** It means a Pane is on screen showing that thread, or the
+document lane is expanded — library state, reported as a settled fact. It does **not** mean a person
+looked, and it does not account for the viewport or for host CSS: a panel hidden by your own styles is
+still reported as readable. If you use this to mean "read", that gap is yours to decide about. Tearing the panel down is
+itself a transition: you are told the thread is no longer readable, which is exactly when a consumer
+that raised its update rate needs to hear it.
 
 ### Deleting as one act, and a merge that can remove
 

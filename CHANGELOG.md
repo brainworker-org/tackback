@@ -6,6 +6,53 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
 
 ## [Unreleased]
 
+## [0.9.7] — 2026-08-10
+
+### Added
+- **`thread:visibility` — which threads a reader can actually see.** A flag like anchor attention is
+  only half of a read state; something has to decide when to clear it, and that takes knowing what is
+  in front of the reader. `tb.on('thread:visibility', ({ visible, opened, closed }) => …)` reports it
+  as a **settled snapshot**, with `tb.visibleThreads()` answering the same question on the spot. Each
+  entry carries `{ threadKey, anchor, comments }`, where `comments` is every utterance id in the
+  thread, replies included. `opened` and `closed` are the library's own difference against what it
+  last delivered, so no two consumers can compute them differently.
+
+  A snapshot rather than an open/close pair because an edge contract makes the consumer responsible
+  for balancing it, and a report that arrives out of order or not at all is unrecoverable — nothing
+  later says what the truth now is. A snapshot repairs itself on the next report. It also lets the
+  library report the case an edge pair cannot express at all: **a thread the reader is watching while
+  it grows** is reported again when its contents change, though it never opened or closed.
+
+  Reports settle at the microtask boundary from a state that has finished moving, so several changes
+  in one turn arrive as one report and nothing is announced while a Pane or the lane is still changing. A
+  thread with no identity yet — an uncommitted region — is **absent** rather than reported with nulls,
+  and appears once its first commit gives it one.
+
+  The panel is what can see its own Panes and lane, so the panel is what answers: attach one and reports begin, and
+  a core with no panel reports nothing. Tearing the panel down is itself a transition, so a consumer
+  that raised its update rate while a thread was open is told when that stops being true.
+
+### Changed
+- Nothing existing changes shape. `thread:visibility` is additive, and no other event's payload,
+  ordering or timing is affected.
+
+### Compatibility
+- **`visibleThreads()` can throw.** When the display cannot be read, the core reports nothing rather
+  than guessing — an unreadable display might be showing nothing or might still be showing what it
+  showed, and only that display knows which. A pull throws `TackbackError('ADAPTER_FAILED')` and emits
+  nothing; a scheduled report goes quiet, is retried a few times, and then hands the failure back as a
+  single `error` that is not repeated while the situation lasts. Either way the last observed state is
+  left standing and the next successful look repairs it. Callers should treat a failure as "unknown"
+  and keep what they last rendered.
+- **One display at a time.** `registerThreadVisibility(provider)` is public, so anything that shows
+  threads can answer instead of the panel. Registering a second replaces the first, matching the
+  existing one-panel-per-document rule; the replaced one is never asked again and withdrawing it is a
+  no-op.
+- **Same-turn transients are coalesced away, by design.** Open a thread and close it before the
+  boundary and nothing is emitted. This reports settled visibility; it is **not** a lossless
+  interaction log. Anything that needs to count impressions or measure how long a thread was open must
+  do so from its own handlers.
+
 ### Fixed
 - **`panel.destroy()` now gives the document back.** Teardown mirrored some two dozen acquisition
   sites by hand in a single list, and what that list missed it missed in silence. Each resource now
@@ -19,11 +66,11 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
   Pane and the theme, locale, reaction and colour setters still ran — producing chrome the host never
   asked for and could not remove. Every public method is now a no-op afterwards, and `destroy()` is
   idempotent.
-- **Deferred dismiss handlers can no longer outlive the surface that scheduled them.** Both the Pane
+- **Deferred dismiss handlers can no longer outlive the Pane or menu that scheduled them.** Both the Pane
   and the anchor menu register theirs from a deferred callback against a single cleanup slot, so one that was closed
   — or replaced by another within the same tick — before the deferred callback ran left a mouse and a key listener
   on the document that nothing could take off again. Each registration now checks it still belongs to
-  the surface on screen; asking whether *some* surface exists cannot tell replaced from closed.
+  the one on screen; asking whether *some* Pane exists cannot tell replaced from closed.
 - **A destroy that happens during a core event no longer lets the panel run afterwards.** The emitter
   snapshots its listeners before invoking them, so unsubscribing during a dispatch does not remove the
   panel from the run already in progress: an integrator calling `destroy()` from its own `change`
@@ -33,7 +80,7 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
   searching the document, so a block the host removed while the panel was alive was never found —
   and re-attaching that element later brought the panel's class back with it. It is now released
   through the elements themselves.
-- **Modals are a surface like any other.** They appended unclassed children straight to the document
+- **Modals belong to the panel like anything else it puts on screen.** They appended unclassed children straight to the document
   body, outside every sweep: repeated clicks stacked several, and an import modal opened before
   teardown could still write into the core afterwards. At most one at a time now, and it closes with
   the panel.
