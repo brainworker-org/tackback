@@ -1544,3 +1544,63 @@ test('an utterance that arrives and goes within one turn never takes a number', 
   assert.deepEqual(Object.keys(store.peekProgress().arrival), [], 'nothing to remember, so nothing remembered');
   core.destroy();
 });
+
+test('the built-in adapter tells corrupt progress from none, like any other', async () => {
+  // The distinction is worth nothing if the adapter almost everybody uses defeats it on the way in.
+  // Its parser used to answer "no record" for a record it could not read, which is the one answer that
+  // silently clears marks: no record means the document predates unread, so everything counts as seen.
+  const items = new Map();
+  const saved = globalThis.localStorage;
+  globalThis.localStorage = {
+    getItem: (k) => (items.has(k) ? items.get(k) : null),
+    setItem: (k, v) => { items.set(k, v); },
+    removeItem: (k) => { items.delete(k); },
+  };
+  try {
+    const doc = { schemaVersion: 1, documentId: 'd', comments: [entry('c1', 'p1'), entry('c2', 'p2')] };
+    items.set('tackback::corrupt-fixture', JSON.stringify(doc));
+    items.set('tackback::corrupt-fixture::progress', 'not json at all');
+
+    const core = Tackback.mount({ document: { id: 'corrupt-fixture' } });
+    await core.ready;
+    await quiet();
+    assert.deepEqual(core.unreadThreads().map((t) => t.threadKey), ['block:p1', 'block:p2'],
+      'nothing is known, so everything is left to be looked at again');
+    core.destroy();
+
+    // …and with no progress record at all, the same document reads as already seen.
+    items.delete('tackback::corrupt-fixture::progress');
+    const fresh = Tackback.mount({ document: { id: 'corrupt-fixture' } });
+    await fresh.ready;
+    await quiet();
+    assert.deepEqual(fresh.unreadThreads(), [], 'no record: the shape written before unread existed');
+    fresh.destroy();
+  } finally {
+    if (saved === undefined) delete globalThis.localStorage; else globalThis.localStorage = saved;
+  }
+});
+
+test('an adapter whose operations are methods is not disabled by having half a pair', async () => {
+  // The half-pair is refused by tracking the capability, not by rebuilding the adapter without it: a
+  // copy keeps only own properties, so an adapter written as a class would lose its document
+  // operations too — and be disabled entirely, for having offered too little rather than too much.
+  class Adapter {
+    constructor() { this.docs = []; }
+    load() { return { schemaVersion: 1, documentId: 'd', comments: [entry('c1', 'p1')] }; }
+    save(doc) { this.docs.push(doc); }
+    saveProgress() { throw new Error('should never be called with no loadProgress'); }
+  }
+  const adapter = new Adapter();
+  const core = mount({ storage: adapter });
+  const errors = [];
+  core.on('error', (e) => errors.push(e));
+  await core.ready;
+  await quiet();
+  assert.equal(errors.filter((e) => e.code === 'ADAPTER_FAILED').length, 1, 'the half pair is reported');
+
+  core.addComment({ anchor: { type: 'block', elementId: 'p2' }, body: 'and the document still saves' });
+  await quiet();
+  assert.equal(adapter.docs.length, 1, 'its document operations were never taken away');
+  assert.equal(adapter.docs[0].comments.length, 2);
+  core.destroy();
+});

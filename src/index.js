@@ -12,6 +12,18 @@ export {
   normalizeRegion, regionToPx, buildQuoteSelector, resolveQuoteSelector, MIN_REGION_PX,
 } from './core/anchor.js';
 export { localStorageAdapter, memoryAdapter } from './core/storage.js';
+// The shapes an integrator has to implement or satisfy, reachable from the entry point they install —
+// a type nobody can import is a contract nobody can hold to.
+/**
+ * @typedef {import('./core/storage.js').StoredDocument} StoredDocument
+ * @typedef {import('./core/storage.js').StoredProgress} StoredProgress
+ * @typedef {import('./core/storage.js').StorageAdapter} StorageAdapter
+ * @typedef {import('./core/engine.js').MountOptions} MountOptions
+ * @typedef {import('./core/model.js').Comment} Comment
+ * @typedef {import('./core/model.js').Anchor} Anchor
+ * @typedef {import('./core/model.js').ExportEnvelope} ExportEnvelope
+ */
+export {};
 export { buildEnvelope, parseEnvelope } from './core/export.js';
 export { createComment, createReply, migrateLegacyComment, isValidAnchor } from './core/model.js';
 // Replay: merge N exported envelopes (multi-author) into one timeline-ordered model (REQ-505).

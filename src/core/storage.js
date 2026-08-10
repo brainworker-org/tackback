@@ -58,7 +58,7 @@ import { TackbackError } from './errors.js';
  * @typedef {object} StorageAdapter
  * @property {() => StoredDocument|null|Promise<StoredDocument|null>} load
  * @property {(doc: StoredDocument) => void|Promise<void>} save
- * @property {() => StoredProgress|null} [loadProgress]
+ * @property {() => StoredProgress|null|Promise<StoredProgress|null>} [loadProgress]
  * @property {(progress: StoredProgress) => void|Promise<void>} [saveProgress]
  * @property {(cb: () => void) => (() => void)} [subscribe] told when the same storage changed elsewhere
  */
@@ -99,9 +99,14 @@ export function localStorageAdapter(key) {
       if (!ls) return null;
       const raw = ls.getItem(`${key}::progress`);
       if (raw == null) return null;
-      // Unreadable progress is treated as absent — everything reads as new, which is the side that
-      // asks the reader to look again. It is never a reason to fail the document load.
-      try { return JSON.parse(raw); } catch { return null; }
+      // A record that is HERE and cannot be read is reported as such, never as an absent one. Absent
+      // means this document predates progress, so what is in it counts as seen — answering that for a
+      // corrupt record would silently clear marks the reader never looked at.
+      try {
+        return JSON.parse(raw);
+      } catch (err) {
+        throw new TackbackError('STORAGE_LOAD_FAILED', `corrupt reading progress at "${key}"`, { cause: err });
+      }
     },
     saveProgress(progress) {
       if (!ls) return;

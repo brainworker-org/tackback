@@ -129,8 +129,11 @@ class TackbackInstance {
     // persist for reasons nobody can see.
     const canRead = typeof adapter.loadProgress === 'function';
     const canWrite = typeof adapter.saveProgress === 'function';
+    // Tracked as a capability rather than by rebuilding the adapter without the two methods. A copy
+    // keeps only own properties, so an adapter whose operations are methods on a class would lose the
+    // document ones too — disabling progress by silently disabling everything.
+    this._progressCapable = canRead && canWrite;
     if (canRead !== canWrite) {
-      this._envAdapter = { ...adapter, loadProgress: undefined, saveProgress: undefined };
       this._loadFaults.push({
         code: 'ADAPTER_FAILED',
         message: `storage adapter has ${canRead ? 'loadProgress' : 'saveProgress'} but not ${canRead ? 'saveProgress' : 'loadProgress'}; reading progress will not be kept`,
@@ -1074,7 +1077,7 @@ class TackbackInstance {
     if (rev === (isDocument ? this._documentSaved : this._progressSaved)) return;
     // An adapter with nowhere to keep progress is not failing — it has no such record. Nothing is
     // pending, because nothing was ever going to be written.
-    if (!isDocument && typeof this._envAdapter.saveProgress !== 'function') { this._progressSaved = rev; return; }
+    if (!isDocument && !this._progressCapable) { this._progressSaved = rev; return; }
     try {
       // The revision is read BEFORE the snapshot and only recorded after the write lands, so anything
       // that changes while the write is in flight stays ahead of what was stored and is written again.
@@ -1101,7 +1104,7 @@ class TackbackInstance {
     // Progress comes from its own place, and it may arrive later than the document — an adapter is
     // allowed to be asynchronous everywhere, and reading progress is no exception. Nothing is derived
     // until both are in hand, so a slow progress read delays readiness rather than being missed.
-    if (typeof this._envAdapter.loadProgress !== 'function') return this._hydrateWith(doc, null);
+    if (!this._progressCapable) return this._hydrateWith(doc, null);
     let kept;
     // A load that throws is a record that EXISTS and cannot be read — a different thing from none.
     try { kept = this._envAdapter.loadProgress(); } catch { return this._hydrateWith(doc, UNREADABLE); }
@@ -1257,8 +1260,22 @@ class TackbackInstance {
   }
 }
 
+/**
+ * What mounting takes. Only `document` is really needed; everything else has a working default.
+ * @typedef {object} MountOptions
+ * @property {{ id?: string, title?: string, revisionHash?: string, source?: string|null }} [document]
+ * @property {import('./storage.js').StorageAdapter} [storage] where comments and reading progress are kept
+ * @property {string} [storageKey] names the default storage instead of deriving it from the document
+ * @property {boolean} [readOnly] the DOCUMENT does not change; the reader still records what they read
+ * @property {import('./model.js').Author} [author] who new comments are attributed to
+ * @property {object} [root] the content box region anchors are measured against
+ * @property {any[]} [reactions] the reaction set, if not the built-in one
+ * @property {any[]} [mediaAdapters] surfaces to register at mount
+ * @property {object} [transport] a descriptor the panel shows; the core never transports anything
+ */
+
 export const Tackback = {
-  /** @param {object} options @returns {TackbackInstance} */
+  /** @param {MountOptions} [options] @returns {TackbackInstance} */
   mount(options) { return new TackbackInstance(options); },
   version: LIB_VERSION,
 };
