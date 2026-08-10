@@ -339,27 +339,20 @@
       body: SIM_LINES[simSeq++ % SIM_LINES.length],
       author: { id: 'Assistant', kind: 'ai' },   // a category the DEMO defines, mapped to blue above
     });
-    // the reply arrived while the reader may be elsewhere → raise the generic attention flag. What it
-    // MEANS (here: "unread") is the demo's call; Tackback just paints --tb-attention on the anchor.
-    tb.setAnchorAttention(commentId, true);
+    // Nothing else to do. Whether this answer is new to the reader is not the demo's question any
+    // more: if the thread's timeline is on screen the reply is read as it lands, and if it is not,
+    // Tackback rings the anchor until it is opened. The demo used to raise the attention flag here
+    // and call it "unread", which marked threads the reader was looking at — the exact failure the
+    // library now exists to remove.
   }
   tb.on('comment:add', (c) => {
     if (scenario !== 'conversation') return;
     setTimeout(() => { if (scenario === 'conversation') answerOn(c.id); }, 1200);
   });
-  // …and clear that flag when the thread is actually opened. Again: the library has no notion of
-  // "read" — the integrator decides when the notice has served its purpose.
-  document.addEventListener('click', (e) => {
-    // the document thread's mark is the lane itself, so expanding it has to clear the notice the
-    // same way opening an anchored thread does.
-    if (e.target.closest?.('.tb-lane')) {
-      tb.listComments().forEach((c) => { if (c.anchor.type === 'document') tb.setAnchorAttention(c.id, false); });
-      return;
-    }
-    const anchorEl = e.target.closest?.('.tb-badge,.tb-pin');
-    if (!anchorEl || !anchorEl.__tbComments) return;
-    for (const c of anchorEl.__tbComments) tb.setAnchorAttention(c.id, false);
-  }, true);
+  // There is no "clear the mark" handler here any more, and that is the point: clearing on a CLICK
+  // only ever worked for a reader who was somewhere else. A reply landing in a thread already on
+  // screen produced no click, so the mark stayed up while it was being read. The library clears it
+  // from what is actually shown instead, which needs nothing from the demo.
   // COLORS is one axis, not two: the panel's own `--tb-*` tokens and the participant colors move
   // together, because to a reader they are one scheme.
   mkBtn('Colors: default', (b) => {

@@ -1976,3 +1976,73 @@ test('restoring: nothing waits for an answer it was never going to use', async (
   assert.equal(waits.unreadCount('block:p1'), 0, 'and then believes it');
   waits.destroy();
 });
+
+// ---- a reply arriving while the timeline is on screen ---------------------------------------------
+//
+// The design principle these fix, verbatim: "when the timeline inside a Pane — the UI where comments
+// are arranged on a time axis — is in the shown state, an arriving message is processed immediately
+// and the read marker is advanced; when it is hidden, unread is shown."
+//
+// It reads as a restatement of T5, and it is not. T5 sends a COMMENT into a shown timeline; T4 sends
+// a REPLY into a hidden one. Nobody sent a reply into a shown one, and that is the crossing an
+// integrator hits first: you send, the answer comes back into the Pane you are still looking at.
+
+test('T46: a reply landing in a timeline that is shown is read as it lands, and is never announced', async () => {
+  const core = mount({ storage: makeStore().adapter });
+  const d = display(core);
+  const c = core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'sent' });
+  await d.show('block:p1');
+  await quiet();
+  const announced = [];
+  core.on('unread:change', (e) => announced.push(e));
+
+  core.addReply(c.id, { body: 'answered while you watch' });
+  await quiet();
+
+  assert.equal(core.unreadCount('block:p1'), 0, 'the timeline was shown, so the reply arrived read');
+  assert.deepEqual(core.unreadThreads(), [], 'and nothing anywhere is unread');
+  assert.deepEqual(announced, [], 'nothing was ever unread, so nothing was announced — not even briefly');
+  invariants(core, 'T46');
+  core.destroy();
+});
+
+test('T47: the same reply, into a timeline that is hidden, is unread until it is shown', async () => {
+  const core = mount({ storage: makeStore().adapter });
+  const d = display(core);
+  const c = core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'sent' });
+  await d.show('block:p1');
+  await quiet();
+  await d.show();                                   // the reader closes it and goes elsewhere
+  await quiet();
+
+  core.addReply(c.id, { body: 'answered while you were away' });
+  await quiet();
+  assert.equal(core.unreadCount('block:p1'), 1, 'hidden timeline: the reply is what is new');
+
+  await d.show('block:p1');                          // …and now they look
+  await quiet();
+  assert.equal(core.unreadCount('block:p1'), 0, 'showing it is what clears it');
+  invariants(core, 'T47');
+  core.destroy();
+});
+
+test('T46/T47: shown or hidden is the ONLY thing that separates them', async () => {
+  // Same arrival, same thread, same order — the one difference is whether the timeline was shown at
+  // the moment it landed. If anything else can move the answer, this pair stops meaning anything.
+  const run = async (shown) => {
+    const core = mount({ storage: makeStore().adapter });
+    const d = display(core);
+    const c = core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'sent' });
+    await d.show('block:p1');
+    await quiet();
+    if (!shown) { await d.show(); await quiet(); }
+    core.addReply(c.id, { body: 'the answer' });
+    await quiet();
+    const n = core.unreadCount('block:p1');
+    invariants(core, `shown=${shown}`);
+    core.destroy();
+    return n;
+  };
+  assert.equal(await run(true), 0, 'shown → read');
+  assert.equal(await run(false), 1, 'hidden → unread');
+});
