@@ -1466,3 +1466,81 @@ test('half a progress pair is no progress pair, and says so', async () => {
     core.destroy();
   }
 });
+
+// ---- one boundary, not two -----------------------------------------------------------------------
+
+test('the settled answer is the only answer, even mid-turn', async () => {
+  // Arrival used to be recognised when a change committed and observation when the boundary settled,
+  // so between the two every synchronous question got an answer the event contract said could not
+  // exist: an utterance in a thread the reader had OPEN counted as unread. Nothing corrected it —
+  // from the core's side the picture was empty before and empty after, so there was nothing to say.
+  const core = mount({ storage: makeStore().adapter });
+  const d = display(core);
+  await d.show('block:p1');
+  await quiet();
+  const seen = [];
+  core.on('unread:change', (e) => seen.push(e.threads.length));
+
+  core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'while they are looking at it' });
+  assert.equal(core.unreadCount('block:p1'), 0, 'mid-turn, the settled answer stands');
+  await quiet();
+  assert.equal(core.unreadCount('block:p1'), 0, 'and it was the right one');
+  assert.deepEqual(seen, [], 'nothing to correct, so nothing announced');
+  invariants(core, 'open thread mid-turn');
+  core.destroy();
+});
+
+test('what the window cannot know yet, it does not claim — and the next report says it', async () => {
+  // The other side of the same coin. For a CLOSED thread the window under-counts, which is the
+  // recoverable direction: the boundary numbers the arrival, the picture genuinely changes, and the
+  // announcement carries the correction. An over-count had no such route back.
+  const core = mount({ storage: makeStore().adapter });
+  const d = display(core);
+  await d.show();
+  await quiet();
+  const seen = [];
+  core.on('unread:change', (e) => seen.push(e.threads));
+
+  core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'nobody is looking' });
+  assert.equal(core.unreadCount('block:p1'), 0, 'not claimed before it is settled');
+  await quiet();
+  assert.equal(core.unreadCount('block:p1'), 1);
+  assert.equal(seen.length, 1, 'and the correction is announced');
+  assert.deepEqual(seen[0], [{ threadKey: 'block:p1', count: 1 }]);
+  invariants(core, 'closed thread mid-turn');
+  core.destroy();
+});
+
+test('several arrivals in one turn keep the order they arrived in', async () => {
+  // The numbers ARE arrival order to anything reading them back, so they cannot be rediscovered later
+  // from the finished document — that is the order the document is stored in, not the order things
+  // reached here. One envelope can carry as many as it likes.
+  const store = makeStore();
+  const core = mount({ storage: store.adapter });
+  const d = display(core);
+  core.importEnvelope(envelope([entry('first'), entry('second'), entry('third')]), { mode: 'merge' });
+  await quiet();
+  const { arrival } = store.peekProgress();
+  assert.ok(arrival.first < arrival.second && arrival.second < arrival.third,
+    `arrived in order: ${JSON.stringify(arrival)}`);
+
+  // And reading up to the middle one leaves exactly the later ones unread.
+  core.registerThreadVisibility(() => ([{ threadKey: 'block:p1',
+    anchor: { type: 'block', elementId: 'p1' }, comments: ['first', 'second'] }]));
+  core.reportThreadVisibility();
+  await quiet();
+  assert.equal(core.unreadCount('block:p1'), 1, 'only the one after them');
+  invariants(core, 'order in one turn');
+  d.stop(); core.destroy();
+});
+
+test('an utterance that arrives and goes within one turn never takes a number', async () => {
+  const store = makeStore();
+  const core = mount({ storage: store.adapter });
+  const c = core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'brief' });
+  core.deleteComment(c.id);
+  await quiet();
+  assert.deepEqual(core.unreadThreads(), []);
+  assert.deepEqual(Object.keys(store.peekProgress().arrival), [], 'nothing to remember, so nothing remembered');
+  core.destroy();
+});

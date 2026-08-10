@@ -64,8 +64,10 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
   and continues; a **replace** is refused whole (`IMPORT_REPLACE_REJECTED`, document untouched, and
   `allowPartial` does not override it), because taking the good half of a complete-state declaration
   composes a document neither side asked for. Moving an utterance means burying the old id and
-  creating a new one. A stored document from your adapter is checked the same way, and its errors
-  arrive just before `ready`.
+  creating a new one. A stored document from your adapter is checked for the same things about
+  identity, with its errors arriving just before `ready` — but **not** for anchors: an import asks to
+  change the document now and must supply anchors this build can place, while a stored anchor of an
+  unknown kind was written by a newer build and is kept rather than destroyed.
 - **`thread:visibility` is a snapshot** (see below) and now also drives reading — it is the single
   input to it. No new reporting path was added.
 

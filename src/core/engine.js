@@ -106,6 +106,7 @@ class TackbackInstance {
     this._arrival = new Map();       // utterance id → the order it reached here (a positive integer)
     this._observed = new Map();      // thread key → how far that thread has been seen
     this._arrivalNext = 1;
+    this._staged = [];               // ids seen but not yet numbered — see _stageArrival
     this._lastUnreadSig = '[]';      // the last unread snapshot announced, as JSON, to suppress repeats
     this._loadFaults = [];           // entries refused while restoring; reported just before `ready`
     this._saveChain = Promise.resolve();
@@ -779,6 +780,11 @@ class TackbackInstance {
   _flushVisibility() {
     this._visibilityScheduled = false;
     if (this._destroyed) return;
+    // FIRST, and whether or not the look succeeds. What has arrived is known regardless of whether
+    // anything can be seen, and a display that cannot be read must not be able to hold up the fact
+    // that something came in — that is the half this version exists to deliver.
+    const numbered = this._finalizeArrivals();
+    if (numbered) this._progressRev += 1;
     const attempt = this._observeVisibility();
     if (!attempt.ok) {
       // Nothing is installed and nothing is announced. Every mutation re-arms a report, so a bounded
@@ -829,7 +835,9 @@ class TackbackInstance {
     // catching up to do are different questions: the same threads reported again after a reload is a
     // report that changes nothing and moves everything. Putting this after the return would make the
     // reader's progress depend on something moving on screen.
-    if (this._advanceObserved(visible)) this._schedulePersist();
+    // Numbering and observation settled together, so the record written from here is the whole of
+    // this turn rather than half of it.
+    if (this._advanceObserved(visible) || numbered) this._schedulePersist();
     if (changed) {
       // Built fresh for this delivery. What a subscriber is given is not the baseline the next diff is
       // measured against, so nothing it does to the payload can rewrite what the core believes it said.
@@ -887,10 +895,16 @@ class TackbackInstance {
   /** Persist (async, decoupled) + emit the unified `change` with a diff payload. */
   _commit(diff, source) {
     const comments = this._store.list();
-    // Every path that changes anything meets here, which is why numbering happens here and nowhere
-    // else. Spreading it over the entry points would mean each new one had to remember, and the way
-    // it fails when someone does not is that an utterance is displayed and never counted as new.
-    this._ensureArrival(comments);
+    // Every path that changes anything meets here, which is why arrivals are NOTICED here and nowhere
+    // else. Spreading it over the entry points would mean each new one had to remember, and the way it
+    // fails when someone does not is that an utterance is displayed and never counted as new.
+    //
+    // Noticed, not numbered. Numbering is what makes something unread, and it happens where observation
+    // settles — see _finalizeArrivals. Doing it here put the two cursors on different boundaries, so
+    // between them every synchronous question got an answer the event contract said was impossible: an
+    // utterance the reader had open counted as unread, and nothing ever corrected it, because from the
+    // core's side nothing had changed.
+    this._stageArrival(comments);
     this._pruneEnvState(comments);
     this._pruneAttention(comments);   // BEFORE the emit, so listeners never render a ghost flag
     // Every mutation can change what a reader is looking at, so every mutation schedules a report.
@@ -919,6 +933,55 @@ class TackbackInstance {
         if (!this._arrival.has(r.id)) this._arrival.set(r.id, this._arrivalNext++);
       }
     }
+  }
+
+  /**
+   * Note which utterances are new, in the order they arrived, without numbering them yet.
+   *
+   * The ORDER is taken here and not rediscovered later, because later means scanning the finished
+   * document, which is in the order the document happens to be stored in rather than the order things
+   * reached this environment. Several utterances can arrive in one turn — one envelope carries as many
+   * as it likes — and the numbers are what "arrival order" MEANS to anything reading them back.
+   * @param {readonly import('./model.js').Comment[]} comments
+   */
+  _stageArrival(comments) {
+    const pending = new Set(this._staged);
+    const note = (id) => { if (!this._arrival.has(id) && !pending.has(id)) { this._staged.push(id); pending.add(id); } };
+    for (const c of comments) {
+      note(c.id);
+      for (const r of c.replies || []) note(r.id);
+    }
+  }
+
+  /**
+   * Hand out the numbers, in the order the arrivals were noticed.
+   *
+   * Called at the settling boundary and nowhere else, so that becoming numbered and becoming observed
+   * are one event rather than two with a gap between them. Anything staged that has since been deleted
+   * is dropped rather than numbered: it never survived to be read, and a number for it would only have
+   * to be pruned again.
+   * @returns {boolean} whether anything was numbered
+   */
+  _finalizeArrivals() {
+    if (!this._staged.length) return false;
+    const staged = this._staged;
+    this._staged = [];
+    let numbered = false;
+    for (const id of staged) {
+      if (this._arrival.has(id) || !this._holds(id)) continue;
+      this._arrival.set(id, this._arrivalNext++);
+      numbered = true;
+    }
+    return numbered;
+  }
+
+  /** Whether this utterance — comment or reply — is still in the document. */
+  _holds(id) {
+    if (this._store.has(id)) return true;
+    for (const c of this._store.list()) {
+      for (const r of c.replies || []) if (r.id === id) return true;
+    }
+    return false;
   }
 
   /**
