@@ -856,12 +856,16 @@ class TackbackInstance {
     this._ensureArrival(comments);
     this._pruneEnvState(comments);
     this._pruneAttention(comments);   // BEFORE the emit, so listeners never render a ghost flag
-    const payload = { comments, changes: diff, source };
-    this._emitter.emit('change', payload);
     // Every mutation can change what a reader is looking at, so every mutation schedules a report.
     // Scheduling too often costs one comparison that finds nothing; scheduling too rarely leaves the
     // consumer acting on a world that has moved. Only one of those two errors is recoverable.
+    //
+    // Asked for BEFORE the change goes out, so that this look is ahead of anything a handler defers
+    // to the same boundary. A subscriber that redraws on `change` and then wants to know what is
+    // still unread has to be answered from after the cursors moved, not from the middle of the turn.
     this._scheduleVisibility();
+    const payload = { comments, changes: diff, source };
+    this._emitter.emit('change', payload);
     this._schedulePersist();
   }
 

@@ -65,6 +65,12 @@ const PANEL_CSS = `
    flag is cleared. The MEANING of the flag (e.g. "unread") is the integrator's — Tackback only paints
    and clears it; it attaches no semantics of its own. */
 .tb-badge.tb-attn, .tb-pin.tb-attn { background: var(--tb-attention) !important; color: #fff !important; }
+/* Something here has not been read yet. A RING, not a fill: attention already owns the fill, and the
+   two say different things, so an anchor that is both wears both and neither has to win. A box-shadow
+   rather than an outline because it follows border-radius (same reason the on-surface frame uses one),
+   and because the ring is then visible in grayscale as a shape, not only as a colour. */
+.tb-badge.tb-unread { box-shadow: 0 0 0 2px var(--tb-unread); }
+.tb-pin.tb-unread { box-shadow: 0 0 0 2px var(--tb-unread), 0 1px 4px rgba(0,0,0,.3); }
 /* The document lane: the conversation about the document as a whole, composed from a bar across the
    bottom of the viewport rather than reached from a mark, because it is about no particular place.
    It FLOATS — the library never shifts the host's layout (same reason badges are overlay-positioned)
@@ -96,6 +102,10 @@ const PANEL_CSS = `
 .tb-lane .tb-lane-title { font-weight: 600; flex: 1; }
 .tb-lane .tb-lane-count { font-size: 11px; opacity: .75; }
 .tb-lane.tb-attn .tb-lane-count { background: var(--tb-attention); color: #fff; border-radius: 9px; padding: 0 7px; opacity: 1; }
+/* The document thread has no mark on the page — the lane's own count IS its mark, so the ring goes
+   there. Padding and radius are repeated because the count is otherwise a bare number with nothing
+   for a ring to sit around. */
+.tb-lane.tb-unread .tb-lane-count { box-shadow: 0 0 0 2px var(--tb-unread); border-radius: 9px; padding: 0 7px; opacity: 1; }
 .tb-lane .tb-lane-composer { margin-top: 8px; }
 /* Collapsed is not "closed": the composer stays, because the point of a lane rather than a button
    is that you can type into it without opening anything. Expanding adds the history above it. */
@@ -638,6 +648,12 @@ export function attachPanel(core, options = {}) {
     }
     countEl.textContent = t('panel.count', { n: utteranceCount(core.listComments()) });   // utterances, so the panel total agrees with the badges
     refreshLane();
+    // The badges were just rebuilt, so whatever ring they had went with them. Asked again rather than
+    // carried over — the answer lives in one place and this is a redraw, not a second opinion. Twice:
+    // now, so the redraw is not left blank, and again at the boundary, because a redraw driven by a
+    // change is happening before that change's effect on the reader's progress has been worked out.
+    syncUnread();
+    syncUnreadAtBoundary();
     orphanedIds.clear(); for (const id of currentOrphans) orphanedIds.add(id);   // transition set for the next render (all kinds)
     // apply the collected orphan/resolve mutations AFTER the render pass (no mid-iteration re-entry).
     // reportOrphaned is idempotent + transition-guarded; markResolved is a no-op on a non-orphan — so the
@@ -1497,6 +1513,42 @@ export function attachPanel(core, options = {}) {
     });
     refreshLane();   // the document thread's "mark" is the panel control
   }
+
+  /**
+   * Ring every anchor whose thread holds something unread, and unring the rest.
+   *
+   * The panel keeps NO record of what is unread. It asks, every time, and paints what it is told —
+   * so the event path and the redraw path cannot drift, because neither of them remembers anything.
+   * That is also why the same targeted-toggle shape as attention is right here: rebuilding every
+   * overlay would throw away the elements an in-flight region drag is holding.
+   */
+  /**
+   * Ask again once the turn has finished moving.
+   *
+   * A redraw happens inside the change that caused it, which is BEFORE the reader's progress has been
+   * worked out for that turn — so painting from the answer available then can ring a thread the reader
+   * has open. The correction never arrives on its own: from the core's side nothing changed (it was
+   * clear before and clear after), so there is nothing for it to announce. Asking once more at the
+   * boundary is the panel's own job, and it is cheap because the answer is derived either way.
+   */
+  let unreadAskPending = false;
+  function syncUnreadAtBoundary() {
+    if (unreadAskPending) return;
+    unreadAskPending = true;
+    const ask = () => { unreadAskPending = false; if (!destroyed) syncUnread(); };
+    if (typeof queueMicrotask === 'function') queueMicrotask(ask); else Promise.resolve().then(ask);
+  }
+  function syncUnread() {
+    const unread = new Set(core.unreadThreads().map((e) => e.threadKey));
+    doc.querySelectorAll('.tb-badge,.tb-pin').forEach((node) => {
+      const cs = node.__tbComments;
+      if (cs && cs.length) node.classList.toggle('tb-unread', unread.has(threadKeyOf(cs[0])));
+    });
+    // The document thread has nowhere on the page to be marked, so the lane wears it — the one host
+    // that carries its own indicator, which is a fact about this caller rather than about hosts.
+    if (lane) lane.classList.toggle('tb-unread', unread.has('document'));
+  }
+  onCore('unread:change', syncUnread);
   onCore('attention:change', syncAttention);
   onCore('transport:change', () => broadcast((c) => c.relabel()));   // Save ⇄ Send, live, on every host
   if (lane) buildLaneConversation();   // late: the factory closes over drafts/reactions declared above
