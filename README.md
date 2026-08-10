@@ -237,16 +237,21 @@ Because it is a snapshot, **same-turn transients are coalesced away**: open a th
 before the boundary and nothing is emitted. This reports settled visibility; it is not a lossless
 interaction log. If you need to count impressions, count them from your own handlers.
 
-The panel is what can see its own Panes and lane, so it is the panel that answers — attach one and the reports
-begin; a core with no panel reports nothing and `visibleThreads()` is empty. One display at a time,
-matching the one-panel-per-document rule above: attaching again replaces the previous answerer rather
-than joining it.
+The panel is what can see its own Panes and lane, so it is the panel that answers — attach one and the
+reports begin; a core with no panel reports nothing and `visibleThreads()` is empty. If you show
+threads some other way, you can answer instead of it (below).
 
-If the display cannot be read at all, the core does not guess: no report is delivered, the last state
-anyone actually observed stands, an `error` is emitted, and **`visibleThreads()` throws
-`TackbackError('ADAPTER_FAILED')`** rather than answering a question about now with something from
-before. Catch it and treat visibility as unknown — keep whatever you last rendered — until a report
-arrives or a later pull succeeds:
+If the display cannot be read at all, the core does not guess: no report is delivered and the last
+state anyone actually observed stands, rather than a question about now being answered with something
+from before. The two ways of asking say so differently, and each says it once:
+
+- **A pull refuses.** `visibleThreads()` throws `TackbackError('ADAPTER_FAILED')` — you asked, so you
+  are told directly. It emits nothing; the exception is the answer.
+- **A scheduled report goes quiet, then hands the failure back.** The core looks again a few times on
+  its own first, so a display that is unreadable for a moment and readable by the next look costs
+  nobody anything. When those are spent, **one** `error` is emitted. It stays one for as long as the
+  situation is one: later changes re-ask and find the same thing, and do not report it again. A
+  successful look, or a different display, starts the count over.
 
 ```js
 let readable;
@@ -256,8 +261,29 @@ catch { /* unknown right now — keep the last known and wait for the next repor
 
 Recovery is the display's to signal. Every store mutation already asks for a fresh look, so an
 integration that keeps writing recovers on its own; if nothing is being written, call
-`tb.reportThreadVisibility()` when the display becomes readable again. The core retries a few times
-by itself, but it cannot know when the condition that made a display unreadable has passed.
+`tb.reportThreadVisibility()` when the display becomes readable again. The core cannot know when the
+condition that made a display unreadable has passed.
+
+**Answering it yourself.** The panel registers as a display; anything else that puts threads on screen
+can do the same. The provider is asked at the moment an answer is needed and its return value is never
+kept as truth, so it may be a plain projection of whatever is currently shown:
+
+```js
+const stopAnswering = tb.registerThreadVisibility(() => myOpenThreads.map((t) => ({
+  threadKey: t.key,             // the thread's identity, as `visible` reports it
+  anchor: t.anchor,             // where it points — a valid anchor, never null
+  comments: t.utteranceIds,     // every utterance id the reader can see in it, replies included
+})));
+
+tb.reportThreadVisibility();    // "something moved" — the core decides whether that changed anything
+stopAnswering();                // at teardown; withdrawing is itself a transition and is reported
+```
+
+Registering again **replaces** the previous display rather than joining it, matching the
+one-panel-per-document rule above — the replaced one is never asked again, and its withdrawal function
+becomes a no-op. Throwing from the provider, or returning an entry whose anchor is missing or of a kind
+this build does not know, is treated as a failed look, not as a partial one: nothing is published from
+an answer the core could only half use.
 
 **What "readable" does and does not mean.** It means a Pane is on screen showing that thread, or the
 document lane is expanded — library state, reported as a settled fact. It does **not** mean a person
