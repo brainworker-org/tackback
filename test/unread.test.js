@@ -20,16 +20,37 @@ import { Tackback } from '../src/index.js';
 const settle = () => new Promise((r) => setTimeout(r, 0));
 const quiet = async () => { for (let i = 0; i < 4; i += 1) await settle(); };
 
-/** A storage adapter the test can look inside. The stored shape is part of the adapter contract. */
-const makeStore = (seed = null) => {
+/**
+ * A storage adapter the test can look inside. TWO records, because that is the contract: the document
+ * is what people wrote, progress is how far this reader got, and they are written by different acts.
+ * Keeping them apart here is what lets a test say which of the two a given operation touched.
+ */
+const makeStore = (seed = null, progressSeed = null) => {
+  let saved = seed, progress = progressSeed;
+  return {
+    adapter: {
+      load: () => saved, save: (doc) => { saved = doc; },
+      loadProgress: () => progress, saveProgress: (p) => { progress = p; },
+    },
+    peek: () => saved,
+    peekProgress: () => progress,
+  };
+};
+/** One that has nowhere to put progress — an adapter written before this existed. */
+const makeDocumentOnlyStore = (seed = null) => {
   let saved = seed;
   return { adapter: { load: () => saved, save: (doc) => { saved = doc; } }, peek: () => saved };
 };
 
-/** One that refuses to write until told otherwise. */
+/** One that refuses to write until told otherwise — both records, so neither is durable meanwhile. */
 const makeFlaky = () => {
-  const a = { fail: true, saves: [] };
-  a.adapter = { load: () => null, save: (doc) => { if (a.fail) throw new Error('quota'); a.saves.push(doc); } };
+  const a = { fail: true, saves: [], progressSaves: [] };
+  a.adapter = {
+    load: () => null,
+    save: (doc) => { if (a.fail) throw new Error('quota'); a.saves.push(doc); },
+    loadProgress: () => null,
+    saveProgress: (p) => { if (a.fail) throw new Error('quota'); a.progressSaves.push(p); },
+  };
   return a;
 };
 
@@ -457,11 +478,9 @@ test('T17: what one environment has read is not carried in the shared file', asy
 test('T18: a reader who cannot write comments still records what they have read', async () => {
   // The reader who only reads is who this is FOR. If their progress cannot be kept, the feature does
   // nothing for the person it was built for.
-  const store = makeStore({
-    schemaVersion: 1, documentId: 'd',
-    comments: [entry('c1', 'p1'), entry('c2', 'p1')],
-    arrival: { c1: 1, c2: 2 }, observed: { 'block:p1': 1 }, arrivalNext: 3,
-  });
+  const store = makeStore(
+    { schemaVersion: 1, documentId: 'd', comments: [entry('c1', 'p1'), entry('c2', 'p1')] },
+    { arrival: { c1: 1, c2: 2 }, observed: { 'block:p1': 1 }, arrivalNext: 3 });
   const a = mount({ storage: store.adapter, readOnly: true });
   await a.ready;
   await settle();
@@ -470,7 +489,7 @@ test('T18: a reader who cannot write comments still records what they have read'
   await d.show('block:p1');
   assert.equal(a.unreadCount('block:p1'), 0);
   await quiet();
-  assert.equal(store.peek().observed['block:p1'], 2, 'and it was written down');
+  assert.equal(store.peekProgress().observed['block:p1'], 2, 'and it was written down');
   a.destroy();
 
   const b = mount({ storage: store.adapter, readOnly: true });
@@ -502,7 +521,9 @@ test('T19: a failed save does not undo what the reader did, and the next one cat
   const last = flaky.saves.at(-1);
   assert.ok(last, 'a save finally landed');
   assert.equal(last.comments.length, 2, 'carrying everything, not just what came after the failure');
-  assert.ok(last.observed['block:p1'] >= 1, 'including what had been read while saving was broken');
+  const lastProgress = flaky.progressSaves.at(-1);
+  assert.ok(lastProgress, 'and so did the progress, which is written separately now');
+  assert.ok(lastProgress.observed['block:p1'] >= 1, 'carrying what had been read while saving was broken');
   invariants(core, 'T19');
   core.destroy();
 });
@@ -732,11 +753,11 @@ test('T35: asking about something that is not a thread is a question, not an err
 
 test('T36: before anything is loaded, and after everything is over', async () => {
   let release;
-  const seed = {
-    schemaVersion: 1, documentId: 'd', comments: [entry('c1', 'p1')],
-    arrival: { c1: 1 }, observed: {}, arrivalNext: 2,
-  };
-  const core = mount({ storage: { load: () => new Promise((r) => { release = () => r(seed); }), save: () => {} } });
+  const seed = { schemaVersion: 1, documentId: 'd', comments: [entry('c1', 'p1')] };
+  const core = mount({ storage: {
+    load: () => new Promise((r) => { release = () => r(seed); }), save: () => {},
+    loadProgress: () => ({ arrival: { c1: 1 }, observed: {}, arrivalNext: 2 }), saveProgress: () => {},
+  } });
   assert.equal(core.unreadCount('block:p1'), 0, 'nothing has been read in yet, so nothing is known');
   assert.deepEqual(core.unreadThreads(), []);
 
@@ -769,7 +790,11 @@ test('T37: stored records are believed only as far as they can be', async () => 
       { comments: [entry('c1')], arrival: { c1: 1 }, observed: { 'block:p1': 7 }, arrivalNext: 10 }, 0],
   ];
   for (const [what, over, expected] of cases) {
-    const store = makeStore({ schemaVersion: 1, documentId: 'd', ...over });
+    // The cases are written as one object because that is how they read; the two records are split
+    // here. No progress keys at all is the record written before any of this existed.
+    const { comments, ...progress } = over;
+    const store = makeStore({ schemaVersion: 1, documentId: 'd', comments },
+      Object.keys(progress).length ? progress : null);
     const core = mount({ storage: store.adapter });
     await core.ready;
     await settle();
@@ -780,10 +805,8 @@ test('T37: stored records are believed only as far as they can be', async () => 
 });
 
 test('T37: a cursor past everything ever handed out cannot swallow what comes next', async () => {
-  const store = makeStore({
-    schemaVersion: 1, documentId: 'd', comments: [entry('c1')],
-    arrival: { c1: 1 }, observed: { 'block:p1': 999 }, arrivalNext: 2,
-  });
+  const store = makeStore({ schemaVersion: 1, documentId: 'd', comments: [entry('c1')] },
+    { arrival: { c1: 1 }, observed: { 'block:p1': 999 }, arrivalNext: 2 });
   const core = mount({ storage: store.adapter });
   await core.ready;
   await settle();
@@ -798,10 +821,8 @@ test('T37: a cursor past everything ever handed out cannot swallow what comes ne
 test('T37: a counter that would hand out a number twice is corrected', async () => {
   // Reuse shows up as an arrival landing UNDER a cursor and disappearing, so the cursor is what
   // detects it.
-  const store = makeStore({
-    schemaVersion: 1, documentId: 'd', comments: [entry('c1')],
-    arrival: { c1: 1 }, observed: { 'block:p1': 1 }, arrivalNext: 0,
-  });
+  const store = makeStore({ schemaVersion: 1, documentId: 'd', comments: [entry('c1')] },
+    { arrival: { c1: 1 }, observed: { 'block:p1': 1 }, arrivalNext: 0 });
   const core = mount({ storage: store.adapter });
   await core.ready;
   await settle();
@@ -928,8 +949,7 @@ test('T45: a stored document gets the same reading as an envelope', async () => 
         entry('c1', 'p1'),
         entry('c2', 'p1', { replies: [{ body: 'nameless', createdAt: NOW_ISH }, { id: 'r2', body: 'fine', createdAt: NOW_ISH }] }),
       ],
-      arrival: { c1: 1, c2: 2, r2: 3 }, observed: {}, arrivalNext: 4,
-    });
+    }, { arrival: { c1: 1, c2: 2, r2: 3 }, observed: {}, arrivalNext: 4 });
     const core = mount({ storage: store.adapter });
     const errors = [];
     core.on('error', (e) => errors.push(e));
@@ -946,8 +966,7 @@ test('T45: a stored document gets the same reading as an envelope', async () => 
     const store = makeStore({
       schemaVersion: 1, documentId: 'd',
       comments: [entry('c1', 'p1', { body: 'first' }), entry('c1', 'p1', { body: 'second' })],
-      arrival: { c1: 1 }, observed: {}, arrivalNext: 2,
-    });
+    }, { arrival: { c1: 1 }, observed: {}, arrivalNext: 2 });
     const core = mount({ storage: store.adapter });
     const errors = [];
     core.on('error', (e) => errors.push(e));
@@ -963,8 +982,7 @@ test('T45: a stored document gets the same reading as an envelope', async () => 
     const store = makeStore({
       schemaVersion: 1, documentId: 'd',
       comments: [{ anchor: { type: 'block', elementId: 'p1' }, body: 'no id', createdAt: NOW_ISH, replies: [{ id: 'r1', body: 'orphaned', createdAt: NOW_ISH }] }],
-      arrival: {}, observed: {}, arrivalNext: 1,
-    });
+    }, { arrival: {}, observed: {}, arrivalNext: 1 });
     const core = mount({ storage: store.adapter });
     const errors = [];
     core.on('error', (e) => errors.push(e));
@@ -1015,12 +1033,9 @@ test('T41: a save queued behind a destroy never happens', async () => {
 });
 
 test('T42: what was restored as unread arrives as an ordinary announcement', async () => {
-  const seed = {
-    schemaVersion: 1, documentId: 'd',
-    comments: [entry('c1', 'p1'), entry('c2', 'p1')],
-    arrival: { c1: 1, c2: 2 }, observed: { 'block:p1': 1 }, arrivalNext: 3,
-  };
-  const core = mount({ storage: makeStore(seed).adapter });
+  const seed = { schemaVersion: 1, documentId: 'd', comments: [entry('c1', 'p1'), entry('c2', 'p1')] };
+  const core = mount({ storage: makeStore(seed,
+    { arrival: { c1: 1, c2: 2 }, observed: { 'block:p1': 1 }, arrivalNext: 3 }).adapter });
   const early = [];
   core.on('unread:change', (e) => early.push(e));
   await core.ready;
@@ -1035,7 +1050,8 @@ test('T42: what was restored as unread arrives as an ordinary announcement', asy
   assert.deepEqual(core.unreadThreads(), [{ threadKey: 'block:p1', count: 1 }], 'they ask instead');
   core.destroy();
 
-  const empty = mount({ storage: makeStore({ schemaVersion: 1, documentId: 'd', comments: [entry('c1')], arrival: { c1: 1 }, observed: { 'block:p1': 1 }, arrivalNext: 2 }).adapter });
+  const empty = mount({ storage: makeStore({ schemaVersion: 1, documentId: 'd', comments: [entry('c1')] },
+    { arrival: { c1: 1 }, observed: { 'block:p1': 1 }, arrivalNext: 2 }).adapter });
   const none = [];
   empty.on('unread:change', (e) => none.push(e));
   await empty.ready;
@@ -1206,4 +1222,112 @@ test('the library owns identity on every way in, replies included', async () => 
   assert.equal(core.unreadCount('block:p2'), 2, 'and both new utterances are new — neither inherits a reading');
   invariants(core, 'identity on the add path');
   core.destroy();
+});
+
+// ---- reading writes progress, and nothing else ---------------------------------------------------
+//
+// The document and this reader's progress are written by different acts and belong to different
+// people: comments are what somebody wrote, progress is how far somebody read. While one write
+// carried both, reading — which cannot change a comment — wrote every comment the reader happened to
+// be holding, and so undid whatever another instance had written since. These fix the separation
+// itself rather than the symptom, because the symptom is silent.
+
+test('reading never writes the document', async () => {
+  const store = makeStore(
+    { schemaVersion: 1, documentId: 'd', comments: [entry('c1', 'p1')] },
+    { arrival: { c1: 1 }, observed: {}, arrivalNext: 2 });
+  let documentWrites = 0;
+  const watched = { ...store.adapter, save: (d) => { documentWrites += 1; store.adapter.save(d); } };
+  const core = mount({ storage: watched });
+  await core.ready;
+  await quiet();
+  assert.equal(core.unreadCount('block:p1'), 1);
+  documentWrites = 0;
+
+  const d = display(core);
+  await d.show('block:p1');
+  await quiet();
+  assert.equal(core.unreadCount('block:p1'), 0, 'the reading happened');
+  assert.equal(store.peekProgress().observed['block:p1'], 1, 'and was written down');
+  assert.equal(documentWrites, 0, 'without the document being written at all');
+  core.destroy();
+});
+
+test('an instance that has read but not written cannot undo what another wrote', async () => {
+  // The failure this separation removes. Two instances on one storage — the ordinary "same page open
+  // twice" — where one only ever reads. It used to write back the comments it loaded at mount, so the
+  // other one's work vanished with no error and no sign, until the next reload.
+  let document = { schemaVersion: 1, documentId: 'd', comments: [entry('c1', 'p1')] };
+  let progress = { arrival: { c1: 1 }, observed: {}, arrivalNext: 2 };
+  const shared = {
+    load: () => document, save: (d) => { document = d; },
+    loadProgress: () => progress, saveProgress: (p) => { progress = p; },
+  };
+  const bodies = () => document.comments.map((c) => c.body);
+
+  const reader = mount({ storage: shared });
+  await reader.ready;
+  await quiet();
+
+  const writer = mount({ storage: shared });
+  await writer.ready;
+  writer.addComment({ anchor: { type: 'block', elementId: 'p2' }, body: 'written by the other one' });
+  await quiet();
+  assert.deepEqual(bodies(), ['c1', 'written by the other one']);
+
+  // The reader does the only thing it has done all session: it reads.
+  const d = display(reader);
+  await d.show('block:p1');
+  await quiet();
+  assert.deepEqual(bodies(), ['c1', 'written by the other one'], 'still there');
+  assert.equal(reader.unreadCount('block:p1'), 0, 'and the reading was recorded all the same');
+  reader.destroy(); writer.destroy();
+});
+
+test('an adapter with nowhere to keep progress keeps its comments safe', async () => {
+  // Adapters written before progress existed have no method for it. They do not get it — unread lives
+  // only as long as the instance does. What they must never get is the old behaviour of folding it
+  // into the document write, because that is exactly what cost them their comments.
+  const store = makeDocumentOnlyStore({ schemaVersion: 1, documentId: 'd', comments: [entry('c1', 'p1')] });
+  let documentWrites = 0;
+  const watched = { load: store.adapter.load, save: (d) => { documentWrites += 1; store.adapter.save(d); } };
+  const core = mount({ storage: watched });
+  await core.ready;
+  await quiet();
+  assert.equal(core.unreadCount('block:p1'), 0, 'no progress record at all reads as the old shape: already seen');
+
+  core.importEnvelope(envelope([entry('c2', 'p1')]), { mode: 'merge' });
+  await quiet();
+  assert.equal(core.unreadCount('block:p1'), 1, 'and the next arrival is still new');
+  documentWrites = 0;
+
+  const d = display(core);
+  await d.show('block:p1');
+  await quiet();
+  assert.equal(core.unreadCount('block:p1'), 0, 'reading works in memory');
+  assert.equal(documentWrites, 0, 'and writes nothing');
+  core.destroy();
+});
+
+test('progress comes back through its own record, and the document through its own', async () => {
+  const store = makeStore();
+  const a = mount({ storage: store.adapter });
+  const da = display(a);
+  a.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'read this' });
+  await da.show('block:p1');
+  a.addComment({ anchor: { type: 'block', elementId: 'p2' }, body: 'not this' });
+  await quiet();
+  assert.deepEqual(Object.keys(store.peek()).sort(), ['comments', 'documentId', 'schemaVersion'],
+    'the document record carries the document and nothing else');
+  assert.deepEqual(Object.keys(store.peekProgress()).sort(), ['arrival', 'arrivalNext', 'observed'],
+    'and the progress record carries the progress');
+  a.destroy();
+
+  const b = mount({ storage: store.adapter });
+  await b.ready;
+  await settle();
+  assert.equal(b.unreadCount('block:p1'), 0, 'read stays read across the two records');
+  assert.equal(b.unreadCount('block:p2'), 1, 'and unread stays unread');
+  invariants(b, 'two records');
+  b.destroy();
 });

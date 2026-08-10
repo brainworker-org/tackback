@@ -103,6 +103,7 @@ class TackbackInstance {
     this._loadFaults = [];           // entries refused while restoring; reported just before `ready`
     this._saveChain = Promise.resolve();
     this._persistQueued = false;
+    this._documentDirty = false;   // set only by a real change, never by reading
 
     const key = options.storageKey || `tackback::${this._doc.id}`;
     // The engine writes environment-local state itself, so it holds the adapter too. The store keeps
@@ -878,7 +879,7 @@ class TackbackInstance {
     this._scheduleVisibility();
     const payload = { comments, changes: diff, source };
     this._emitter.emit('change', payload);
-    this._schedulePersist();
+    this._schedulePersist(true);
   }
 
   /**
@@ -918,13 +919,22 @@ class TackbackInstance {
     for (const key of this._observed.keys()) if (!threads.has(key)) this._observed.delete(key);
   }
 
-  /** Everything worth keeping, as one whole. Written in full every time, so a save never depends on
-   *  an earlier one having landed. */
+  /** The document, as one whole. Written in full, so a save never depends on an earlier one landing. */
   _snapshotStored() {
+    return { schemaVersion: 1, documentId: this._doc.id, comments: [...this._store.list()] };
+  }
+
+  /**
+   * What THIS reader has got to. Kept apart from the document on purpose.
+   *
+   * They are written by different acts and belong to different people: comments are what somebody
+   * wrote, progress is how far somebody has read. Putting them in one indivisible write meant that
+   * reading — which cannot change a comment — nevertheless wrote every comment the reader happened to
+   * be holding, and so undid what another instance had written since. Separating the two removes the
+   * ability rather than guarding against its use.
+   */
+  _snapshotProgress() {
     return {
-      schemaVersion: 1,
-      documentId: this._doc.id,
-      comments: [...this._store.list()],
       arrival: Object.fromEntries(this._arrival),
       observed: Object.fromEntries(this._observed),
       arrivalNext: this._arrivalNext,
@@ -939,15 +949,29 @@ class TackbackInstance {
    * finish in whatever order the storage feels like, and an older snapshot landing last quietly puts
    * a thread back to unread. Coalescing because the intermediate states have no value — every save
    * carries everything, so the last one is the only one that has to arrive.
+   *
+   * @param {boolean} [documentToo] whether the DOCUMENT changed. Reading never sets it, and that is
+   *   the whole of the guarantee: an instance that has not written anything cannot write anything.
    */
-  _schedulePersist() {
+  _schedulePersist(documentToo = false) {
+    if (documentToo) this._documentDirty = true;
     if (this._persistQueued) return;
     this._persistQueued = true;
     this._saveChain = this._saveChain
       .then(() => {
         this._persistQueued = false;
         if (this._destroyed) return undefined;   // a queued save has nothing left to be about
-        return this._envAdapter.save(this._snapshotStored());
+        const writeDocument = this._documentDirty;
+        this._documentDirty = false;
+        // Progress goes to its own place. An adapter that has nowhere to put it simply does not get it
+        // — unread stays true for as long as this instance lives and is rebuilt from scratch next
+        // time. That is the safe way to be incomplete: the alternative, folding progress into the
+        // document write, is what let reading overwrite comments in the first place.
+        const progress = typeof this._envAdapter.saveProgress === 'function'
+          ? this._envAdapter.saveProgress(this._snapshotProgress())
+          : undefined;
+        if (!writeDocument) return progress;
+        return Promise.resolve(progress).then(() => this._envAdapter.save(this._snapshotStored()));
       })
       // A failed save is a durability failure, not a meaning one: the reader did read it. Memory keeps
       // what it knows, the failure is reported, and the next save — every change and every observation
@@ -966,6 +990,11 @@ class TackbackInstance {
    * @param {import('./storage.js').StoredDocument|null} doc
    */
   _hydrateEnv(doc) {
+    // Progress comes from its own place, and an adapter with nowhere to keep it simply has none — the
+    // document restores exactly as before and everything in it reads as new. The two are read
+    // together here only because they have to be reconciled before anything is derived from them.
+    const kept = typeof this._envAdapter.loadProgress === 'function' ? this._envAdapter.loadProgress() : null;
+    const progress = (kept && typeof kept === 'object' && typeof kept.then !== 'function') ? kept : null;
     if (!doc) { this._arrivalNext = 1; return doc; }
     // An adapter's answer is outside input, exactly like an envelope, and gets the same check.
     const { comments, faults } = sanitizeComments(doc.comments);
@@ -975,10 +1004,10 @@ class TackbackInstance {
     // unread on the day this version ships, which is the exact state the feature exists to end.
     // One field present is enough to mean the opposite: this writer knew about reading, and a thread
     // it does not mention is one nobody has opened.
-    const legacy = doc.arrival === undefined && doc.observed === undefined && doc.arrivalNext === undefined;
+    const legacy = !progress;
     const counts = (v) => Number.isSafeInteger(v) && v >= 1;
 
-    const declared = (doc.arrival && typeof doc.arrival === 'object') ? doc.arrival : {};
+    const declared = (progress && typeof progress.arrival === 'object' && progress.arrival) ? progress.arrival : {};
     const byNumber = new Map();
     for (const [id, v] of Object.entries(declared)) {
       if (!counts(v)) continue;                       // not a number that could have been handed out
@@ -995,11 +1024,11 @@ class TackbackInstance {
     for (const v of this._arrival.values()) if (v > highest) highest = v;
     // Never hand out a number twice, whatever the stored counter says. A reused number is read as
     // already-seen by whatever cursor is sitting above it.
-    this._arrivalNext = Math.max(counts(doc.arrivalNext) ? doc.arrivalNext : 1, highest + 1);
+    this._arrivalNext = Math.max(counts(progress?.arrivalNext) ? progress.arrivalNext : 1, highest + 1);
     this._ensureArrival(comments);
 
     const issued = this._arrivalNext - 1;
-    const observed = (doc.observed && typeof doc.observed === 'object') ? doc.observed : {};
+    const observed = (progress && typeof progress.observed === 'object' && progress.observed) ? progress.observed : {};
     for (const [key, v] of Object.entries(observed)) {
       // Structurally wrong — not an integer, or not positive — is treated as never written, which in a
       // record that knows about reading means unread.

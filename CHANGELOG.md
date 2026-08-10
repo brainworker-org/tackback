@@ -41,10 +41,16 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
   the reader leaves no trace — and a reader who cannot comment is exactly who unread is for. Their
   progress is written through the adapter you supplied. An adapter assuming "readOnly means no save"
   has that assumption broken in this version.
-- **The storage adapter contract gains two requirements**, because environment-local state now lives
-  in it: one storage belongs to **one environment** (a server-backed adapter shared between viewers
-  would make one person's reading everybody's), and **one instance at a time** may hold it (numbering
-  is per instance). The default localStorage adapter satisfies both.
+- **The storage adapter gains an optional second record.** What a reader has got to is saved through
+  `loadProgress` / `saveProgress`, never folded into the document write. That separation is the
+  guarantee rather than a tidiness choice: an instance that has only read cannot write a comment, so
+  it can never undo what another one wrote — which a single combined write made possible, silently,
+  whenever the same document was open twice. An adapter without the pair is simply not given progress:
+  unread lives as long as the instance, and its comments are never at risk. The built-in adapters
+  implement both, keeping progress under its own key.
+- **Two requirements come with progress**: one storage belongs to **one environment** (a server-backed
+  adapter shared between viewers would make one person's reading everybody's), and arrival numbering
+  assumes **one live instance at a time** per environment.
 - **An import may no longer change which utterance is which.** Every utterance needs a non-empty id,
   unique across the document, and stays in the thread it was written into. An entry breaking either —
   an id-less reply, an id already in use, a known utterance carried to another anchor, or one the same
@@ -58,11 +64,13 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
   input to it. No new reporting path was added.
 
 ### Known limitations
-- **Unread does not survive a downgrade.** The three stored fields are optional, so 0.9.6 reads 0.9.7
-  data — and drops them when it saves. Returning to 0.9.7 afterwards, the document reads as predating
-  unread tracking and everything in it counts as seen.
-- **One instance per environment.** Two instances on one storage hand out the same numbers and
-  overwrite each other's snapshots. Reconciling them is not attempted here.
+- **An older build ignores unread rather than corrupting it.** Progress is its own record, which 0.9.6
+  neither reads nor writes, so the document round-trips through it untouched. What an older build
+  cannot do is advance anything: come back and the progress is as you left it, while whatever arrived
+  meanwhile reads as new.
+- **One instance per environment, for numbering.** Two live instances hand out the same arrival
+  numbers, so what each has read is its own. They can no longer destroy each other's comments — that was
+  what separating the two records removed — but reconciling their numbering is not attempted here.
 - **A failed save is not retried by itself.** It is reported, memory is unaffected, and the next save
   carries everything. If nothing changes and nothing is read after it, that state is not written.
 - **Unread is carried by colour and shape only** — no screen-reader text, no motion, no sound.

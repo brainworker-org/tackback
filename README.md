@@ -237,18 +237,28 @@ actually establish. What it deliberately does not claim:
   by colour *and* by shape (ring or no ring), and that is an accepted limit, not an oversight.
 
 Both records belong to **this environment** — the browser profile, not the person and not the server.
-They ride in the same storage adapter as your comments, and they are **never** in the export envelope:
-what one reader has read is not part of a shared file.
+They go through the storage adapter you already provide, and they are **never** in the export
+envelope: what one reader has read is not part of a shared file.
+
+Progress is a **second record** with its own pair of adapter methods. It is never folded into the
+document write, and that separation is the guarantee — an instance that has only *read* cannot write
+a comment, so it can never undo what another one wrote:
 
 ```js
-// Everything a reader has read is in the adapter you already provide, under `arrival` / `observed` /
-// `arrivalNext`. Two things the adapter contract now requires:
-//   1. one storage belongs to ONE environment — a server-backed adapter shared between viewers would
-//      make one person's reading everybody's;
-//   2. one instance at a time per environment — numbering is per instance, and two of them would hand
-//      out the same numbers and overwrite each other's snapshots.
-// A readOnly mount DOES write: a reader who cannot comment is exactly who this is for.
+const mine = {
+  load: () => theDocument,          save: (doc) => { theDocument = doc; },
+  loadProgress: () => theProgress,  saveProgress: (p) => { theProgress = p; },   // optional
+};
 ```
+
+Leave the progress pair out and unread simply is not durable — it lives as long as the instance and
+starts fresh next time. That is the safe way to be incomplete; your comments are never at risk either
+way. The built-in adapters implement both.
+
+Two requirements come with progress: **one storage belongs to one environment** (sharing it between
+viewers would make one person's reading everybody's), and **arrival numbering assumes one live
+instance at a time** per environment. A `readOnly` mount calls `saveProgress` and never calls `save` —
+`readOnly` means the document does not change, not that the reader leaves no trace.
 
 ### Which threads a reader can see
 
@@ -428,10 +438,10 @@ you inject your own pdf.js into `createPdfAdapter`, so nothing of pdf.js is redi
   for; `allowPartial` does not override this. The one way to move an utterance is to bury the old id
   and create a new one at the new anchor — both in the same envelope is fine.
   A stored document coming back from your adapter is checked the same way.
-- **Unread state does not survive a downgrade.** `arrival` / `observed` / `arrivalNext` are optional
-  fields in the stored document, so 0.9.6 reads 0.9.7 data happily — but it drops them when it saves.
-  Coming back to 0.9.7 afterwards, the document looks like it predates unread tracking and everything
-  in it counts as already read.
+- **An older build ignores unread rather than corrupting it.** Progress lives in its own record, which
+  0.9.6 neither reads nor writes, so the stored document round-trips through it untouched. What an
+  older build cannot do is *advance* anything: come back to 0.9.7 and the progress is exactly as it
+  was when you left, while whatever arrived meanwhile reads as new.
 - **A failed save is not retried on its own.** It is reported, memory keeps what it knows, and the
   next save carries everything again. If nothing further changes and nothing further is read, that
   last state is not written.
