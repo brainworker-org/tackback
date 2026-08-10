@@ -236,7 +236,13 @@ export function createComment(input, now) {
   if (input.reaction) c.reaction = input.reaction;
   if (input.author !== undefined) c.author = input.author;
   if (input.threadId) c.threadId = input.threadId;
-  if (input.replies && input.replies.length) c.replies = input.replies.slice();
+  // Initial replies are minted here, exactly as `addReply` mints one. The rule above — the library
+  // owns identity, callers never bring their own — was true of the comment and not of anything hung
+  // under it, so this was the one way in for an id that already named something else. Nothing
+  // downstream can tell where such an id came from, and what it produces is an utterance counted as
+  // already read because another utterance was. A thread with a history to preserve arrives by
+  // import, which checks identities rather than trusting them.
+  if (input.replies && input.replies.length) c.replies = input.replies.map((r) => createReply(r, now));
   if (input.snapshot) c.snapshot = input.snapshot;
   return c;
 }

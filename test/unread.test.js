@@ -1180,3 +1180,30 @@ test('keepBoth: a minted id does not take one the same envelope is delivering', 
   invariants(core, 'keepBoth envelope-wide');
   core.destroy();
 });
+
+test('the library owns identity on every way in, replies included', async () => {
+  // The fourth place a rule was enforced at one granularity and acted on at another. Adding a comment
+  // accepts initial replies, and those went in wearing whatever ids the caller supplied — so an id
+  // that already named something else could enter through the ordinary front door, past the check the
+  // import and restore paths both run. What it produces is silent: an utterance counted as already
+  // read because a different utterance was.
+  const core = mount({ storage: makeStore().adapter });
+  const d = display(core);
+  const first = core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'first' });
+  await d.show('block:p1');
+  await d.show();
+  assert.equal(core.unreadCount('block:p1'), 0, 'read, so anything new after this should show');
+
+  // A caller hands over a reply wearing an id that is already in use.
+  core.addComment({
+    anchor: { type: 'block', elementId: 'p2' }, body: 'a new thread',
+    replies: [{ id: first.id, body: 'a reply wearing somebody else\'s name', createdAt: NOW_ISH }],
+  });
+  await settle();
+
+  const everywhere = [...idsOf(core, 'block:p1'), ...idsOf(core, 'block:p2')];
+  assert.equal(new Set(everywhere).size, everywhere.length, 'no id names two utterances');
+  assert.equal(core.unreadCount('block:p2'), 2, 'and both new utterances are new — neither inherits a reading');
+  invariants(core, 'identity on the add path');
+  core.destroy();
+});
