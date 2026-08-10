@@ -9,6 +9,70 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
 ## [0.9.7] — 2026-08-10
 
 ### Added
+- **Unread — where there is something new, and a mark that goes when it is read.** Marking an anchor
+  was only ever half of it: nothing could decide when to clear the mark, so it said "everything",
+  forever, which carries no information at all. Tackback now tracks what has reached this reader and
+  how far they have got, derives the rest, and paints it.
+
+  ```js
+  tb.unreadCount('block:intro');   // → utterances in that thread this reader has not seen
+  tb.unreadThreads();              // → [{ threadKey, count }]
+  tb.on('unread:change', ({ threads }) => …);   // the whole picture, whenever it changes
+  ```
+
+  **New means new here.** Utterances are numbered in the order they reach this environment;
+  `createdAt` is never consulted. Something written a year ago and arriving now is new to this reader,
+  which is the only sense of new a reader can act on. An edit is not an arrival, the same utterance
+  arriving again is not an arrival, and a reply is.
+
+  **Read means it was on screen** — in an open Pane or the expanded document lane, which is the same
+  single question every thread host already answers. It does not mean a person read it, and it does
+  not consult the viewport or your CSS.
+
+  The panel draws it as a **ring** (`tb-unread`, `--tb-unread`) on the anchor, and on the lane's count
+  for the document thread. Attention fills, unread outlines: an anchor that is both wears both.
+
+- **`registerThreadVisibility(provider)` is documented as public.** It was already exported and typed;
+  the guide now shows the provider shape, the replacement rule and the withdrawal function, so a
+  display other than the built-in panel can answer.
+
+### Changed
+- **A readOnly mount now writes to storage.** `readOnly` means the document does not change, not that
+  the reader leaves no trace — and a reader who cannot comment is exactly who unread is for. Their
+  progress is written through the adapter you supplied. An adapter assuming "readOnly means no save"
+  has that assumption broken in this version.
+- **The storage adapter contract gains two requirements**, because environment-local state now lives
+  in it: one storage belongs to **one environment** (a server-backed adapter shared between viewers
+  would make one person's reading everybody's), and **one instance at a time** may hold it (numbering
+  is per instance). The default localStorage adapter satisfies both.
+- **An import may no longer change which utterance is which.** Every utterance needs a non-empty id,
+  unique across the document, and stays in the thread it was written into. An entry breaking either —
+  an id-less reply, an id already in use, a known utterance carried to another anchor, or one the same
+  envelope also buries — is dropped and named by an `IMPORT_ENTRY_DROPPED` error. A **merge** drops it
+  and continues; a **replace** is refused whole (`IMPORT_REPLACE_REJECTED`, document untouched, and
+  `allowPartial` does not override it), because taking the good half of a complete-state declaration
+  composes a document neither side asked for. Moving an utterance means burying the old id and
+  creating a new one. A stored document from your adapter is checked the same way, and its errors
+  arrive just before `ready`.
+- **`thread:visibility` is a snapshot** (see below) and now also drives reading — it is the single
+  input to it. No new reporting path was added.
+
+### Known limitations
+- **Unread does not survive a downgrade.** The three stored fields are optional, so 0.9.6 reads 0.9.7
+  data — and drops them when it saves. Returning to 0.9.7 afterwards, the document reads as predating
+  unread tracking and everything in it counts as seen.
+- **One instance per environment.** Two instances on one storage hand out the same numbers and
+  overwrite each other's snapshots. Reconciling them is not attempted here.
+- **A failed save is not retried by itself.** It is reported, memory is unaffected, and the next save
+  carries everything. If nothing changes and nothing is read after it, that state is not written.
+- **Unread is carried by colour and shape only** — no screen-reader text, no motion, no sound.
+
+### Compatibility
+- **If you have been using attention to mean "unread", you can stop.** Tackback expresses unread
+  itself now, on its own class and its own token, and clears it when the thread is actually read.
+  Attention goes back to being a flag with no meaning of its own — and the two draw on different
+  channels, so nothing forces you to choose in the meantime.
+
 - **`thread:visibility` — which threads a reader can actually see.** A flag like anchor attention is
   only half of a read state; something has to decide when to clear it, and that takes knowing what is
   in front of the reader. `tb.on('thread:visibility', ({ visible, opened, closed }) => …)` reports it
