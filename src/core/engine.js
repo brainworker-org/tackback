@@ -17,6 +17,9 @@ import { TackbackError } from './errors.js';
 const LIB_VERSION = '0.9.7';
 const nowIso = () => new Date().toISOString();
 
+/** How many times the core looks again by itself before handing an unreadable display back. */
+const VISIBILITY_RETRIES = 3;
+
 /**
  * Whether two visibility entries say the same thing. Both id lists arrive sorted and de-duplicated,
  * so this compares what was promised to a subscriber rather than how it was assembled.
@@ -76,7 +79,8 @@ class TackbackInstance {
     this._visibilityProvider = null;            // the one display that can say what is readable
     this._visibilityDelivered = new Map();      // the snapshot subscribers were last told about
     this._visibilityGeneration = 0;             // bumped when a display arrives or withdraws
-    this._visibilityRetries = 0;
+    this._visibilityRetries = 0;                // attempts spent on the CURRENT failure, not ever
+    this._visibilityReported = false;           // whether this failure has already been announced
     this._visibilityRetryPending = false;
     this._visibilityScheduled = false;
     this._attention = new Set();   // comment ids currently flagged for ATTENTION — a generic, live UI
@@ -463,14 +467,26 @@ class TackbackInstance {
     // A later registration REPLACES the earlier one rather than being refused, so re-attaching after
     // a teardown that did not run cannot leave a dead display answering forever.
     this._visibilityProvider = provider;
-    this._visibilityGeneration += 1;
+    this._newVisibilityEpisode();
     this._scheduleVisibility();
     return () => {
       if (this._visibilityProvider !== provider) return;   // already replaced; not ours to withdraw
       this._visibilityProvider = null;
-      this._visibilityGeneration += 1;
+      this._newVisibilityEpisode();
       this._scheduleVisibility();
     };
+  }
+
+  /**
+   * A different display is a different world, so it starts with the whole budget and the right to be
+   * complained about once. Carrying either across would let a display that was never asked more than
+   * once inherit a verdict earned by the one before it — and the failure it inherits is exactly the
+   * one that would have made a fresh look worth taking.
+   */
+  _newVisibilityEpisode() {
+    this._visibilityGeneration += 1;
+    this._visibilityRetries = 0;
+    this._visibilityReported = false;
   }
 
   /** Ask for a report to be reconsidered at the next boundary. Reports that change nothing are dropped. */
@@ -561,11 +577,30 @@ class TackbackInstance {
       // Nothing is installed and nothing is announced. Every mutation re-arms a report, so a bounded
       // retry is only there to cover a stretch in which nothing else happens; the correctness comes
       // from the baseline still being the last state anyone actually saw.
-      if (this._visibilityRetries < 3) { this._visibilityRetries += 1; this._retryVisibilityLater(); }
-      if (attempt.error) this._fail('ADAPTER_FAILED', 'a display could not report what is visible', attempt.error);
+      //
+      // A look VOIDED because the display changed underneath it is not a display that failed, and is
+      // not anyone's to answer for: the arrival or withdrawal has already begun a fresh episode and
+      // asked for another report. Belt and braces — every generation change goes through
+      // `_newVisibilityEpisode`, so nothing is left to spend here anyway — but the rule is written
+      // where the decision is made rather than inferred from somewhere else.
+      if (!attempt.error) return;
+      if (this._visibilityRetries < VISIBILITY_RETRIES) {
+        this._visibilityRetries += 1;
+        this._retryVisibilityLater();
+        return;
+      }
+      // Out of attempts, so responsibility passes to the caller — which is what the error MEANS, and
+      // why it is not said earlier: a display that is unreadable for a moment and readable by the
+      // next look never needed anyone told. It is said ONCE, because "this display cannot be read"
+      // is one fact and does not become several by being rediscovered on every later mutation.
+      // Saying it again takes a successful look in between, or a different display.
+      if (this._visibilityReported) return;
+      this._visibilityReported = true;
+      this._fail('ADAPTER_FAILED', 'a display could not report what is visible', attempt.error);
       return;
     }
     this._visibilityRetries = 0;
+    this._visibilityReported = false;
     const visible = attempt.visible;
     const before = this._visibilityDelivered;
     const now = new Map(visible.map((e) => [e.threadKey, e]));

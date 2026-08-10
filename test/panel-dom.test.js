@@ -1181,6 +1181,13 @@ function recordVisibility(core) {
   return seen;
 }
 const keysOf = (entries) => entries.map((e) => e.threadKey).sort();
+/**
+ * Let the core spend the looks it takes on its own initiative. Until those are gone a failure has not
+ * been handed back to anyone, so a test that wants to see the failure reported has to get here first.
+ * Deliberately more rounds than the core takes: the point is to reach the end of them, not to encode
+ * how many there are.
+ */
+const exhaustSelfRetries = (env) => { for (let i = 0; i < 6; i += 1) { env.flushTimers(); env.drainMicrotasks(); } };
 
 test('visibility: opening a thread is announced at the boundary, not from inside the opening', () => {
   const f = mountPanel({ controls: { docLane: false }, instrument: true });
@@ -1544,7 +1551,8 @@ test('visibility: a display that fails to answer has not stopped showing anythin
     f.core.reportThreadVisibility();
     f.env.drainMicrotasks();
     assert.deepEqual(seen, [], 'a moment of not answering closes nothing');
-    assert.equal(errors.length >= 1, true, 'and is not swallowed either');
+    exhaustSelfRetries(f.env);
+    assert.equal(errors.length, 1, 'and once the core has stopped looking, it is not swallowed either');
 
     failing = false;
     f.core.addComment({ anchor: { type: 'document' }, body: 'recovering' });
@@ -1617,7 +1625,8 @@ test('visibility: a display that cannot be read gives no answer at all, rather t
     f.env.drainMicrotasks();
     assert.throws(() => f.core.visibleThreads(), /could not read/, 'the pull refuses rather than lies');
     assert.deepEqual(seen, [], 'and nothing was announced from an unobserved world');
-    assert.ok(errors.length >= 1, 'the failure is reported');
+    exhaustSelfRetries(f.env);
+    assert.equal(errors.length, 1, 'the failure is reported, once the core has run out of looks');
 
     failing = false;
     f.core.reportThreadVisibility();
@@ -1679,7 +1688,8 @@ test('visibility: an anchor the core cannot rebuild is a failed look, not a cras
     f.core.registerThreadVisibility(() => ([{ threadKey: 'block:a', anchor: cyclic, comments: ['c'] }]));
     f.env.drainMicrotasks();
     assert.throws(() => f.core.visibleThreads(), /could not read/);
-    assert.ok(errors.length >= 1, 'reported as an error rather than thrown into the void');
+    exhaustSelfRetries(f.env);
+    assert.equal(errors.length, 1, 'reported as an error rather than thrown into the void');
   } finally { f.restore(); }
 });
 
@@ -1759,6 +1769,53 @@ test('visibility: the core keeps looking by itself for a while, then stops and s
     const settled = asked;
     for (let i = 0; i < 10; i += 1) { f.env.flushTimers(); f.env.drainMicrotasks(); }
     assert.equal(asked, settled, 'and it stopped rather than looking forever');
+  } finally { f.restore(); }
+});
+
+test('visibility: looking again, and giving up, belong to the failure — not to the core', () => {
+  // What is spent while a display is unreadable has to be given back when that stops being the
+  // situation, and there are two ways it stops: the display starts answering, or a different display
+  // takes over. Neither was true of a budget kept on the core. A display attached after an earlier one
+  // failed would inherit an empty one and be asked exactly once — and being asked again is the whole
+  // of what the retry is for, so the display most likely to need it is the one that would not get it.
+  const f = mountPanel({ instrument: true });
+  try {
+    const errors = [];
+    f.core.on('error', (e) => errors.push(e));
+    let firstAsked = 0, failing = true;
+    const dropFirst = f.core.registerThreadVisibility(() => {
+      firstAsked += 1;
+      if (failing) throw new Error('unreadable');
+      return [];
+    });
+    exhaustSelfRetries(f.env);
+    const spent = firstAsked;
+    assert.ok(spent > 1, 'the failing display was looked at more than once');
+    assert.equal(errors.length, 1, 'and handed back exactly once, not once per look');
+
+    // Still failing, and something else happens. The fact has already been stated; stating it again on
+    // every later mutation would report one broken display as a stream of separate incidents.
+    f.core.addComment({ anchor: { type: 'document' }, body: 'a mutation asks for a fresh report' });
+    exhaustSelfRetries(f.env);
+    assert.equal(errors.length, 1, 'the same failure is one fact, however often it is rediscovered');
+
+    // It starts answering. That closes the episode, so the next failure is a new one and is said again.
+    failing = false;
+    f.core.reportThreadVisibility();
+    f.env.drainMicrotasks();
+    failing = true;
+    f.core.reportThreadVisibility();
+    exhaustSelfRetries(f.env);
+    assert.equal(errors.length, 2, 'a failure after a good look is a different failure');
+    assert.ok(firstAsked > spent, 'and it got its looks back too');
+
+    // A replacement display is the other way an episode ends. It must arrive with everything.
+    dropFirst();
+    let secondAsked = 0;
+    f.core.registerThreadVisibility(() => { secondAsked += 1; throw new Error('also unreadable'); });
+    exhaustSelfRetries(f.env);
+    assert.ok(secondAsked > 1, 'the display that arrived second is looked at more than once too');
+    assert.equal(errors.length, 3, 'and is complained about on its own account, once');
   } finally { f.restore(); }
 });
 
