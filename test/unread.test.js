@@ -1766,6 +1766,9 @@ test('a document kept by an adapter that cannot hold progress does not claim it 
 //                 satisfied by an implementation where the declaration decides and the record is
 //                 ignored — which is a different library that passes the same table.
 
+// THE TABLE OF VALID, SETTLED OUTCOMES. Two partitions sit outside it and are checked on their own:
+// input validation, where the stored shape itself cannot be read (below), and loading in progress,
+// where an answer has not arrived yet and there is no outcome to be in a cell of.
 test('restoring: every reachable combination of declaration, capability and record', async () => {
   const doc = (declared) => (declared
     ? { schemaVersion: 1, documentId: 'd', keepsProgress: true, comments: [entry('c1', 'p1')] }
@@ -1852,4 +1855,45 @@ test('restoring: what may be called read, stated as a rule rather than as ten nu
   assert.deepEqual(claimedRead,
     ['declared=false capability=unavailable record=null', 'declared=false capability=complete record=null'],
     'with no record speaking, only an undeclared document counts as read');
+});
+
+test('restoring: a declaration nobody recognises is not the same as no declaration', async () => {
+  // The partition BEFORE the table: whether the stored shape can be read at all. This field decides
+  // whether an absent record may be called "already read", so a value nobody recognises must not mean
+  // the same as no value — stored data is reachable by hand and through adapters that were never
+  // typed, and corrupted format metadata quietly clearing marks is the failure the field exists to
+  // prevent. Absent still means what it always meant; anything unrecognised means the shape is
+  // unreadable, which is not knowledge.
+  for (const declared of [false, 'true', 1, 0, null, {}, []]) {
+    const stored = { schemaVersion: 1, documentId: 'd', keepsProgress: declared, comments: [entry('c1', 'p1')] };
+    const errors = [];
+    const core = mount({ storage: {
+      load: () => stored, save: () => {},
+      loadProgress: () => null, saveProgress: () => {},
+    } });
+    core.on('error', (e) => errors.push(e));
+    await core.ready;
+    await quiet();
+    assert.equal(core.unreadCount('block:p1'), 1, `${JSON.stringify(declared)}: left to be looked at again`);
+    assert.equal(errors.filter((e) => e.code === 'STORAGE_LOAD_FAILED').length, 1,
+      `${JSON.stringify(declared)}: and said out loud rather than absorbed`);
+    invariants(core, `malformed declaration ${JSON.stringify(declared)}`);
+    core.destroy();
+  }
+
+  // …while the one value that IS recognised, and its absence, behave as the table says.
+  for (const [declared, expected] of [[true, 1], [undefined, 0]]) {
+    const stored = { schemaVersion: 1, documentId: 'd', comments: [entry('c1', 'p1')] };
+    if (declared !== undefined) stored.keepsProgress = declared;
+    const errors = [];
+    const core = mount({ storage: {
+      load: () => stored, save: () => {}, loadProgress: () => null, saveProgress: () => {},
+    } });
+    core.on('error', (e) => errors.push(e));
+    await core.ready;
+    await quiet();
+    assert.equal(core.unreadCount('block:p1'), expected, `${declared}: recognised`);
+    assert.deepEqual(errors, [], `${declared}: nothing wrong to report`);
+    core.destroy();
+  }
 });

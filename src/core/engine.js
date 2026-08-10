@@ -1166,7 +1166,22 @@ class TackbackInstance {
     // Three things, not two. A document that predates progress has neither marker nor record, and
     // what is in it is what the reader has lived with. A document written by THIS shape with no record
     // is one whose progress never landed — nothing is known, and unknown is never 'already seen'.
-    const legacy = nothingStored && doc.keepsProgress !== true;
+    // The declaration is normalised into three, not read as a boolean. It decides whether an absent
+    // record may be called 'already read', so a value nobody recognises cannot be allowed to mean the
+    // same as no value: stored JSON is reachable by hand and by adapters that were never typed, and
+    // corrupted format metadata silently clearing marks is the failure this whole field exists to
+    // prevent. Absent means no record was ever expected; `true` means one is; anything else means the
+    // shape itself cannot be read, which is not knowledge and never becomes 'seen'.
+    const declaration = doc.keepsProgress === undefined ? 'absent'
+      : doc.keepsProgress === true ? 'present'
+        : 'malformed';
+    if (declaration === 'malformed') {
+      this._loadFaults.push({
+        code: 'STORAGE_LOAD_FAILED',
+        message: 'stored document declares an unrecognised progress format; nothing is taken as read',
+      });
+    }
+    const legacy = nothingStored && declaration === 'absent';
     const counts = (v) => Number.isSafeInteger(v) && v >= 1;
 
     const declared = (kept && typeof kept.arrival === 'object' && kept.arrival) ? kept.arrival : {};
