@@ -6,7 +6,7 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
 
 ## [Unreleased]
 
-## [0.9.7] — 2026-08-07
+## [0.9.7] — 2026-08-10
 
 ### Added
 - **`thread:visibility` — which threads a reader can actually see.** A flag like anchor attention is
