@@ -53,9 +53,13 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
   between mounts: whatever is already stored becomes the baseline this reader is taken to have seen.
   Its comments are never at risk either way. The built-in adapters implement both, keeping progress
   under its own key.
-- **A progress record that cannot be read is not the same as having none.** No record means the
-  document predates unread and what is in it counts as seen; an unreadable one means nothing is known,
-  and unknown is never turned into already-read.
+- **Three states when restoring, not two.** A stored document now records which shape it was written
+  in, so a missing progress record can be told from a document that predates progress. No marker and
+  no record: written before any of this, and what is in it counts as seen. The marker with no record:
+  progress never landed. An unreadable record: nothing is known. Only the first answers "already
+  seen" — the other two leave everything to be looked at again, because unknown is never turned into
+  read. The marker says how what is stored is arranged, not anything about a reader, so it stays with
+  the document and out of the export envelope.
 - **Two requirements come with progress**: one storage belongs to **one environment** (a server-backed
   adapter shared between viewers would make one person's reading everybody's), and arrival numbering
   assumes **one live instance at a time** per environment.

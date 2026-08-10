@@ -1014,7 +1014,11 @@ class TackbackInstance {
 
   /** The document, as one whole. Written in full, so a save never depends on an earlier one landing. */
   _snapshotStored() {
-    return { schemaVersion: 1, documentId: this._doc.id, comments: [...this._store.list()] };
+    // The document says which SHAPE it was written in — that reading progress is kept in a record of
+    // its own. Not what anybody read, so it is still the document's to carry: without it, a document
+    // written by this build whose very first progress write never landed is indistinguishable from one
+    // written before progress existed, and everything in it silently counts as already seen.
+    return { schemaVersion: 1, documentId: this._doc.id, keepsProgress: true, comments: [...this._store.list()] };
   }
 
   /**
@@ -1151,7 +1155,10 @@ class TackbackInstance {
     // document predates progress. Is it USABLE — a record that cannot be read leaves nothing known.
     const nothingStored = progress === null || progress === undefined;
     const kept = (progress && progress !== UNREADABLE) ? progress : null;
-    const legacy = nothingStored;
+    // Three things, not two. A document that predates progress has neither marker nor record, and
+    // what is in it is what the reader has lived with. A document written by THIS shape with no record
+    // is one whose progress never landed — nothing is known, and unknown is never 'already seen'.
+    const legacy = nothingStored && !doc.keepsProgress;
     const counts = (v) => Number.isSafeInteger(v) && v >= 1;
 
     const declared = (kept && typeof kept.arrival === 'object' && kept.arrival) ? kept.arrival : {};

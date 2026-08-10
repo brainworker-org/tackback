@@ -1317,8 +1317,8 @@ test('progress comes back through its own record, and the document through its o
   await da.show('block:p1');
   a.addComment({ anchor: { type: 'block', elementId: 'p2' }, body: 'not this' });
   await quiet();
-  assert.deepEqual(Object.keys(store.peek()).sort(), ['comments', 'documentId', 'schemaVersion'],
-    'the document record carries the document and nothing else');
+  assert.deepEqual(Object.keys(store.peek()).sort(), ['comments', 'documentId', 'keepsProgress', 'schemaVersion'],
+    'the document record carries the document, and the shape it was written in — nothing about a reader');
   assert.deepEqual(Object.keys(store.peekProgress()).sort(), ['arrival', 'arrivalNext', 'observed'],
     'and the progress record carries the progress');
   a.destroy();
@@ -1670,4 +1670,42 @@ test('each channel still writes one at a time, newest state last', async () => {
   assert.equal(gated.calls.length, 2, 'and the two that queued became one');
   assert.equal(gated.calls[1].comments.length, 3, 'carrying the state as it is now');
   core.destroy();
+});
+
+test('a document whose progress never landed is not mistaken for one written before progress', async () => {
+  // The discriminator used to be "is there a progress record", which cannot tell a document written
+  // before unread existed from one written by this build whose very first progress write never
+  // answered. Both look the same, and one of the two answers — everything counts as seen — silently
+  // clears marks the reader never looked at.
+  let document = null;
+  const neverAnswers = new Promise(() => {});
+  const first = mount({ storage: {
+    load: () => document, save: (d) => { document = d; },
+    loadProgress: () => null, saveProgress: () => neverAnswers,
+  } });
+  await first.ready;
+  first.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'arrived and never marked read' });
+  await quiet();
+  assert.equal(first.unreadCount('block:p1'), 1, 'unread here');
+  assert.ok(document, 'the document itself did land');
+  first.destroy();
+
+  const second = mount({ storage: {
+    load: () => document, save: () => {}, loadProgress: () => null, saveProgress: () => {},
+  } });
+  await second.ready;
+  await quiet();
+  assert.equal(second.unreadCount('block:p1'), 1, 'and still unread after coming back');
+  invariants(second, 'progress never landed');
+  second.destroy();
+
+  // …while a document with no marker at all is still read as predating progress.
+  const older = { schemaVersion: 1, documentId: 'd', comments: [entry('c1', 'p1')] };
+  const legacy = mount({ storage: {
+    load: () => older, save: () => {}, loadProgress: () => null, saveProgress: () => {},
+  } });
+  await legacy.ready;
+  await quiet();
+  assert.deepEqual(legacy.unreadThreads(), [], 'no marker, no record: written before any of this');
+  legacy.destroy();
 });
