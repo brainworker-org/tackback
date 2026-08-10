@@ -92,6 +92,13 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
   neither reads nor writes, so the document round-trips through it untouched. What an older build
   cannot do is advance anything: come back and the progress is as you left it, while whatever arrived
   meanwhile reads as new.
+- **A progress record that goes missing can read as one that was never there.** A document says
+  whether it was written with progress beside it, and that declaration is what separates "nothing was
+  ever kept here" — the one state that counts as read — from "something is missing". An older build
+  rewriting the document drops the declaration, because it does not know to keep it. Lose the record
+  as well and what remains is indistinguishable from a document written before progress existed: it
+  is taken as read, in silence. Losing only the record is the safe half — the declaration still says
+  something was expected, so the reader is offered everything again.
 - **One instance per environment, for numbering.** Two live instances hand out the same arrival
   numbers, so what each has read is its own. They can no longer destroy each other's comments — that was
   what separating the two records removed — but reconciling their numbering is not attempted here.
