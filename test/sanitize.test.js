@@ -151,6 +151,26 @@ test('sanitize: an entry buried by the same envelope that carries it is refused'
   assert.equal(buriedReply.faults.length, 1);
 });
 
+test('sanitize: each refusal says which kind it is, because the modes answer them differently', () => {
+  // An identity fault makes a whole replacement unsafe; an unusable anchor is the malformed-file case
+  // the import already refused before any of this; a buried entry is not a fault in the envelope at
+  // all. Collapsing the three into one count is what would make a replacement refuse itself over a
+  // tombstone it was reading correctly.
+  const kinds = (r) => r.faults.map((f) => f.kind);
+  assert.deepEqual(kinds(sanitizeComments([root('')])), ['identity']);
+  assert.deepEqual(kinds(sanitizeComments([root('c1'), root('c1', 'p2')])), ['identity']);
+  assert.deepEqual(kinds(sanitizeComments([root('c1', 'p1', { replies: [reply('')] })])), ['identity']);
+  assert.deepEqual(
+    kinds(sanitizeComments([root('c1', 'p2')], { known: new Map([['c1', { threadKey: 'block:p1', reply: false }]]) })),
+    ['identity']);
+  assert.deepEqual(kinds(sanitizeComments([root('c1', 'p1', { anchor: { type: 'workspace' } })], { checkAnchor: true })), ['anchor']);
+  assert.deepEqual(kinds(sanitizeComments([root('c1')], { doomed: new Set(['c1']) })), ['tombstone']);
+  for (const f of sanitizeComments([root('')]).faults) {
+    assert.equal(typeof f.message, 'string', 'and each carries something a reader can act on');
+    assert.ok(f.message.length > 0);
+  }
+});
+
 test('sanitize: what is not a list, and what is not an utterance', () => {
   assert.deepEqual(sanitizeComments(null).comments, []);
   assert.deepEqual(sanitizeComments(undefined).comments, []);

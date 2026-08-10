@@ -135,7 +135,11 @@ export function threadKeyOf(comment) {
  * @param {boolean} [opts.checkAnchor] require a usable anchor. The import path does; restoration does
  *   not, because a stored anchor of a kind this build does not know is a downgrade artefact rather
  *   than corruption, and is already rendered as unplaceable rather than dropped.
- * @returns {{ comments: any[], dropped: number, faults: string[] }}
+ * @returns {{ comments: any[], dropped: number, faults: Array<{kind: 'identity'|'anchor'|'tombstone', message: string}> }}
+ *   Each refusal carries a KIND, because the two modes owe them different answers: an identity fault
+ *   makes a whole replacement unsafe, an unusable anchor is the malformed-file case the import already
+ *   refused before this existed, and an entry the same envelope buries is not a fault in the envelope
+ *   at all — it is the envelope being read correctly.
  */
 export function sanitizeComments(comments, opts = {}) {
   const known = opts.known || null;
@@ -154,39 +158,39 @@ export function sanitizeComments(comments, opts = {}) {
   // "the first one wins" means the same thing to both.
   for (const c of list) {
     if (!c || typeof c !== 'object') {
-      dropped += 1; faults.push('an entry that is not an utterance'); continue;
+      dropped += 1; faults.push({ kind: 'identity', message: 'an entry that is not an utterance' }); continue;
     }
     const replies = Array.isArray(c.replies) ? c.replies : [];
     const collateral = () => { dropped += 1 + replies.length; };   // the replies go with their root
-    if (!usableId(c.id)) { collateral(); faults.push('an utterance with no id'); continue; }
+    if (!usableId(c.id)) { collateral(); faults.push({ kind: 'identity', message: 'an utterance with no id' }); continue; }
     if (doomed && doomed.has(c.id)) {
-      collateral(); faults.push(`utterance ${c.id} is buried by the same envelope that carries it`); continue;
+      collateral(); faults.push({ kind: 'tombstone', message: `utterance ${c.id} is buried by the same envelope that carries it` }); continue;
     }
     if (checkAnchor && !isValidAnchor(c.anchor)) {
-      collateral(); faults.push(`utterance ${c.id} has no usable anchor`); continue;
+      collateral(); faults.push({ kind: 'anchor', message: `utterance ${c.id} has no usable anchor` }); continue;
     }
-    if (taken.has(c.id)) { collateral(); faults.push(`id ${c.id} arrives more than once`); continue; }
+    if (taken.has(c.id)) { collateral(); faults.push({ kind: 'identity', message: `id ${c.id} arrives more than once` }); continue; }
     const key = threadKeyOf(c);
     const resident = known ? known.get(c.id) : undefined;
     if (resident) {
-      if (resident.reply) { collateral(); faults.push(`id ${c.id} already belongs to a reply`); continue; }
+      if (resident.reply) { collateral(); faults.push({ kind: 'identity', message: `id ${c.id} already belongs to a reply` }); continue; }
       if (resident.threadKey !== key) {
-        collateral(); faults.push(`utterance ${c.id} would move to another thread`); continue;
+        collateral(); faults.push({ kind: 'identity', message: `utterance ${c.id} would move to another thread` }); continue;
       }
     }
     taken.add(c.id);
     const kept = [];
     for (const r of replies) {
       if (!r || typeof r !== 'object' || !usableId(r.id)) {
-        dropped += 1; faults.push('a reply with no id'); continue;
+        dropped += 1; faults.push({ kind: 'identity', message: 'a reply with no id' }); continue;
       }
       if (doomed && doomed.has(r.id)) {
-        dropped += 1; faults.push(`reply ${r.id} is buried by the same envelope that carries it`); continue;
+        dropped += 1; faults.push({ kind: 'tombstone', message: `reply ${r.id} is buried by the same envelope that carries it` }); continue;
       }
-      if (taken.has(r.id)) { dropped += 1; faults.push(`id ${r.id} arrives more than once`); continue; }
+      if (taken.has(r.id)) { dropped += 1; faults.push({ kind: 'identity', message: `id ${r.id} arrives more than once` }); continue; }
       const res = known ? known.get(r.id) : undefined;
       if (res && (!res.reply || res.threadKey !== key)) {
-        dropped += 1; faults.push(`id ${r.id} already belongs to another utterance`); continue;
+        dropped += 1; faults.push({ kind: 'identity', message: `id ${r.id} already belongs to another utterance` }); continue;
       }
       taken.add(r.id);
       kept.push(r);
