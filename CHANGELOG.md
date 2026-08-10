@@ -45,9 +45,15 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
   `loadProgress` / `saveProgress`, never folded into the document write. That separation is the
   guarantee rather than a tidiness choice: an instance that has only read cannot write a comment, so
   it can never undo what another one wrote — which a single combined write made possible, silently,
-  whenever the same document was open twice. An adapter without the pair is simply not given progress:
-  unread lives as long as the instance, and its comments are never at risk. The built-in adapters
-  implement both, keeping progress under its own key.
+  whenever the same document was open twice. The two are also written INDEPENDENTLY: neither failing
+  stops the other being attempted, and each stays pending until its own write lands. An adapter
+  supplying neither method (or only one, which is reported and counts as neither) keeps nothing
+  between mounts: whatever is already stored becomes the baseline this reader is taken to have seen.
+  Its comments are never at risk either way. The built-in adapters implement both, keeping progress
+  under its own key.
+- **A progress record that cannot be read is not the same as having none.** No record means the
+  document predates unread and what is in it counts as seen; an unreadable one means nothing is known,
+  and unknown is never turned into already-read.
 - **Two requirements come with progress**: one storage belongs to **one environment** (a server-backed
   adapter shared between viewers would make one person's reading everybody's), and arrival numbering
   assumes **one live instance at a time** per environment.

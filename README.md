@@ -251,9 +251,13 @@ const mine = {
 };
 ```
 
-Leave the progress pair out and unread simply is not durable — it lives as long as the instance and
-starts fresh next time. That is the safe way to be incomplete; your comments are never at risk either
-way. The built-in adapters implement both.
+Leave the pair out — or supply only one of them, which counts as leaving it out and is reported —
+and nothing is kept between mounts: whatever is already stored becomes the baseline this reader is
+taken to have seen, and only what arrives afterwards reads as new. Your comments are never at risk
+either way. The built-in adapters implement both.
+
+If a progress record exists and cannot be read, that is **not** treated as having none: nothing is
+known, so everything is left to be looked at again. Unknown never becomes `already read`.
 
 Two requirements come with progress: **one storage belongs to one environment** (sharing it between
 viewers would make one person's reading everybody's), and **arrival numbering assumes one live

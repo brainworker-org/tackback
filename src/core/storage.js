@@ -11,9 +11,17 @@
 // to be holding, and so undid whatever another instance had written since — silently, with the loss
 // appearing only at the next reload. Separate records remove the ability rather than guard its use.
 //
-// `loadProgress` / `saveProgress` are OPTIONAL. An adapter without them is not given progress at all:
-// unread lives as long as the instance and is rebuilt from scratch next time. That is the safe way to
-// be incomplete — the alternative, folding progress back into the document write, is the defect.
+// `loadProgress` / `saveProgress` are OPTIONAL, and are a PAIR: an adapter supplying one of them is
+// treated as supplying neither, and told so. Without them nothing is kept between mounts — whatever
+// is already stored becomes the baseline the reader is taken to have seen, and only what arrives
+// AFTER the mount reads as new. That is the safe way to be incomplete; folding progress back into the
+// document write is the defect.
+//
+// Three states, three meanings, and they must not be collapsed: NO RECORD means this document was
+// written before progress existed, so what is in it counts as seen. A record that EXISTS and cannot
+// be read means nothing is known, and unknown is never turned into 'already read' — everything is
+// left to be looked at again. A readable record is believed, field by field, with what is
+// structurally wrong in it discarded rather than guessed at.
 //
 // Two requirements come with progress, and they are requirements rather than advice:
 //   1. ONE ENVIRONMENT PER STORAGE. Progress says what one reader has read. An adapter that shared it

@@ -17,6 +17,13 @@ import { TackbackError } from './errors.js';
 const LIB_VERSION = '0.9.7';
 const nowIso = () => new Date().toISOString();
 
+/**
+ * A stored progress record that exists and cannot be read. Distinct from having none: nothing stored
+ * means this document predates progress and what is in it counts as seen, while a record that cannot
+ * be read means nothing is known — and nothing known must never be turned into 'already read'.
+ */
+const UNREADABLE = Symbol('unreadable progress');
+
 /** How many times the core looks again by itself before handing an unreadable display back. */
 const VISIBILITY_RETRIES = 3;
 
@@ -103,7 +110,11 @@ class TackbackInstance {
     this._loadFaults = [];           // entries refused while restoring; reported just before `ready`
     this._saveChain = Promise.resolve();
     this._persistQueued = false;
-    this._documentDirty = false;   // set only by a real change, never by reading
+    // Each record is pending while its revision is ahead of what has actually landed. A plain flag
+    // cannot say this: a write that succeeds would clear changes that arrived after its snapshot was
+    // taken, and those changes would then be pending in nobody's book.
+    this._documentRev = 0; this._documentSaved = 0;   // bumped only by a real change, never by reading
+    this._progressRev = 0; this._progressSaved = 0;
 
     const key = options.storageKey || `tackback::${this._doc.id}`;
     // The engine writes environment-local state itself, so it holds the adapter too. The store keeps
@@ -111,6 +122,19 @@ class TackbackInstance {
     // lifetimes behind one save.
     const adapter = options.storage || localStorageAdapter(key);
     this._envAdapter = adapter;
+    // The progress pair is optional, but it is a PAIR: one half alone is a capability that half works
+    // — writes that nothing reads back, or reads of something nothing writes — and neither says so.
+    // Taken as absent, and said out loud, rather than left to be discovered as unread that will not
+    // persist for reasons nobody can see.
+    const canRead = typeof adapter.loadProgress === 'function';
+    const canWrite = typeof adapter.saveProgress === 'function';
+    if (canRead !== canWrite) {
+      this._envAdapter = { ...adapter, loadProgress: undefined, saveProgress: undefined };
+      this._loadFaults.push({
+        code: 'ADAPTER_FAILED',
+        message: `storage adapter has ${canRead ? 'loadProgress' : 'saveProgress'} but not ${canRead ? 'saveProgress' : 'loadProgress'}; reading progress will not be kept`,
+      });
+    }
     // Restoration is intercepted rather than pushed into the store: what comes back from an adapter is
     // outside input like any envelope, and only what survives validation may reach the store at all.
     const hydrate = (d) => this._hydrateEnv(d);
@@ -140,7 +164,7 @@ class TackbackInstance {
         // synchronous adapter finishes loading inside the constructor, before the caller has had a
         // chance to subscribe — reporting there would mean the only listeners who could hear about
         // corrupt stored data are the ones who did not exist yet.
-        for (const fault of this._loadFaults.splice(0)) this._fail('IMPORT_ENTRY_DROPPED', fault.message);
+        for (const fault of this._loadFaults.splice(0)) this._fail(fault.code || 'IMPORT_ENTRY_DROPPED', fault.message);
         // One look, armed before `ready` and taken after it: whatever was restored as unread reaches a
         // subscriber as an ordinary report rather than as a special case for starting up.
         this._scheduleVisibility();
@@ -954,29 +978,50 @@ class TackbackInstance {
    *   the whole of the guarantee: an instance that has not written anything cannot write anything.
    */
   _schedulePersist(documentToo = false) {
-    if (documentToo) this._documentDirty = true;
+    if (documentToo) this._documentRev += 1;
+    this._progressRev += 1;
     if (this._persistQueued) return;
     this._persistQueued = true;
     this._saveChain = this._saveChain
-      .then(() => {
+      .then(async () => {
         this._persistQueued = false;
-        if (this._destroyed) return undefined;   // a queued save has nothing left to be about
-        const writeDocument = this._documentDirty;
-        this._documentDirty = false;
-        // Progress goes to its own place. An adapter that has nowhere to put it simply does not get it
-        // — unread stays true for as long as this instance lives and is rebuilt from scratch next
-        // time. That is the safe way to be incomplete: the alternative, folding progress into the
-        // document write, is what let reading overwrite comments in the first place.
-        const progress = typeof this._envAdapter.saveProgress === 'function'
-          ? this._envAdapter.saveProgress(this._snapshotProgress())
-          : undefined;
-        if (!writeDocument) return progress;
-        return Promise.resolve(progress).then(() => this._envAdapter.save(this._snapshotStored()));
-      })
-      // A failed save is a durability failure, not a meaning one: the reader did read it. Memory keeps
-      // what it knows, the failure is reported, and the next save — every change and every observation
-      // schedules one — carries the whole state again and catches up on its own.
-      .catch((err) => this._fail(err instanceof TackbackError ? err.code : 'STORAGE_SAVE_FAILED', 'persist failed', err));
+        if (this._destroyed) return;   // a queued save has nothing left to be about
+        // Each record is attempted on its own, and neither can stop the other from being attempted.
+        // Separating WHERE they are kept without separating whether they succeed would leave them
+        // apart in storage and joined in failure — a progress write that could not land would take a
+        // comment down with it, which is the same coupling in a different place.
+        await this._writeRecord('progress');
+        await this._writeRecord('document');
+      });
+  }
+
+  /**
+   * Write one record, and keep it pending until its OWN write lands.
+   *
+   * A failed save is a durability failure, not a meaning one: the reader did read it, the author did
+   * write it. Memory keeps what it knows, the failure is reported once, and because the record stays
+   * pending the next save — every change and every observation schedules one — carries it again.
+   * Clearing the flag before the write succeeded is how a comment gets stranded with nothing left to
+   * remember that it was never stored.
+   * @param {'document'|'progress'} which
+   */
+  async _writeRecord(which) {
+    const isDocument = which === 'document';
+    const rev = isDocument ? this._documentRev : this._progressRev;
+    if (rev === (isDocument ? this._documentSaved : this._progressSaved)) return;
+    // An adapter with nowhere to keep progress is not failing — it has no such record. Nothing is
+    // pending, because nothing was ever going to be written.
+    if (!isDocument && typeof this._envAdapter.saveProgress !== 'function') { this._progressSaved = rev; return; }
+    try {
+      // The revision is read BEFORE the snapshot and only recorded after the write lands, so anything
+      // that changes while the write is in flight stays ahead of what was stored and is written again.
+      await (isDocument
+        ? this._envAdapter.save(this._snapshotStored())
+        : this._envAdapter.saveProgress(this._snapshotProgress()));
+      if (isDocument) this._documentSaved = rev; else this._progressSaved = rev;
+    } catch (err) {
+      this._fail(err instanceof TackbackError ? err.code : 'STORAGE_SAVE_FAILED', 'persist failed', err);
+    }
   }
 
   /**
@@ -990,11 +1035,24 @@ class TackbackInstance {
    * @param {import('./storage.js').StoredDocument|null} doc
    */
   _hydrateEnv(doc) {
-    // Progress comes from its own place, and an adapter with nowhere to keep it simply has none — the
-    // document restores exactly as before and everything in it reads as new. The two are read
-    // together here only because they have to be reconciled before anything is derived from them.
-    const kept = typeof this._envAdapter.loadProgress === 'function' ? this._envAdapter.loadProgress() : null;
-    const progress = (kept && typeof kept === 'object' && typeof kept.then !== 'function') ? kept : null;
+    // Progress comes from its own place, and it may arrive later than the document — an adapter is
+    // allowed to be asynchronous everywhere, and reading progress is no exception. Nothing is derived
+    // until both are in hand, so a slow progress read delays readiness rather than being missed.
+    if (typeof this._envAdapter.loadProgress !== 'function') return this._hydrateWith(doc, null);
+    let kept;
+    // A load that throws is a record that EXISTS and cannot be read — a different thing from none.
+    try { kept = this._envAdapter.loadProgress(); } catch { return this._hydrateWith(doc, UNREADABLE); }
+    return (kept && typeof kept.then === 'function')
+      ? kept.then((p) => this._hydrateWith(doc, p), () => this._hydrateWith(doc, UNREADABLE))
+      : this._hydrateWith(doc, kept);
+  }
+
+  /**
+   * @param {import('./storage.js').StoredDocument|null} doc
+   * @param {any} progress the stored progress, `null` if there is none, or UNREADABLE if there is one
+   *   that could not be read
+   */
+  _hydrateWith(doc, progress) {
     if (!doc) { this._arrivalNext = 1; return doc; }
     // An adapter's answer is outside input, exactly like an envelope, and gets the same check.
     const { comments, faults } = sanitizeComments(doc.comments);
@@ -1004,10 +1062,18 @@ class TackbackInstance {
     // unread on the day this version ships, which is the exact state the feature exists to end.
     // One field present is enough to mean the opposite: this writer knew about reading, and a thread
     // it does not mention is one nobody has opened.
-    const legacy = !progress;
+    // Nothing stored at all means this document was written before progress existed, so what is in
+    // it is what the reader has already lived with — treating it as new would light every mark in the
+    // document at once, which is the state this whole feature exists to end. A record that could not
+    // be read gets the opposite answer: nothing is known, and unknown is never 'seen'.
+    // Two different questions, so two independent tests. WAS there a record — no record means this
+    // document predates progress. Is it USABLE — a record that cannot be read leaves nothing known.
+    const nothingStored = progress === null || progress === undefined;
+    const kept = (progress && progress !== UNREADABLE) ? progress : null;
+    const legacy = nothingStored;
     const counts = (v) => Number.isSafeInteger(v) && v >= 1;
 
-    const declared = (progress && typeof progress.arrival === 'object' && progress.arrival) ? progress.arrival : {};
+    const declared = (kept && typeof kept.arrival === 'object' && kept.arrival) ? kept.arrival : {};
     const byNumber = new Map();
     for (const [id, v] of Object.entries(declared)) {
       if (!counts(v)) continue;                       // not a number that could have been handed out
@@ -1024,11 +1090,11 @@ class TackbackInstance {
     for (const v of this._arrival.values()) if (v > highest) highest = v;
     // Never hand out a number twice, whatever the stored counter says. A reused number is read as
     // already-seen by whatever cursor is sitting above it.
-    this._arrivalNext = Math.max(counts(progress?.arrivalNext) ? progress.arrivalNext : 1, highest + 1);
+    this._arrivalNext = Math.max(counts(kept?.arrivalNext) ? kept.arrivalNext : 1, highest + 1);
     this._ensureArrival(comments);
 
     const issued = this._arrivalNext - 1;
-    const observed = (progress && typeof progress.observed === 'object' && progress.observed) ? progress.observed : {};
+    const observed = (kept && typeof kept.observed === 'object' && kept.observed) ? kept.observed : {};
     for (const [key, v] of Object.entries(observed)) {
       // Structurally wrong — not an integer, or not positive — is treated as never written, which in a
       // record that knows about reading means unread.

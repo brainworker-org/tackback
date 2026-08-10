@@ -1331,3 +1331,138 @@ test('progress comes back through its own record, and the document through its o
   invariants(b, 'two records');
   b.destroy();
 });
+
+// ---- two records, two fates ----------------------------------------------------------------------
+
+test('one record failing to save does not strand the other, or itself', async () => {
+  // Separating WHERE the two are kept without separating whether they SUCCEED would leave them apart
+  // in storage and joined in failure: a progress write that could not land would take a comment down
+  // with it, and neither would be pending in anybody's book afterwards.
+  const state = { failProgress: true, failDocument: false, docs: [], progress: [] };
+  const adapter = {
+    load: () => null, loadProgress: () => null,
+    save: (d) => { if (state.failDocument) throw new Error('document quota'); state.docs.push(d); },
+    saveProgress: (p) => { if (state.failProgress) throw new Error('progress quota'); state.progress.push(p); },
+  };
+  const core = mount({ storage: adapter });
+  const errors = [];
+  core.on('error', (e) => errors.push(e));
+
+  core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'written while progress is broken' });
+  await quiet();
+  assert.equal(state.docs.length, 1, 'the document was still attempted, and landed');
+  assert.ok(errors.length >= 1, 'and the progress failure was reported');
+
+  // The other way round: the document cannot land, progress can.
+  state.failProgress = false; state.failDocument = true;
+  const d = display(core);
+  await d.show('block:p1');
+  await quiet();
+  assert.ok(state.progress.length >= 1, 'progress landed on its own');
+
+  await d.show();
+  core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'written while the document is broken' });
+  await quiet();
+  assert.equal(state.docs.length, 1, 'the document write failed, so nothing new was stored');
+
+  // …and it is still pending. The next occasion is a READING, which is the sequence that used to
+  // leave the comment stranded: progress landed, the document was never tried again, and nothing
+  // remembered that it had not been stored.
+  state.failDocument = false;
+  await d.show('block:p1');
+  await quiet();
+  assert.equal(state.docs.length, 2, 'the change that could not land was written when it could');
+  assert.equal(state.docs.at(-1).comments.length, 2, 'carrying both, not just the newer one');
+  core.destroy();
+});
+
+test('a save that succeeds does not clear what arrived while it was in flight', async () => {
+  // The subtle half of the same thing. A write carries a snapshot taken when it started; anything that
+  // happens before it lands is NOT in it, and must not be marked stored by its success.
+  const gated = makeGated();
+  const core = mount({ storage: gated.adapter });
+  core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'one' });
+  await settle();
+  assert.equal(gated.calls.length, 1);
+
+  core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'two' });
+  await gated.release();          // the first write lands, knowing nothing of the second comment
+  await settle();
+  assert.equal(gated.calls.length, 2, 'the change made while it was in flight is written after it');
+  assert.equal(gated.calls[1].comments.length, 2);
+  core.destroy();
+});
+
+test('progress that arrives late is waited for, not missed', async () => {
+  // An adapter may be asynchronous everywhere, and reading progress is no exception. Treating a
+  // pending read as "there is none" restores a document as entirely seen — silently, and exactly for
+  // the server-backed adapters that cannot answer synchronously.
+  const store = makeStore(
+    { schemaVersion: 1, documentId: 'd', comments: [entry('c1', 'p1'), entry('c2', 'p1')] },
+    null);
+  const slow = {
+    ...store.adapter,
+    loadProgress: () => new Promise((r) => setTimeout(
+      () => r({ arrival: { c1: 1, c2: 2 }, observed: { 'block:p1': 1 }, arrivalNext: 3 }), 0)),
+  };
+  const core = mount({ storage: slow });
+  await core.ready;
+  await settle();
+  assert.equal(core.unreadCount('block:p1'), 1, 'the record was waited for and believed');
+  invariants(core, 'async progress');
+  core.destroy();
+});
+
+test('progress that cannot be read is not the same as none', async () => {
+  // Nothing stored means the document predates progress, and what is in it is what the reader has
+  // lived with — calling that unread would light every mark at once. A record that EXISTS and cannot
+  // be read means nothing is known, and nothing known must never become "already seen".
+  const comments = [entry('c1', 'p1'), entry('c2', 'p2')];
+  const none = mount({ storage: { load: () => ({ schemaVersion: 1, documentId: 'd', comments }), save: () => {} } });
+  await none.ready; await settle();
+  assert.deepEqual(none.unreadThreads(), [], 'no record at all: the old shape, already seen');
+  none.destroy();
+
+  for (const how of ['throws', 'rejects']) {
+    const core = mount({ storage: {
+      load: () => ({ schemaVersion: 1, documentId: 'd', comments }), save: () => {},
+      loadProgress: () => { if (how === 'throws') throw new Error('corrupt'); return Promise.reject(new Error('corrupt')); },
+      saveProgress: () => {},
+    } });
+    await core.ready; await settle();
+    assert.deepEqual(core.unreadThreads().map((t) => t.threadKey), ['block:p1', 'block:p2'],
+      `${how}: a record that cannot be read leaves everything to be looked at again`);
+    invariants(core, `unreadable progress ${how}`);
+    core.destroy();
+  }
+});
+
+test('half a progress pair is no progress pair, and says so', async () => {
+  // One half alone is a capability that half works — writes nothing reads back, or reads of something
+  // nothing writes — and neither half says so. Unread would simply fail to persist, for a reason
+  // nobody could see from the outside.
+  for (const half of ['loadProgress', 'saveProgress']) {
+    const written = [];
+    const adapter = {
+      load: () => ({ schemaVersion: 1, documentId: 'd', comments: [entry('c1', 'p1')] }),
+      save: () => {},
+      [half]: half === 'loadProgress'
+        ? () => ({ arrival: { c1: 1 }, observed: {}, arrivalNext: 2 })
+        : (p) => written.push(p),
+    };
+    const core = mount({ storage: adapter });
+    const errors = [];
+    core.on('error', (e) => errors.push(e));
+    await core.ready;
+    await quiet();
+    assert.equal(errors.filter((e) => e.code === 'ADAPTER_FAILED').length, 1, `${half}: said once, plainly`);
+    assert.ok(/progress/.test(errors[0].message), `${half}: and names what will not be kept`);
+    assert.deepEqual(core.unreadThreads(), [], `${half}: taken as having no progress record at all`);
+
+    const d = display(core);
+    await d.show('block:p1');
+    await quiet();
+    assert.deepEqual(written, [], `${half}: and the half that could write is not used on its own`);
+    core.destroy();
+  }
+});
