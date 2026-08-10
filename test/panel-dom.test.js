@@ -1278,6 +1278,37 @@ test('visibility: a comment arriving in an OPEN thread is reported, though membe
   } finally { f.restore(); }
 });
 
+test('visibility: the ids a thread reports are every utterance in it, replies included', () => {
+  // What a consumer resolves a read cursor against, so the set has to be exact in both directions. A
+  // report naming only root ids would leave every reply permanently unaccounted for, and the shortfall
+  // hides well: each id it DOES carry is correct, and the reader sees the replies either way. One
+  // naming an id from a thread that is not open would clear a mark nobody looked at.
+  const f = mountPanel({ controls: { docLane: false }, instrument: true });
+  try {
+    const root = f.core.addComment({ anchor: { type: 'document' }, body: 'root' });
+    const second = f.core.addComment({ anchor: { type: 'document' }, body: 'a second root' });
+    const withReply = f.core.addReply(root.id, { body: 'a reply' });
+    const replyId = withReply.replies[withReply.replies.length - 1].id;
+    const elsewhere = f.core.addComment({ anchor: { type: 'block', elementId: 'para' }, body: 'another thread' });
+
+    f.panel.openDocumentThread();
+    f.env.drainMicrotasks();
+    const entry = f.core.visibleThreads().find((e) => e.threadKey === 'document');
+    assert.deepEqual(entry.comments.slice().sort(), [root.id, second.id, replyId].sort(),
+      'every utterance in the open thread, and nothing from a thread that is not open');
+    assert.ok(!entry.comments.includes(elsewhere.id), 'including the one written a moment earlier');
+
+    // A reply landing while the reader is looking is an arrival like any other: the same thread, one
+    // more id — which is the only way the consumer hears that there is something new to resolve.
+    const seen = recordVisibility(f.core);
+    const late = f.core.addReply(second.id, { body: 'arrived while open' });
+    const lateId = late.replies[late.replies.length - 1].id;
+    f.env.drainMicrotasks();
+    assert.equal(seen.length, 1, 'a reply changes what is readable');
+    assert.ok(seen[0].visible[0].comments.includes(lateId), 'and the new reply is in the reported set');
+  } finally { f.restore(); }
+});
+
 test('visibility: a report identical to the last one is not sent again', () => {
   const f = mountPanel({ controls: { docLane: false }, instrument: true });
   try {
@@ -1795,12 +1826,11 @@ test('visibility: a callable smuggled into an anchor is not carried into the rep
 });
 
 test('panel: every way a thread host ends goes through the one release path', () => {
-  // A host that dies but stays in the panel's set is invisible to every test that asks what is
-  // readable — it answers "not me" forever, which is the same thing a correctly released host would
-  // have said. So the leak cannot be caught by observing visibility. What can be observed is the
-  // conversation: a released host disposes its conversation and unregisters it, so the panel's
-  // broadcast set is the meter. If a host is dropped without being released, its conversation is
-  // still registered and still receives what the panel sends to everything on screen.
+  // What this fixes in place is the answering, at each of the three moments a host has: both hosts
+  // open, one of them closed by the reader, and the panel gone. A host that dies but stays in the
+  // panel's set answers "not me" forever, which is what a correctly released host says too — so this
+  // cannot be the meter for the release path itself, and does not claim to be. It measures the
+  // reports, which is what a consumer has.
   // The paragraph goes in through `setup`, so it is part of the baseline the environment check
   // compares against — a page element added afterwards would read as something the panel left behind.
   const f = mountPanel({
@@ -1828,8 +1858,7 @@ test('panel: every way a thread host ends goes through the one release path', ()
     assert.deepEqual(f.core.visibleThreads().map((e) => e.threadKey), ['document'],
       'the closed Pane stops answering');
 
-    // Teardown must take the rest with it. Anything still registered would keep receiving broadcasts
-    // from a panel that no longer exists.
+    // Teardown must take the rest with it.
     f.panel.destroy();
     f.env.drainMicrotasks();
     assert.deepEqual(f.core.visibleThreads(), [], 'and nothing answers once the panel is gone');
