@@ -22,15 +22,15 @@
 // one before it leaves the question open:
 //
 //   1. Is there a document at all. If not, there is nothing for progress to apply to.
-//   2. Can the document's SHAPE be read — its `keepsProgress` declaration. Absent means no separate
-//      record was ever expected here; `true` means one is; anything else means the shape cannot be
+//   2. Can the document's SHAPE be read — its `keepsProgress` declaration. Absent means nothing here
+//      says a separate record is expected; `true` means one is; anything else means the shape cannot be
 //      read, which is reported and stops the record being believed at all.
 //   3. Can this adapter reach a record. Without the pair, none is asked for.
 //   4. Only then, what the record says: absent, unreadable, or readable — and a readable one is
 //      believed field by field, with what is structurally wrong in it discarded rather than guessed.
 //
-// Exactly one of those outcomes counts as read without a record saying so: a document that never
-// declared one. Everything else — declared and missing, present and unreadable, out of reach — leaves
+// Exactly one of those outcomes counts as read without a record saying so: a document whose surviving
+// shape declares none. Everything else — declared and missing, present and unreadable, out of reach — leaves
 // the reader to look again. Unknown is never turned into already-read, because a mark that should be
 // there and is not is the failure this version exists to remove.
 //
@@ -59,9 +59,10 @@ import { TackbackError } from './errors.js';
  * @property {import('./model.js').Comment[]} comments
  * @property {true} [keepsProgress] present when this document was written somewhere that keeps
  *   reading progress in a record of its own. It describes the SHAPE of what is stored, not anything
- *   about a reader, and it is what tells a missing progress record apart from a document written
- *   where there was never any such record. Absent is the only other value — one shape for that, not
- *   two that mean the same thing.
+ *   about a reader, and it is what tells a missing progress record apart from a document whose
+ *   surviving shape declares none. Absent is the only other value — one shape for that, not two that
+ *   mean the same thing. Absent is not proof that none was ever kept: an older build rebuilding the
+ *   document drops the field, and nothing left in the pair would say so.
  */
 
 /**
@@ -121,9 +122,9 @@ export function localStorageAdapter(key) {
       if (!ls) return null;
       const raw = ls.getItem(`${key}::progress`);
       if (raw == null) return null;
-      // A record that is HERE and cannot be read is reported as such, never as an absent one. Absent
-      // means this document predates progress, so what is in it counts as seen — answering that for a
-      // corrupt record would silently clear marks the reader never looked at.
+      // A record that is HERE and cannot be read is reported as such, never as an absent one. An
+      // absent one is read as a document predating progress, so what is in it counts as seen —
+      // answering that for a corrupt record would silently clear marks the reader never looked at.
       try {
         return JSON.parse(raw);
       } catch (err) {

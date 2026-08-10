@@ -1414,7 +1414,7 @@ test('progress that arrives late is waited for, not missed', async () => {
 });
 
 test('progress that cannot be read is not the same as none', async () => {
-  // Nothing stored means the document predates progress, and what is in it is what the reader has
+  // Nothing stored is read as a document predating progress, and what is in it is what the reader has
   // lived with — calling that unread would light every mark at once. A record that EXISTS and cannot
   // be read means nothing is known, and nothing known must never become "already seen".
   const comments = [entry('c1', 'p1'), entry('c2', 'p2')];
@@ -1548,7 +1548,7 @@ test('an utterance that arrives and goes within one turn never takes a number', 
 test('the built-in adapter tells corrupt progress from none, like any other', async () => {
   // The distinction is worth nothing if the adapter almost everybody uses defeats it on the way in.
   // Its parser used to answer "no record" for a record it could not read, which is the one answer that
-  // silently clears marks: no record means the document predates unread, so everything counts as seen.
+  // silently clears marks: no record is read as a document predating unread, so everything counts as seen.
   const items = new Map();
   const saved = globalThis.localStorage;
   globalThis.localStorage = {
@@ -1735,16 +1735,6 @@ test('a document kept by an adapter that cannot hold progress does not claim it 
 
 // ---- the whole domain, not the cases somebody happened to hit -------------------------------------
 //
-// Restoring is decided by three things at once: what SHAPE the stored document says it was written in,
-// whether this adapter can reach a progress record at all, and what state that record is in. Every
-// defect found in this area was one unenumerated cell of that product, found by reproduction, fixed
-// one at a time. The table is the fix for the class: a cell with no row is a question nobody asked.
-//
-// Capability comes first, because without it the record is never consulted — so those rows have no
-// record axis rather than an empty one.
-
-// ---- the whole domain, not the cases somebody happened to hit -------------------------------------
-//
 // Restoring is decided in a fixed order — is there a document, can its own shape be read, can this
 // adapter reach a record, and only then what the record says — and each step is asked only when the
 // one before leaves the question open. Every defect found in this area was one unenumerated cell of
@@ -1759,8 +1749,8 @@ test('a document kept by an adapter that cannot hold progress does not claim it 
 //
 //   DECLARATION   absent | present. There is no third value: a document written where progress cannot
 //                 be kept looks exactly like one written before progress existed, because for the
-//                 purpose of this decision it IS the same — there is no record here and there never
-//                 was going to be one.
+//                 purpose of this decision it IS the same — nothing here says a record was expected,
+//                 and nothing surviving would say whether one ever was.
 //   CAPABILITY    unavailable | complete. Half a pair counts as unavailable, and is reported; that
 //                 reporting is checked on its own elsewhere, not here.
 //   RECORD        only when capability is complete, because otherwise it is never consulted. Four
@@ -1781,9 +1771,9 @@ test('restoring: every reachable combination of declaration, capability and reco
   const SAYS_READ = { arrival: { c1: 1 }, observed: { 'block:p1': 1 }, arrivalNext: 2 };
 
   const CASES = [
-    // declaration absent — nothing here says a separate record was ever expected
+    // declaration absent — nothing surviving says a separate record is expected
     ['absent · unavailable',            false, 'unavailable', null, 0, 0,
-      'no record was ever expected here: what is stored is what the reader has lived with'],
+      'nothing surviving says a record was expected: what is stored is what the reader has lived with'],
     ['absent · complete · no record',   false, 'complete', null, 0, 0,
       'the same, and being able to look changes nothing about what is there to find'],
     ['absent · complete · unreadable',  false, 'complete', 'unreadable', 1, 1,
@@ -1834,7 +1824,7 @@ test('restoring: every reachable combination of declaration, capability and reco
 test('restoring: what may be called read, stated as a rule rather than as ten numbers', async () => {
   // A table of expected numbers can go on being satisfied while the principle underneath it quietly
   // stops holding, and no individual row would fail. The principle: reading is claimed only where a
-  // record SAYS so, or where no record was ever expected. Everywhere else — expected and missing,
+  // record SAYS so, or where the surviving shape declares none. Everywhere else — expected and missing,
   // present and unreadable, out of reach — the reader is left to look again, because unknown is never
   // turned into read.
   const comments = [entry('c1', 'p1')];
@@ -1861,7 +1851,7 @@ test('restoring: what may be called read, stated as a rule rather than as ten nu
     }
   }
   // No record says anything in any of these, so the only cells that may claim reading are the ones
-  // where none was ever expected.
+  // whose surviving shape declares none.
   assert.deepEqual(claimedRead,
     ['declared=false capability=unavailable record=null', 'declared=false capability=complete record=null'],
     'with no record speaking, only an undeclared document counts as read');
@@ -1912,8 +1902,9 @@ test('restoring: a declaration nobody recognises is not the same as no declarati
 
 test('restoring: a shape that cannot be read stops the record being believed, not merely reported', async () => {
   // The partition has to be a boundary. Announcing that the stored shape is unreadable and then going
-  // on to trust the record inside it is a comment, not validation — and the record is the one thing
-  // that can say "already read", which is what the whole check exists to withhold.
+  // on to trust the record inside it is a comment, not validation — and with the shape in doubt the
+  // record is the only thing left that could say "already read", which is what the whole check exists
+  // to withhold. The one exception that says it without a record needs a shape that reads cleanly.
   const record = { arrival: { c1: 1 }, observed: { 'block:p1': 1 }, arrivalNext: 2 };   // says: read
   for (const declared of [false, 'true', 1, null, undefined]) {
     const stored = { schemaVersion: 1, documentId: 'd', keepsProgress: declared, comments: [entry('c1', 'p1')] };

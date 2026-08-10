@@ -19,8 +19,8 @@ const nowIso = () => new Date().toISOString();
 
 /**
  * A stored progress record that exists and cannot be read. Distinct from having none: nothing stored
- * means this document predates progress and what is in it counts as seen, while a record that cannot
- * be read means nothing is known — and nothing known must never be turned into 'already read'.
+ * is READ AS a document predating progress, so what is in it counts as seen, while a record that
+ * cannot be read means nothing is known — and nothing known must never be turned into 'already read'.
  */
 const UNREADABLE = Symbol('unreadable progress');
 
@@ -1022,9 +1022,11 @@ class TackbackInstance {
     // Present only when progress can actually be kept, and then only as `true`. An adapter with
     // nowhere to put a record will never have one, so declaring that one is expected turns a
     // permanent, ordinary arrangement into "the write must have failed" — everything unread, every
-    // time, for ever. Absent means what it has always meant, whether written by a build that predates
-    // progress or by one that cannot keep it: one shape for that, not two that must both be
-    // remembered as meaning the same thing.
+    // time, for ever. Absent means what it has always meant. THIS writer omits it for exactly one
+    // reason: the adapter cannot keep a record. The other histories that end in the same shape arrive
+    // from outside — a build written before progress existed, and an older build rebuilding the
+    // document and dropping a field it never knew. One shape covers all three, because nothing left
+    // in the pair separates them.
     if (this._progressCapable) doc.keepsProgress = true;
     return doc;
   }
@@ -1152,7 +1154,7 @@ class TackbackInstance {
   /**
    * Whether this document says reading progress is kept in a record of its own.
    *
-   * It decides whether an ABSENT record means no record was ever expected — the one answer that
+   * It decides whether an ABSENT record is read as none having been expected — the one answer that
    * counts everything as seen — so a value nobody recognises must not be able to pass for no value.
    * Stored data is reachable by hand and through adapters that were never typed, and corrupted format
    * metadata quietly clearing marks is the failure this field exists to prevent. Presence is asked
@@ -1185,20 +1187,19 @@ class TackbackInstance {
     // because it does not need the record and must not wait for one — so what is left is what the
     // record itself says, and whether it may be believed at all.
     //
-    // A shape that could not be read stops the record being believed rather than merely being
+    // A shape that could not be read stops the record being believed at all, rather than merely being
     // reported alongside it: validation that announces a problem and then trusts what it could not
-    // validate is a comment, not a boundary, and the record is the one thing able to say "read".
-
-    // Then, and only for a shape that could be read, what the record itself says. A malformed shape
-    // stops the record being believed at all rather than merely being reported alongside it —
-    // validation that announces a problem and then trusts what it could not validate is a comment,
-    // not a boundary.
+    // validate is a comment, not a boundary. The one thing that counts as read without a record is
+    // the exception below, and it needs a shape that reads cleanly in order to be an exception at all.
     const nothingStored = progress === null || progress === undefined;
     const kept = (declaration !== 'malformed' && progress && progress !== UNREADABLE) ? progress : null;
 
-    // The one cell that counts as read without a record: nothing was ever expected here. Written
-    // before progress existed, or somewhere it cannot be kept — the same thing for this decision, so
-    // one shape covers both. Everything else leaves the reader to look again, because a document that
+    // The one cell that counts as read without a record: nothing was expected here, as far as anything
+    // surviving can tell. Written before progress existed, written somewhere it cannot be kept, or
+    // written by an older build that dropped the declaration and since parted with its record — one
+    // shape covers all three, because no evidence is left that would separate them. It is the reading
+    // applied to that silence, not a fact about it. Everything else leaves the reader to look again,
+    // because a document that
     // expected a record and has none, and one whose record cannot be read, are both ignorance; and
     // turning ignorance into "already read" is how a reader stops being told about anything at all.
     const legacy = nothingStored && declaration === 'absent';

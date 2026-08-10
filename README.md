@@ -452,10 +452,13 @@ you inject your own pdf.js into `createPdfAdapter`, so nothing of pdf.js is redi
   anchors this build can place, while a stored anchor of a kind this build does not know is a record
   written by a newer one. Dropping it would destroy data that was accepted once; it is kept, rendered
   as unplaceable, and becomes usable again under a build that understands it.
-- **An older build ignores unread rather than corrupting it.** Progress lives in its own record, which
-  0.9.6 neither reads nor writes, so the stored document round-trips through it untouched. What an
-  older build cannot do is *advance* anything: come back to 0.9.7 and the progress is exactly as it
-  was when you left, while whatever arrived meanwhile reads as new.
+- **An older build ignores unread rather than corrupting it — but it does not carry the declaration.**
+  Progress lives in its own record, which 0.9.6 neither reads nor writes, so the record itself is safe
+  there: come back to 0.9.7 and the progress is exactly as it was when you left, while whatever arrived
+  meanwhile reads as new. The stored *document* is a different matter. An older build rebuilds it from
+  the fields it knows, so any save from one drops the declaration that progress is kept beside it. The
+  record survives that and is still believed; lose the record as well and nothing is left to tell the
+  pair from a document written before progress existed, and it is read as one — silently.
 - **A failed save is not retried on its own.** It is reported, memory keeps what it knows, and the
   next save carries everything again. If nothing further changes and nothing further is read, that
   last state is not written.
