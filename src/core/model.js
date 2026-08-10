@@ -73,6 +73,132 @@ export function isValidAnchor(a) {
 }
 
 /**
+ * The identity of the THREAD an utterance belongs to. This is the SINGLE definition of "one
+ * conversation" — anchor marks group by it, an open Pane matches against it, and the unread cursor
+ * is kept per thread, so a badge, the thread it opens and what counts as read can never disagree
+ * about what belongs together.
+ *
+ * A region thread is identified by its `threadId` (its root comment's id), NOT by its geometry: two
+ * regions can be drawn over the same rectangle, and a region's rectangle changes when it is moved,
+ * so geometry is neither unique nor stable. Block and range threads are identified by the place they
+ * point at, which is exactly what makes them the same thread.
+ *
+ * It lives here rather than with the panel because the core now derives from it too. The panel's
+ * `thread.js` re-exports this one — the definition is not copied, because two answers to "is this
+ * the same conversation" is precisely the disagreement this function exists to prevent.
+ * @param {Comment|{anchor:object}|null|undefined} comment
+ * @returns {string|null} null when there is no usable identity yet (e.g. an uncommitted region)
+ */
+export function threadKeyOf(comment) {
+  const a = comment && comment.anchor;
+  if (!a) return null;
+  // The document as a whole is ONE conversation per instance — the mount is already scoped to a
+  // single document, so the anchor needs nothing further to identify its thread.
+  if (a.type === 'document') return 'document';
+  if (a.type === 'region') {
+    const id = comment.threadId || comment.id;
+    return id ? `region:${id}` : null;
+  }
+  if (a.type === 'range') {
+    const s = a.selector || {};
+    return `range:${a.elementId}\u0000${s.exact ?? ''}\u0000${s.start ?? ''}`;
+  }
+  if (a.type === 'block') return `block:${a.elementId}`;
+  // An unrecognised kind gets NO identity rather than borrowing block's. This dispatch used to end in
+  // a bare `return block:...`, so any kind this build did not know about became `block:undefined` —
+  // every such comment silently collapsing into one imaginary shared thread.
+  return null;
+}
+
+/**
+ * THE entry validation for everything that arrives from outside — an import envelope and a storage
+ * adapter's stored document alike. One implementation, because the two boundaries ask the same
+ * question and two answers to it would differ somewhere nobody was looking.
+ *
+ * What it enforces is what everything downstream is allowed to assume: **every utterance that
+ * reaches the store has a non-empty string id, unique across the document, and never changes which
+ * thread it belongs to.** Those are not conveniences — the unread cursor is per thread and compares
+ * arrival numbers by id, so an utterance that changes threads is read as already-seen in its new one
+ * and an id used twice makes "which utterance is this" unanswerable. Both break silently.
+ *
+ * Rejected entries are dropped and REPORTED; the caller emits one error per fault. A reply that is
+ * lost only because its root was rejected is collateral: it is dropped, but it is not a second fault.
+ *
+ * @param {any[]} comments the entries as they arrived
+ * @param {object} [opts]
+ * @param {Map<string, {threadKey: string|null, reply: boolean}>|null} [opts.known] utterances already
+ *   resident, by id. Supplied by the import path so an entry cannot re-anchor an existing utterance
+ *   or take an id that is already someone else's. Restoration has nothing resident yet.
+ * @param {Set<string>|null} [opts.doomed] ids the same envelope also buries. A tombstone wins: an
+ *   envelope that calls one id both dead and alive is contradicting itself, and deleting a row to
+ *   re-insert the same identity elsewhere is not how an utterance moves.
+ * @param {boolean} [opts.checkAnchor] require a usable anchor. The import path does; restoration does
+ *   not, because a stored anchor of a kind this build does not know is a downgrade artefact rather
+ *   than corruption, and is already rendered as unplaceable rather than dropped.
+ * @returns {{ comments: any[], dropped: number, faults: string[] }}
+ */
+export function sanitizeComments(comments, opts = {}) {
+  const known = opts.known || null;
+  const doomed = opts.doomed || null;
+  const checkAnchor = !!opts.checkAnchor;
+  const list = Array.isArray(comments) ? comments : [];
+  // Ids that were ACCEPTED. A rejected entry does not consume its id — uniqueness is a property of
+  // the resulting document, and an entry that never enters it cannot make a later one a duplicate.
+  const taken = new Set();
+  const out = [];
+  const faults = [];
+  let dropped = 0;
+  const usableId = (v) => typeof v === 'string' && v.length > 0;
+
+  // Root, then its replies, then the next root — the same order arrival numbers are handed out in, so
+  // "the first one wins" means the same thing to both.
+  for (const c of list) {
+    if (!c || typeof c !== 'object') {
+      dropped += 1; faults.push('an entry that is not an utterance'); continue;
+    }
+    const replies = Array.isArray(c.replies) ? c.replies : [];
+    const collateral = () => { dropped += 1 + replies.length; };   // the replies go with their root
+    if (!usableId(c.id)) { collateral(); faults.push('an utterance with no id'); continue; }
+    if (doomed && doomed.has(c.id)) {
+      collateral(); faults.push(`utterance ${c.id} is buried by the same envelope that carries it`); continue;
+    }
+    if (checkAnchor && !isValidAnchor(c.anchor)) {
+      collateral(); faults.push(`utterance ${c.id} has no usable anchor`); continue;
+    }
+    if (taken.has(c.id)) { collateral(); faults.push(`id ${c.id} arrives more than once`); continue; }
+    const key = threadKeyOf(c);
+    const resident = known ? known.get(c.id) : undefined;
+    if (resident) {
+      if (resident.reply) { collateral(); faults.push(`id ${c.id} already belongs to a reply`); continue; }
+      if (resident.threadKey !== key) {
+        collateral(); faults.push(`utterance ${c.id} would move to another thread`); continue;
+      }
+    }
+    taken.add(c.id);
+    const kept = [];
+    for (const r of replies) {
+      if (!r || typeof r !== 'object' || !usableId(r.id)) {
+        dropped += 1; faults.push('a reply with no id'); continue;
+      }
+      if (doomed && doomed.has(r.id)) {
+        dropped += 1; faults.push(`reply ${r.id} is buried by the same envelope that carries it`); continue;
+      }
+      if (taken.has(r.id)) { dropped += 1; faults.push(`id ${r.id} arrives more than once`); continue; }
+      const res = known ? known.get(r.id) : undefined;
+      if (res && (!res.reply || res.threadKey !== key)) {
+        dropped += 1; faults.push(`id ${r.id} already belongs to another utterance`); continue;
+      }
+      taken.add(r.id);
+      kept.push(r);
+    }
+    // A fresh object only when something was actually removed: the caller's array is not ours to edit,
+    // and an untouched entry should stay the very value that arrived.
+    out.push(kept.length === replies.length ? c : { ...c, replies: kept });
+  }
+  return { comments: out, dropped, faults };
+}
+
+/**
  * Build a Comment from caller-supplied data. The library owns `id` and `createdAt` — callers never
  * mint identity or timestamps.
  * @param {AddCommentInput} input

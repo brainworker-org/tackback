@@ -10,38 +10,11 @@
  * @typedef {{ key: string, t: string, kind: 'comment'|'reply'|'event', c?: Comment, rep?: object, evt?: object }} TimelineItem
  */
 
-/**
- * The identity of the THREAD a comment belongs to. This is the SINGLE definition of "one
- * conversation" — anchor marks group by it and an open Pane matches against it, so a badge and the
- * thread it opens can never disagree about what belongs together.
- *
- * A region thread is identified by its `threadId` (its root comment's id), NOT by its geometry: two
- * regions can be drawn over the same rectangle, and a region's rectangle changes when it is moved,
- * so geometry is neither unique nor stable. Block and range threads are identified by the place they
- * point at, which is exactly what makes them the same thread.
- * @param {Comment|{anchor:object}|null|undefined} comment
- * @returns {string|null} null when there is no usable identity yet (e.g. an uncommitted region)
- */
-export function threadKeyOf(comment) {
-  const a = comment && comment.anchor;
-  if (!a) return null;
-  // The document as a whole is ONE conversation per instance — the mount is already scoped to a
-  // single document, so the anchor needs nothing further to identify its thread.
-  if (a.type === 'document') return 'document';
-  if (a.type === 'region') {
-    const id = comment.threadId || comment.id;
-    return id ? `region:${id}` : null;
-  }
-  if (a.type === 'range') {
-    const s = a.selector || {};
-    return `range:${a.elementId}\u0000${s.exact ?? ''}\u0000${s.start ?? ''}`;
-  }
-  if (a.type === 'block') return `block:${a.elementId}`;
-  // An unrecognised kind gets NO identity rather than borrowing block's. This dispatch used to end in
-  // a bare `return block:...`, so any kind this build did not know about became `block:undefined` —
-  // every such comment silently collapsing into one imaginary shared thread.
-  return null;
-}
+// The identity of one conversation now lives in the core, which derives unread state from it. This
+// re-export keeps the panel's own import path — and, more to the point, keeps there being exactly one
+// answer to "is this the same thread": a second copy here would drift, and the first symptom would be
+// a mark that will not clear because two parts of the library disagree about what the reader opened.
+export { threadKeyOf } from '../core/model.js';
 
 /**
  * How an anchor names itself in the Pane header — the DECISION, without the DOM.
