@@ -1155,3 +1155,28 @@ test('a buried reply that is not here changes nothing', async () => {
   assert.deepEqual(updates, [], 'nobody is told about a reply that was never here');
   core.destroy();
 });
+
+test('keepBoth: a minted id does not take one the same envelope is delivering', async () => {
+  // Reserving what is STORED is only half of it. An envelope arrives as a whole, so a name invented
+  // for one entry can land on an identity another entry in the same envelope was about to supply —
+  // and then the utterance that conflicted with nothing is the one renamed, on account of somebody
+  // else's copy.
+  const core = mount({ storage: makeStore().adapter });
+  core.importEnvelope(envelope([entry('c1', 'p1')]), { mode: 'merge' });
+  await settle();
+
+  const r = core.importEnvelope(envelope([
+    entry('c1', 'p1', { body: 'the conflicting one' }),
+    entry('c1-dup', 'p1', { body: 'not conflicting with anything' }),
+  ]), { mode: 'merge', onConflict: 'keepBoth' });
+  await settle();
+
+  const ids = idsOf(core, 'block:p1');
+  assert.equal(new Set(ids).size, ids.length, 'no id names two utterances');
+  assert.ok(ids.includes('c1-dup'), 'the entry that supplied its own identity kept it');
+  assert.equal(core.listComments().find((c) => c.id === 'c1-dup').body, 'not conflicting with anything',
+    'and it is the entry that supplied it, not a copy wearing its name');
+  assert.equal(r.conflicts, 1, 'only the one that actually conflicted is reported as one');
+  invariants(core, 'keepBoth envelope-wide');
+  core.destroy();
+});

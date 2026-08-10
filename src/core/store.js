@@ -162,6 +162,19 @@ export class CommentStore {
   ingest(incoming, mode, onConflict) {
     const diff = EMPTY_DIFF();
     const result = { added: 0, updated: 0, skipped: 0, conflicts: 0 };
+    // Everything an id could collide with, reserved BEFORE anything is minted: what is stored, and
+    // what this envelope supplies. Reserving only the stored side let a generated name take an
+    // identity the same envelope was about to deliver — so an utterance that conflicted with nothing
+    // was renamed and reported as a conflict, on account of a name invented for somebody else. Taken
+    // before the wipe below, because under a replacement the store is about to be empty and the
+    // envelope's own identities are then the only ones left to avoid.
+    const reserved = this._takenIds();
+    for (const c of incoming) {
+      if (c && typeof c.id === 'string') reserved.add(c.id);
+      for (const r of (c && Array.isArray(c.replies) ? c.replies : [])) {
+        if (r && typeof r.id === 'string') reserved.add(r.id);
+      }
+    }
     if (mode === 'replace') {
       for (const prev of this._byId.values()) diff.removed.push(Object.freeze({ ...prev }));
       this._byId.clear();
@@ -180,8 +193,7 @@ export class CommentStore {
           // A kept-both copy is a NEW utterance, and so is every reply under it. Renaming only the
           // root left the copy's replies wearing the originals' ids, so one id named two utterances —
           // which makes "how many are there" and "have I seen this one" unanswerable, quietly.
-          const taken = this._takenIds();
-          const fresh = (base) => { let id = `${base}-dup`, n = 1; while (taken.has(id)) id = `${base}-dup${++n}`; taken.add(id); return id; };
+          const fresh = (base) => { let id = `${base}-dup`, n = 1; while (reserved.has(id)) id = `${base}-dup${++n}`; reserved.add(id); return id; };
           c.id = fresh(c.id);
           if (Array.isArray(c.replies)) c.replies = c.replies.map((r) => ({ ...r, id: fresh(r.id) }));
           this._byId.set(c.id, c);

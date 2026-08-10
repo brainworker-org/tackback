@@ -19,11 +19,28 @@
 // A readOnly instance DOES call `save`: `readOnly` means the document does not change, not that the
 // reader leaves no trace.
 //
-// @typedef {{ schemaVersion: 1, documentId: string, comments: import('./model.js').Comment[],
-//   arrival?: Record<string, number>, observed?: Record<string, number>, arrivalNext?: number }} StoredDocument
-// @typedef {{ load(): StoredDocument|null|Promise<StoredDocument|null>, save(doc: StoredDocument): void|Promise<void>, subscribe?(cb: () => void): () => void }} StorageAdapter
-
 import { TackbackError } from './errors.js';
+
+/**
+ * What is written and read back. The three optional fields are the environment-local records
+ * described above; a document written before 0.9.7 simply has none of them.
+ * @typedef {object} StoredDocument
+ * @property {1} schemaVersion
+ * @property {string} documentId
+ * @property {import('./model.js').Comment[]} comments
+ * @property {Record<string, number>} [arrival]      utterance id → the order it reached here
+ * @property {Record<string, number>} [observed]     thread key → how far that thread has been seen
+ * @property {number} [arrivalNext]                  the next arrival number to hand out
+ */
+
+/**
+ * Somewhere to keep a StoredDocument. Both calls may be synchronous or return a promise; the engine
+ * awaits them the same way either way.
+ * @typedef {object} StorageAdapter
+ * @property {() => StoredDocument|null|Promise<StoredDocument|null>} load
+ * @property {(doc: StoredDocument) => void|Promise<void>} save
+ * @property {(cb: () => void) => (() => void)} [subscribe] told when the same storage changed elsewhere
+ */
 
 /**
  * The default adapter: a single localStorage key per document. Sync, zero-config, offline.

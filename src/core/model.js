@@ -42,6 +42,27 @@ import { newId } from './id.js';
  * @typedef {{ body: string, author?: Author }} AddReplyInput
  */
 
+/**
+ * The shared file: a document's comments, self-describing enough to be read somewhere else. It is
+ * declared here, next to what it carries, because it is the shape two published functions name.
+ *
+ * `deleted` is a list of ids the producer says are GONE — an envelope that both lists an id and
+ * buries it is contradicting itself, and the burial is the fresher fact.
+ *
+ * What is deliberately NOT here: anything about one reader. What has arrived and how far somebody has
+ * got are facts about an environment, and this is a file people send each other.
+ * @typedef {object} ExportEnvelope
+ * @property {1} schemaVersion
+ * @property {{ name: string, version: string }} generator
+ * @property {{ id: string, revisionHash?: string, [k: string]: any }} document
+ * @property {string} exportedAt
+ * @property {Author|null} exportedBy
+ * @property {Comment[]} comments
+ * @property {string[]} [deleted]
+ * @property {Array<{ id: string, [k: string]: any }>} [reactions]
+ * @property {Array<{ id: string, [k: string]: any }>} [surfaces]
+ */
+
 const ANCHOR_TYPES = new Set(['block', 'range', 'region', 'document']);
 
 /**
