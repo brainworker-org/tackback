@@ -1604,3 +1604,70 @@ test('an adapter whose operations are methods is not disabled by having half a p
   assert.equal(adapter.docs[0].comments.length, 2);
   core.destroy();
 });
+
+test('a record that never finishes writing does not hold up the other', async () => {
+  // Separating where the two are kept, and whether each succeeds, and still queueing them behind one
+  // another leaves them joined in TIME: a progress write that never answers stops the document being
+  // attempted at all. Same coupling, different road.
+  const never = new Promise(() => {});
+  const docs = [], progress = [];
+  const stuck = {
+    load: () => null, loadProgress: () => null,
+    save: (d) => { docs.push(d); },
+    saveProgress: (p) => { progress.push(p); return never; },
+  };
+  const core = mount({ storage: stuck });
+  await core.ready;
+  core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'written while progress hangs' });
+  await quiet();
+  assert.equal(progress.length, 1, 'the progress write started and is still hanging');
+  assert.equal(docs.length, 1, 'and the document was written anyway');
+
+  core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'and so is the next one' });
+  await quiet();
+  assert.equal(docs.length, 2);
+  assert.equal(progress.length, 1, 'while the hung channel is still waiting on its own');
+  core.destroy();
+});
+
+test('a document write that never finishes does not hold up reading', async () => {
+  const never = new Promise(() => {});
+  const docs = [], progress = [];
+  const stuck = {
+    load: () => ({ schemaVersion: 1, documentId: 'd', comments: [entry('c1', 'p1')] }),
+    loadProgress: () => ({ arrival: { c1: 1 }, observed: {}, arrivalNext: 2 }),
+    save: (d) => { docs.push(d); return never; },
+    saveProgress: (p) => { progress.push(p); },
+  };
+  const core = mount({ storage: stuck });
+  await core.ready;
+  core.addComment({ anchor: { type: 'block', elementId: 'p2' }, body: 'starts a document write that hangs' });
+  await quiet();
+  assert.equal(docs.length, 1, 'hanging');
+
+  const d = display(core);
+  await d.show('block:p1');
+  await quiet();
+  assert.equal(core.unreadCount('block:p1'), 0, 'the reading happened');
+  assert.ok(progress.length >= 1, 'and was written, on its own channel');
+  core.destroy();
+});
+
+test('each channel still writes one at a time, newest state last', async () => {
+  // Independent between the records, serial within one: two writes of the same record finishing out
+  // of order would leave an older snapshot on top, quietly undoing the newer one.
+  const gated = makeGated();
+  const core = mount({ storage: gated.adapter });
+  core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'one' });
+  await settle();
+  assert.equal(gated.calls.length, 1);
+  core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'two' });
+  core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'three' });
+  await settle();
+  assert.equal(gated.calls.length, 1, 'nothing started alongside it');
+  await gated.release();
+  await settle();
+  assert.equal(gated.calls.length, 2, 'and the two that queued became one');
+  assert.equal(gated.calls[1].comments.length, 3, 'carrying the state as it is now');
+  core.destroy();
+});

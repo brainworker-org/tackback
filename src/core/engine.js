@@ -109,8 +109,11 @@ class TackbackInstance {
     this._staged = [];               // ids seen but not yet numbered — see _stageArrival
     this._lastUnreadSig = '[]';      // the last unread snapshot announced, as JSON, to suppress repeats
     this._loadFaults = [];           // entries refused while restoring; reported just before `ready`
-    this._saveChain = Promise.resolve();
-    this._persistQueued = false;
+    // A channel each. Sharing one queue would have kept them apart in storage and in failure while
+    // joining them in TIME: a progress write that never settles would stop the document from being
+    // attempted at all, which is the same coupling arriving by a different road.
+    this._docChain = Promise.resolve(); this._docQueued = false;
+    this._progressChain = Promise.resolve(); this._progressQueued = false;
     // Each record is pending while its revision is ahead of what has actually landed. A plain flag
     // cannot say this: a write that succeeds would clear changes that arrived after its snapshot was
     // taken, and those changes would then be pending in nobody's book.
@@ -1046,19 +1049,31 @@ class TackbackInstance {
   _schedulePersist(documentToo = false) {
     if (documentToo) this._documentRev += 1;
     this._progressRev += 1;
-    if (this._persistQueued) return;
-    this._persistQueued = true;
-    this._saveChain = this._saveChain
-      .then(async () => {
-        this._persistQueued = false;
-        if (this._destroyed) return;   // a queued save has nothing left to be about
-        // Each record is attempted on its own, and neither can stop the other from being attempted.
-        // Separating WHERE they are kept without separating whether they succeed would leave them
-        // apart in storage and joined in failure — a progress write that could not land would take a
-        // comment down with it, which is the same coupling in a different place.
-        await this._writeRecord('progress');
-        await this._writeRecord('document');
-      });
+    this._pump('progress');
+    this._pump('document');
+  }
+
+  /**
+   * Keep one record's writes moving, one at a time, on its own channel.
+   *
+   * Serial WITHIN a record because two writes of the same thing finishing out of order would put an
+   * older snapshot last, quietly undoing what the newer one said. Independent BETWEEN records because
+   * they are different people's work: one that is slow, or that never answers at all, must not be able
+   * to hold the other up. While a write is in flight any number of further requests collapse into a
+   * single later one, which then writes the state as it is then.
+   * @param {'document'|'progress'} which
+   */
+  _pump(which) {
+    const isDocument = which === 'document';
+    if (isDocument ? this._docQueued : this._progressQueued) return;
+    if (isDocument) this._docQueued = true; else this._progressQueued = true;
+    const run = async () => {
+      if (isDocument) this._docQueued = false; else this._progressQueued = false;
+      if (this._destroyed) return;   // a queued write has nothing left to be about
+      await this._writeRecord(which);
+    };
+    if (isDocument) this._docChain = this._docChain.then(run);
+    else this._progressChain = this._progressChain.then(run);
   }
 
   /**

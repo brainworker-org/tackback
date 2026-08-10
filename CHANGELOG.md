@@ -45,8 +45,10 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
   `loadProgress` / `saveProgress`, never folded into the document write. That separation is the
   guarantee rather than a tidiness choice: an instance that has only read cannot write a comment, so
   it can never undo what another one wrote — which a single combined write made possible, silently,
-  whenever the same document was open twice. The two are also written INDEPENDENTLY: neither failing
-  stops the other being attempted, and each stays pending until its own write lands. An adapter
+  whenever the same document was open twice. The two are also written INDEPENDENTLY, on a channel each:
+  neither failing stops the other being attempted, neither being slow (or never answering) holds the
+  other up, and each stays pending until its own write lands. Within a record the writes stay serial,
+  so an older snapshot can never land on top of a newer one. An adapter
   supplying neither method (or only one, which is reported and counts as neither) keeps nothing
   between mounts: whatever is already stored becomes the baseline this reader is taken to have seen.
   Its comments are never at risk either way. The built-in adapters implement both, keeping progress
