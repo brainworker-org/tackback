@@ -53,15 +53,20 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
   between mounts: whatever is already stored becomes the baseline this reader is taken to have seen.
   Its comments are never at risk either way. The built-in adapters implement both, keeping progress
   under its own key.
-- **Three states when restoring, not two.** A stored document now records which shape it was written
-  in, so a missing progress record can be told from a document that predates progress. No marker and
-  no record: written before any of this, and what is in it counts as seen. The marker with no record:
-  progress never landed. An unreadable record: nothing is known. Only the first answers "already
-  seen" — the other two leave everything to be looked at again, because unknown is never turned into
-  read. The marker is present only when the adapter can actually keep a record — an adapter with
-  nowhere to put one is not read as one whose write failed — and absent is its only other value, so
-  there is one shape for that rather than two meaning the same. It says how what is stored is
-  arranged, not anything about a reader, so it stays with the document and out of the export envelope.
+- **Restoring asks four questions, in order.** Is there a document; can its own shape be read; can
+  this adapter reach a progress record; and only then, what does the record say. Each is asked only
+  when the one before leaves the question open, so nothing waits on an answer it was never going to
+  use. A document declares its shape with `keepsProgress`, present only when the adapter can actually
+  keep a record — so one written where progress cannot be kept is not mistaken for one whose write
+  failed. Absent is its only other value, and a value nobody recognises means the shape itself cannot
+  be read: reported, and the record not believed.
+
+  **Exactly one outcome counts as read without a record saying so**: a document that never declared
+  one. Declared and missing, present and unreadable, out of reach — all leave everything to be looked
+  at again, and say once why. Unknown is never turned into already-read, because a mark that should be
+  there and is not is the failure this version exists to remove. The declaration says how what is
+  stored is arranged, not anything about a reader, so it stays with the document and out of the
+  export envelope.
 - **Two requirements come with progress**: one storage belongs to **one environment** (a server-backed
   adapter shared between viewers would make one person's reading everybody's), and arrival numbering
   assumes **one live instance at a time** per environment.

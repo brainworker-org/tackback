@@ -12,16 +12,27 @@
 // appearing only at the next reload. Separate records remove the ability rather than guard its use.
 //
 // `loadProgress` / `saveProgress` are OPTIONAL, and are a PAIR: an adapter supplying one of them is
-// treated as supplying neither, and told so. Without them nothing is kept between mounts — whatever
-// is already stored becomes the baseline the reader is taken to have seen, and only what arrives
-// AFTER the mount reads as new. That is the safe way to be incomplete; folding progress back into the
-// document write is the defect.
+// treated as supplying neither, and told so. Without them nothing is kept between mounts — a document
+// written through such an adapter never declares that a record is expected, so next time whatever is
+// already stored is the baseline the reader is taken to have seen, and only what arrives after the
+// mount reads as new. That is the safe way to be incomplete; folding progress back into the document
+// write is the defect.
 //
-// Three states, three meanings, and they must not be collapsed: NO RECORD means this document was
-// written before progress existed, so what is in it counts as seen. A record that EXISTS and cannot
-// be read means nothing is known, and unknown is never turned into 'already read' — everything is
-// left to be looked at again. A readable record is believed, field by field, with what is
-// structurally wrong in it discarded rather than guessed at.
+// What may be called ALREADY READ is decided in a fixed order, and each step is asked only when the
+// one before it leaves the question open:
+//
+//   1. Is there a document at all. If not, there is nothing for progress to apply to.
+//   2. Can the document's SHAPE be read — its `keepsProgress` declaration. Absent means no separate
+//      record was ever expected here; `true` means one is; anything else means the shape cannot be
+//      read, which is reported and stops the record being believed at all.
+//   3. Can this adapter reach a record. Without the pair, none is asked for.
+//   4. Only then, what the record says: absent, unreadable, or readable — and a readable one is
+//      believed field by field, with what is structurally wrong in it discarded rather than guessed.
+//
+// Exactly one of those outcomes counts as read without a record saying so: a document that never
+// declared one. Everything else — declared and missing, present and unreadable, out of reach —
+// leaves the reader to look again, and says once why. Unknown is never turned into already-read,
+// because a mark that should be there and is not is the failure this version exists to remove.
 //
 // Two requirements come with progress, and they are requirements rather than advice:
 //   1. ONE ENVIRONMENT PER STORAGE. Progress says what one reader has read. An adapter that shared it

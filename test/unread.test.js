@@ -1745,11 +1745,15 @@ test('a document kept by an adapter that cannot hold progress does not claim it 
 
 // ---- the whole domain, not the cases somebody happened to hit -------------------------------------
 //
-// Restoring is decided by three things at once: whether the stored document DECLARES that reading
-// progress is kept in a record of its own, whether this adapter can reach such a record, and what
-// state that record is in. Every defect found in this area was one unenumerated cell of that product,
-// found by reproducing it. Reproduction finds the cell somebody walked into; it cannot find the cell
-// nobody has.
+// Restoring is decided in a fixed order — is there a document, can its own shape be read, can this
+// adapter reach a record, and only then what the record says — and each step is asked only when the
+// one before leaves the question open. Every defect found in this area was one unenumerated cell of
+// that product, found by reproducing it. Reproduction finds the cell somebody walked into; it cannot
+// find the cell nobody has.
+//
+// This test covers the last two steps for a document that exists and whose shape reads cleanly. The
+// first two are preconditions with their own tests below, and they are preconditions in execution as
+// well as in this comment — which is a thing that had to be fixed, not a thing that was true.
 //
 // The axes, and why each is shaped this way:
 //
@@ -1778,31 +1782,31 @@ test('restoring: every reachable combination of declaration, capability and reco
 
   const CASES = [
     // declaration absent — nothing here says a separate record was ever expected
-    ['absent · unavailable',            false, 'unavailable', null, 0,
+    ['absent · unavailable',            false, 'unavailable', null, 0, 0,
       'no record was ever expected here: what is stored is what the reader has lived with'],
-    ['absent · complete · no record',   false, 'complete', null, 0,
+    ['absent · complete · no record',   false, 'complete', null, 0, 0,
       'the same, and being able to look changes nothing about what is there to find'],
-    ['absent · complete · unreadable',  false, 'complete', 'unreadable', 1,
+    ['absent · complete · unreadable',  false, 'complete', 'unreadable', 1, 1,
       'a record IS here and cannot be read: nothing is known'],
-    ['absent · complete · says unread', false, 'complete', SAYS_UNREAD, 1,
+    ['absent · complete · says unread', false, 'complete', SAYS_UNREAD, 1, 0,
       'the record is believed — and it is the record that answers, not the declaration'],
-    ['absent · complete · says read',   false, 'complete', SAYS_READ, 0,
+    ['absent · complete · says read',   false, 'complete', SAYS_READ, 0, 0,
       'believed here too: an undeclared document with a record that says read, is read'],
 
     // declaration present — this document was written where a record is kept
-    ['present · unavailable',            true, 'unavailable', null, 1,
+    ['present · unavailable',            true, 'unavailable', null, 1, 0,
       'a record was expected and this adapter cannot reach it: nothing is known'],
-    ['present · complete · no record',   true, 'complete', null, 1,
+    ['present · complete · no record',   true, 'complete', null, 1, 0,
       'expected, reachable, and not there: the write never landed'],
-    ['present · complete · unreadable',  true, 'complete', 'unreadable', 1,
+    ['present · complete · unreadable',  true, 'complete', 'unreadable', 1, 1,
       'nothing is known'],
-    ['present · complete · says unread', true, 'complete', SAYS_UNREAD, 1,
+    ['present · complete · says unread', true, 'complete', SAYS_UNREAD, 1, 0,
       'believed'],
-    ['present · complete · says read',   true, 'complete', SAYS_READ, 0,
+    ['present · complete · says read',   true, 'complete', SAYS_READ, 0, 0,
       'believed — a declared document with a record that says read, is read'],
   ];
 
-  for (const [name, declared, capability, record, expected, why] of CASES) {
+  for (const [name, declared, capability, record, expected, faults, why] of CASES) {
     const adapter = { load: () => doc(declared), save: () => {} };
     if (capability === 'complete') {
       adapter.loadProgress = () => {
@@ -1812,10 +1816,16 @@ test('restoring: every reachable combination of declaration, capability and reco
       adapter.saveProgress = () => {};
     }
     const core = mount({ storage: adapter });
-    core.on('error', () => {});
+    const errors = [];
+    core.on('error', (e) => errors.push(e));
     await core.ready;
     await quiet();
     assert.equal(core.unreadCount('block:p1'), expected, `${name} → ${why}`);
+    // A cell answers TWO things: what is left to read, and whether anything was wrong on the way. A
+    // conservative answer reached in silence is the right number with the reason thrown away — and
+    // the reason is the only thing that tells an integrator their storage is broken.
+    assert.equal(errors.filter((e) => e.code === 'STORAGE_LOAD_FAILED').length, faults,
+      `${name}: faults announced`);
     invariants(core, name);
     core.destroy();
   }

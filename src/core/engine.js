@@ -1138,10 +1138,14 @@ class TackbackInstance {
     if (declaration === 'malformed' || !this._progressCapable) return this._hydrateWith(doc, declaration, null);
     let kept;
     // A load that throws is a record that EXISTS and cannot be read — a different thing from none.
-    try { kept = this._envAdapter.loadProgress(); } catch { return this._hydrateWith(doc, declaration, UNREADABLE); }
+    const unreadable = () => {
+      this._loadFaults.push({ code: 'STORAGE_LOAD_FAILED', message: 'stored reading progress could not be read; nothing is taken as read' });
+      return this._hydrateWith(doc, declaration, UNREADABLE);
+    };
+    try { kept = this._envAdapter.loadProgress(); } catch { return unreadable(); }
     // Only here does waiting begin, and only on something whose answer is going to be used.
     return (kept && typeof kept.then === 'function')
-      ? kept.then((p) => this._hydrateWith(doc, declaration, p), () => this._hydrateWith(doc, declaration, UNREADABLE))
+      ? kept.then((p) => this._hydrateWith(doc, declaration, p), unreadable)
       : this._hydrateWith(doc, declaration, kept);
   }
 
