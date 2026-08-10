@@ -63,8 +63,11 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
 
   **Exactly one outcome counts as read without a record saying so**: a document that never declared
   one. Declared and missing, present and unreadable, out of reach — all leave everything to be looked
-  at again, and say once why. Unknown is never turned into already-read, because a mark that should be
-  there and is not is the failure this version exists to remove. The declaration says how what is
+  at again. Unknown is never turned into already-read, because a mark that should be there and is not
+  is the failure this version exists to remove. An `error` names the cases that are actually broken —
+  a document shape that cannot be read, a record that cannot be read, half a progress pair — and stays
+  quiet about the two that are merely uncertain: a declared record that has not landed yet, and an
+  adapter with no progress pair at all. The declaration says how what is
   stored is arranged, not anything about a reader, so it stays with the document and out of the
   export envelope.
 - **Two requirements come with progress**: one storage belongs to **one environment** (a server-backed

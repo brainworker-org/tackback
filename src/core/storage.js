@@ -30,9 +30,15 @@
 //      believed field by field, with what is structurally wrong in it discarded rather than guessed.
 //
 // Exactly one of those outcomes counts as read without a record saying so: a document that never
-// declared one. Everything else — declared and missing, present and unreadable, out of reach —
-// leaves the reader to look again, and says once why. Unknown is never turned into already-read,
-// because a mark that should be there and is not is the failure this version exists to remove.
+// declared one. Everything else — declared and missing, present and unreadable, out of reach — leaves
+// the reader to look again. Unknown is never turned into already-read, because a mark that should be
+// there and is not is the failure this version exists to remove.
+//
+// Reported, once each: a document shape that cannot be read, a record that cannot be read, and half a
+// progress pair. NOT reported: a declared record that is simply not there yet, and an adapter with no
+// progress pair at all. Those two are uncertainty rather than failure — one is a write that has not
+// landed, the other is a supported arrangement — and an error for either would cry wolf about a
+// storage that is working exactly as it was built to.
 //
 // Two requirements come with progress, and they are requirements rather than advice:
 //   1. ONE ENVIRONMENT PER STORAGE. Progress says what one reader has read. An adapter that shared it
