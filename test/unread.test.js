@@ -1931,3 +1931,47 @@ test('restoring: a shape that cannot be read stops the record being believed, no
   assert.equal(ok.unreadCount('block:p1'), 0, 'a shape that can be read believes what is inside it');
   ok.destroy();
 });
+
+test('restoring: nothing waits for an answer it was never going to use', async () => {
+  // The partitions have to be an ORDER, not just a hierarchy in prose. Asking for progress before
+  // deciding whether there is a document, or whether its shape can be read, means an adapter that
+  // answers late — or never — holds up decisions that never needed it. Readiness then hangs on a
+  // question with no bearing on the answer.
+  const never = () => new Promise(() => {});
+  const settled = (p) => Promise.race([p, new Promise((r) => setTimeout(() => r('HUNG'), 40))]);
+
+  // No document: there is nothing for progress to apply to.
+  const empty = mount({ storage: { load: () => null, save: () => {}, loadProgress: never, saveProgress: () => {} } });
+  assert.notEqual(await settled(empty.ready.then(() => 'ready')), 'HUNG', 'ready with no document');
+  assert.deepEqual(empty.unreadThreads(), []);
+  empty.destroy();
+
+  // A shape that cannot be read: the record was never going to be believed.
+  const errors = [];
+  const malformed = mount({ storage: {
+    load: () => ({ schemaVersion: 1, documentId: 'd', keepsProgress: 'yes please', comments: [entry('c1', 'p1')] }),
+    save: () => {}, loadProgress: never, saveProgress: () => {},
+  } });
+  malformed.on('error', (e) => errors.push(e));
+  assert.notEqual(await settled(malformed.ready.then(() => 'ready')), 'HUNG', 'ready with an unreadable shape');
+  await quiet();
+  assert.equal(malformed.unreadCount('block:p1'), 1, 'and left to be looked at again');
+  assert.equal(errors.filter((e) => e.code === 'STORAGE_LOAD_FAILED').length, 1);
+  invariants(malformed, 'malformed shape, pending progress');
+  malformed.destroy();
+
+  // …while a document whose shape IS readable does wait, because the answer is going to be used.
+  let release;
+  const waits = mount({ storage: {
+    load: () => ({ schemaVersion: 1, documentId: 'd', keepsProgress: true, comments: [entry('c1', 'p1')] }),
+    save: () => {},
+    loadProgress: () => new Promise((r) => { release = () => r({ arrival: { c1: 1 }, observed: { 'block:p1': 1 }, arrivalNext: 2 }); }),
+    saveProgress: () => {},
+  } });
+  assert.equal(await settled(waits.ready.then(() => 'ready')), 'HUNG', 'it waits for what it will use');
+  release();
+  await waits.ready;
+  await quiet();
+  assert.equal(waits.unreadCount('block:p1'), 0, 'and then believes it');
+  waits.destroy();
+});

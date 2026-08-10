@@ -1128,47 +1128,62 @@ class TackbackInstance {
    * @param {import('./storage.js').StoredDocument|null} doc
    */
   _hydrateEnv(doc) {
-    // Progress comes from its own place, and it may arrive later than the document — an adapter is
-    // allowed to be asynchronous everywhere, and reading progress is no exception. Nothing is derived
-    // until both are in hand, so a slow progress read delays readiness rather than being missed.
-    if (!this._progressCapable) return this._hydrateWith(doc, null);
+    // The order below is the order these decisions actually depend on each other in, and it has to
+    // be: asking for progress first means an adapter that answers late — or never — holds up
+    // decisions that never needed it. There is nothing for progress to apply to when there is no
+    // document, and nothing to believe when the document's own shape cannot be read.
+    if (!doc) { this._arrivalNext = 1; return doc; }
+    const declaration = this._readDeclaration(doc);
+    // Neither of these consults the record, so neither waits for one.
+    if (declaration === 'malformed' || !this._progressCapable) return this._hydrateWith(doc, declaration, null);
     let kept;
     // A load that throws is a record that EXISTS and cannot be read — a different thing from none.
-    try { kept = this._envAdapter.loadProgress(); } catch { return this._hydrateWith(doc, UNREADABLE); }
+    try { kept = this._envAdapter.loadProgress(); } catch { return this._hydrateWith(doc, declaration, UNREADABLE); }
+    // Only here does waiting begin, and only on something whose answer is going to be used.
     return (kept && typeof kept.then === 'function')
-      ? kept.then((p) => this._hydrateWith(doc, p), () => this._hydrateWith(doc, UNREADABLE))
-      : this._hydrateWith(doc, kept);
+      ? kept.then((p) => this._hydrateWith(doc, declaration, p), () => this._hydrateWith(doc, declaration, UNREADABLE))
+      : this._hydrateWith(doc, declaration, kept);
+  }
+
+  /**
+   * Whether this document says reading progress is kept in a record of its own.
+   *
+   * It decides whether an ABSENT record means no record was ever expected — the one answer that
+   * counts everything as seen — so a value nobody recognises must not be able to pass for no value.
+   * Stored data is reachable by hand and through adapters that were never typed, and corrupted format
+   * metadata quietly clearing marks is the failure this field exists to prevent. Presence is asked
+   * separately from value, because a property that is THERE holding undefined is not one that was
+   * never written.
+   * @param {import('./storage.js').StoredDocument} doc
+   * @returns {'absent'|'present'|'malformed'}
+   */
+  _readDeclaration(doc) {
+    if (!Object.prototype.hasOwnProperty.call(doc, 'keepsProgress')) return 'absent';
+    if (doc.keepsProgress === true) return 'present';
+    this._loadFaults.push({
+      code: 'STORAGE_LOAD_FAILED',
+      message: 'stored document declares an unrecognised progress format; nothing is taken as read',
+    });
+    return 'malformed';
   }
 
   /**
    * @param {import('./storage.js').StoredDocument|null} doc
-   * @param {any} progress the stored progress, `null` if there is none, or UNREADABLE if there is one
-   *   that could not be read
+   * @param {'absent'|'present'|'malformed'} declaration what the document says about its own shape
+   * @param {any} progress the stored progress, `null` if there is none or none was asked for, or
+   *   UNREADABLE if there is one that could not be read
    */
-  _hydrateWith(doc, progress) {
-    if (!doc) { this._arrivalNext = 1; return doc; }
+  _hydrateWith(doc, declaration, progress) {
     // An adapter's answer is outside input, exactly like an envelope, and gets the same check.
     const { comments, faults } = sanitizeComments(doc.comments);
     this._loadFaults.push(...faults);
-    // Whether anything here may be called ALREADY READ is decided by two things, asked in order.
+    // What may be called ALREADY READ. The shape has already been read — that decision came first,
+    // because it does not need the record and must not wait for one — so what is left is what the
+    // record itself says, and whether it may be believed at all.
     //
-    // First, can the stored shape be read at all. The document declares whether reading progress is
-    // kept in a record of its own, and that declaration decides whether an ABSENT record means "no
-    // record was ever expected" — the one answer that counts everything as seen. So a value nobody
-    // recognises must not be able to pass for no value: stored data is reachable by hand and through
-    // adapters that were never typed, and corrupted format metadata quietly clearing marks is the
-    // failure this field exists to prevent. Presence is asked separately from value, because a
-    // property that is THERE holding undefined is not one that was never written.
-    const hasDeclaration = Object.prototype.hasOwnProperty.call(doc, 'keepsProgress');
-    const declaration = !hasDeclaration ? 'absent'
-      : doc.keepsProgress === true ? 'present'
-        : 'malformed';
-    if (declaration === 'malformed') {
-      this._loadFaults.push({
-        code: 'STORAGE_LOAD_FAILED',
-        message: 'stored document declares an unrecognised progress format; nothing is taken as read',
-      });
-    }
+    // A shape that could not be read stops the record being believed rather than merely being
+    // reported alongside it: validation that announces a problem and then trusts what it could not
+    // validate is a comment, not a boundary, and the record is the one thing able to say "read".
 
     // Then, and only for a shape that could be read, what the record itself says. A malformed shape
     // stops the record being believed at all rather than merely being reported alongside it —
