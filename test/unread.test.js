@@ -1735,16 +1735,6 @@ test('a document kept by an adapter that cannot hold progress does not claim it 
 
 // ---- the whole domain, not the cases somebody happened to hit -------------------------------------
 //
-// Restoring is decided by three things at once: what SHAPE the stored document says it was written in,
-// whether this adapter can reach a progress record at all, and what state that record is in. Every
-// defect found in this area was one unenumerated cell of that product, found by reproduction, fixed
-// one at a time. The table is the fix for the class: a cell with no row is a question nobody asked.
-//
-// Capability comes first, because without it the record is never consulted — so those rows have no
-// record axis rather than an empty one.
-
-// ---- the whole domain, not the cases somebody happened to hit -------------------------------------
-//
 // Restoring is decided in a fixed order — is there a document, can its own shape be read, can this
 // adapter reach a record, and only then what the record says — and each step is asked only when the
 // one before leaves the question open. Every defect found in this area was one unenumerated cell of
