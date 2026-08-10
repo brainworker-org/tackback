@@ -558,6 +558,12 @@ class TackbackInstance {
     if (generation !== this._visibilityGeneration) return { ok: false, error: null };
     const visible = [...merged.values()]
       .sort((a, b) => (a.threadKey < b.threadKey ? -1 : a.threadKey > b.threadKey ? 1 : 0));
+    // A LOOK THAT SUCCEEDED ends the failure it succeeded after — here, where looking happens, and so
+    // for whoever took it. Ending the episode on the scheduled path alone made a pull a second kind of
+    // success that did not count: a display could recover in full view of the caller and still be
+    // carrying the verdict earned before, with no attempts left and nothing said when it failed again.
+    this._visibilityRetries = 0;
+    this._visibilityReported = false;
     return { ok: true, visible };
   }
 
@@ -599,8 +605,6 @@ class TackbackInstance {
       this._fail('ADAPTER_FAILED', 'a display could not report what is visible', attempt.error);
       return;
     }
-    this._visibilityRetries = 0;
-    this._visibilityReported = false;
     const visible = attempt.visible;
     const before = this._visibilityDelivered;
     const now = new Map(visible.map((e) => [e.threadKey, e]));

@@ -1809,13 +1809,26 @@ test('visibility: looking again, and giving up, belong to the failure — not to
     assert.equal(errors.length, 2, 'a failure after a good look is a different failure');
     assert.ok(firstAsked > spent, 'and it got its looks back too');
 
+    // The same recovery, seen the other way a look can be taken. A caller pulling and getting an
+    // answer has observed the display working just as surely as a report would have — so if only one
+    // of the two ends the episode, a display that recovers where the caller can see it goes on
+    // carrying a verdict from before, with no looks left and nothing said when it fails again.
+    failing = false;
+    assert.deepEqual(f.core.visibleThreads(), [], 'the pull gets a real answer');
+    failing = true;
+    const beforePull = firstAsked;
+    f.core.reportThreadVisibility();
+    exhaustSelfRetries(f.env);
+    assert.ok(firstAsked - beforePull > 1, 'a pull that worked gives the looks back too');
+    assert.equal(errors.length, 3, 'and the failure after it is a new one, said once');
+
     // A replacement display is the other way an episode ends. It must arrive with everything.
     dropFirst();
     let secondAsked = 0;
     f.core.registerThreadVisibility(() => { secondAsked += 1; throw new Error('also unreadable'); });
     exhaustSelfRetries(f.env);
     assert.ok(secondAsked > 1, 'the display that arrived second is looked at more than once too');
-    assert.equal(errors.length, 3, 'and is complained about on its own account, once');
+    assert.equal(errors.length, 4, 'and is complained about on its own account, once');
   } finally { f.restore(); }
 });
 
