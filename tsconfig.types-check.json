@@ -1,0 +1,13 @@
+{
+  "// note": "Checks the PUBLISHED declarations, which the emitting build cannot: it has skipLibCheck on, so a .d.ts that names a type nobody declares is emitted without complaint and only fails in a consumer's editor. Run after `npm run types`.",
+  "compilerOptions": {
+    "noEmit": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "target": "ES2020",
+    "lib": ["ES2020", "DOM"],
+    "skipLibCheck": false,
+    "strict": false
+  },
+  "include": ["types/**/*.d.ts", "scripts/types-usage.ts"]
+}

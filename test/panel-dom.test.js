@@ -308,14 +308,15 @@ function instrumentEnv({ noRaf = false } = {}) {
 }
 
 /** Mount a core + panel on a fresh fake document. Returns everything a test needs to drive it. */
-function mountPanel({ comments = [], controls, instrument = false, setup, noRaf = false } = {}) {
+function mountPanel({ comments = [], controls, instrument = false, setup, noRaf = false, storage: storageOverride } = {}) {
   const env = instrument ? instrumentEnv({ noRaf }) : null;
   const doc = fakeDoc();
   // mount on the body, as a page with no explicit root does — that is what puts the lane INSIDE the
   // gesture root, which is the only geometry in which the lane's gesture guard can be exercised.
   const root = doc.body;
-  // a storage adapter that seeds the store WITHOUT validation — the path a persisted comment takes
-  const storage = { load: () => ({ comments }), save: () => {} };
+  // a storage adapter that seeds the store — the path a persisted comment takes. A test can supply
+  // its own to seed the environment-local records too, or to make loading finish after the mount.
+  const storage = storageOverride || { load: () => ({ comments }), save: () => {} };
   const core = Tackback.mount({ document: { id: 'panel-fixture' }, storage, root });
   // Page content the test needs is added BEFORE the panel attaches, so the baseline below includes
   // it and the meter measures the panel's footprint rather than the fixture's.
@@ -971,7 +972,7 @@ test('panel: a Pane replaced before its deferred callback fires leaves no listen
   } finally { f.restore(); }
 });
 
-test('panel: a modal is a surface — one at a time, and it goes when the panel does', async () => {
+test('panel: a modal belongs to the panel — one at a time, and it goes when the panel does', async () => {
   // They used to be unclassed children appended straight to the body: outside every sweep and every
   // count, stacking one per click, and an import modal opened before teardown could still write into
   // the core afterwards.
@@ -1172,7 +1173,7 @@ test('panel: a modal dismissing itself does not close the one that replaced it',
 // These encode the settled decisions rather than the implementation, so they stay meaningful if the
 // mechanism is rewritten. The shape they are protecting: the core announces WHICH THREADS ARE
 // READABLE NOW, as a settled snapshot projected from live state at a microtask boundary — never as a
-// ledger accumulated at each transition, and never from the middle of a surface mutation.
+// ledger accumulated at each transition, and never from the middle of a host changing.
 
 /** Subscribe without asserting inside the handler — the emitter would swallow anything that threw. */
 function recordVisibility(core) {
@@ -1359,7 +1360,7 @@ test('visibility: a handler that closes during the flush is diffed against what 
   // and the second flush sees nothing to compare against and stays silent.
   //
   // It does NOT pin the ORDER of that commit against the emit, and reverting the order does not turn
-  // it red — because a flush is never re-entered from inside itself. A handler that changes a surface
+  // it red — because a flush is never re-entered from inside itself. A handler that changes a host
   // schedules the next flush onto the queue rather than running one, so the frame that wrote a stale
   // baseline would always be the same frame that delivered it. The order is kept as written anyway:
   // it costs nothing, and it is the order that stays correct if a synchronous path is ever added.
@@ -1443,7 +1444,7 @@ test('visibility: a second display replaces the first rather than joining it', (
     assert.deepEqual(f.core.visibleThreads(), [], 'and the live one withdrawing leaves nothing readable');
   } finally { f.restore(); }
 });
-test('visibility: a surface with nothing written in it yet is still readable', () => {
+test('visibility: a thread with nothing written in it yet is still readable', () => {
   // Being open and holding a comment are different facts. A thread the reader has just opened has
   // never been written in, and answering "not readable" while they are looking straight at it makes
   // the report describe the store rather than the reader.
@@ -1933,5 +1934,168 @@ test('panel: every way a thread host ends goes through the one release path', ()
     f.env.drainMicrotasks();
     assert.deepEqual(f.core.visibleThreads(), [], 'and nothing answers once the panel is gone');
     f.assertEnvironmentRestored('every host released');
+  } finally { f.restore(); }
+});
+
+// ---- unread, on the page -------------------------------------------------------------------------
+//
+// The core decides what is unread; these fix what a reader SEES. Reading is one question asked of
+// every host — "is the thread area open" — so the three ways a thread can be on screen are three
+// cases here rather than three mechanisms.
+
+/** A page with two commentable paragraphs, so "this one, not that one" can be said. */
+const twoBlocks = (doc, root) => {
+  for (const id of ['p1', 'p2']) {
+    const p = doc.createElement('p'); p.id = id; p.textContent = `paragraph ${id}`;
+    p.setAttribute('data-tb-anchor', '');
+    root.appendChild(p);
+  }
+};
+const badgeFor = (f, elementId) => f.badges().find((b) => b.__tbComments?.[0]?.anchor?.elementId === elementId);
+const openPane = (f, node) => {
+  node.dispatchEvent({ type: 'click', clientX: 5, clientY: 5, preventDefault() {}, stopPropagation() {} });
+  f.env.flushTimers(); f.env.flushFrames(); f.env.drainMicrotasks();
+};
+
+test('T7: an unopened thread keeps its ring', () => {
+  const f = mountPanel({ instrument: true, setup: twoBlocks });
+  try {
+    f.core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'nobody has read this' });
+    f.env.drainMicrotasks();
+    assert.equal(f.core.unreadCount('block:p1'), 1);
+    assert.ok(badgeFor(f, 'p1').classList.contains('tb-unread'), 'and the reader can see where it is');
+  } finally { f.restore(); }
+});
+
+test('T6/T12: opening a thread clears that one, and only that one', () => {
+  const f = mountPanel({ instrument: true, setup: twoBlocks });
+  try {
+    f.core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'here' });
+    f.core.addComment({ anchor: { type: 'block', elementId: 'p2' }, body: 'and here' });
+    f.env.drainMicrotasks();
+    openPane(f, badgeFor(f, 'p2'));
+
+    assert.equal(f.core.unreadCount('block:p2'), 0, 'the one they opened is read');
+    assert.equal(f.core.unreadCount('block:p1'), 1, 'the one they did not is not');
+    assert.ok(!badgeFor(f, 'p2').classList.contains('tb-unread'), 'the ring is gone from the one opened');
+    assert.ok(badgeFor(f, 'p1').classList.contains('tb-unread'), 'and still on the other');
+  } finally { f.restore(); }
+});
+
+test('T11: something arriving in a thread already open never rings', () => {
+  const f = mountPanel({ instrument: true, setup: twoBlocks });
+  try {
+    f.core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'first' });
+    f.env.drainMicrotasks();
+    openPane(f, badgeFor(f, 'p1'));
+    assert.equal(f.core.unreadCount('block:p1'), 0);
+
+    f.core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'while they are looking' });
+    f.env.drainMicrotasks();
+    assert.equal(f.core.unreadCount('block:p1'), 0, 'they were looking at it as it landed');
+    assert.ok(!badgeFor(f, 'p1').classList.contains('tb-unread'));
+  } finally { f.restore(); }
+});
+
+test('T8/T9: a folded document lane is not read, and unfolding it reads it', () => {
+  // The case that defines what reading means. The lane is present and can be TYPED INTO while folded,
+  // so "the host exists" cannot be the test — the thread area has to be open.
+  const f = mountPanel({ instrument: true });
+  try {
+    f.core.addComment({ anchor: { type: 'document' }, body: 'about the whole thing' });
+    f.panel.toggleDocumentLane(false);
+    f.env.drainMicrotasks();
+    assert.equal(f.core.unreadCount('document'), 1, 'folded away is not read');
+    assert.ok(f.lane().classList.contains('tb-unread'), 'and the lane says so, having no badge of its own');
+
+    f.panel.toggleDocumentLane(true);
+    f.env.drainMicrotasks();
+    assert.equal(f.core.unreadCount('document'), 0);
+    assert.ok(!f.lane().classList.contains('tb-unread'), 'the ring goes when it is opened');
+  } finally { f.restore(); }
+});
+
+test('T10: with no lane, the document thread reads through an ordinary Pane', () => {
+  const f = mountPanel({ controls: { docLane: false }, instrument: true });
+  try {
+    f.core.addComment({ anchor: { type: 'document' }, body: 'about the whole thing' });
+    f.env.drainMicrotasks();
+    assert.equal(f.core.unreadCount('document'), 1);
+    f.panel.openDocumentThread();
+    f.env.drainMicrotasks();
+    assert.equal(f.core.unreadCount('document'), 0, 'the third route works like the other two');
+  } finally { f.restore(); }
+});
+
+test('T26: attention and unread do not take each other\'s place', () => {
+  // If one of them hid the other, an integration still using attention would see "I read it and the
+  // mark is there" all over again — the failure this version exists to remove, reintroduced by the
+  // paint rather than by the state.
+  const f = mountPanel({ instrument: true, setup: twoBlocks });
+  try {
+    const c = f.core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'here' });
+    f.env.drainMicrotasks();
+    const badge = () => badgeFor(f, 'p1');
+    assert.ok(badge().classList.contains('tb-unread'));
+    assert.ok(!badge().classList.contains('tb-attn'));
+
+    f.core.setAnchorAttention(c.id, true);
+    f.env.drainMicrotasks();
+    assert.ok(badge().classList.contains('tb-unread'), 'attention does not cover the ring');
+    assert.ok(badge().classList.contains('tb-attn'), 'and the ring does not cover the fill');
+
+    openPane(f, badge());
+    assert.ok(!badge().classList.contains('tb-unread'), 'reading clears its own mark');
+    assert.ok(badge().classList.contains('tb-attn'), 'and leaves the integrator\'s alone');
+
+    f.core.setAnchorAttention(c.id, false);
+    f.env.drainMicrotasks();
+    assert.ok(!badge().classList.contains('tb-attn'));
+    assert.ok(!badge().classList.contains('tb-unread'));
+  } finally { f.restore(); }
+});
+
+test('T44: what was unread before the reload is rung on the first paint', async () => {
+  // Restoration finishes after the panel is already on screen, so the first draw happens with nothing
+  // known. Whether the ring arrives by the announcement or by the next redraw does not matter — both
+  // ask the core — but it has to arrive.
+  let release;
+  const seed = {
+    schemaVersion: 1, documentId: 'panel-fixture',
+    comments: [
+      { id: 'c1', anchor: { type: 'block', elementId: 'p1' }, body: 'read', createdAt: '2026-08-10T00:00:00.000Z' },
+      { id: 'c2', anchor: { type: 'block', elementId: 'p2' }, body: 'not read', createdAt: '2026-08-10T00:00:00.000Z' },
+    ],
+    arrival: { c1: 1, c2: 2 }, observed: { 'block:p1': 1 }, arrivalNext: 3,
+  };
+  const f = mountPanel({
+    instrument: true,
+    setup: twoBlocks,
+    storage: { load: () => new Promise((r) => { release = () => r(seed); }), save: () => {} },
+  });
+  try {
+    release();
+    await f.core.ready;
+    f.env.drainMicrotasks(); f.env.flushFrames(); f.env.drainMicrotasks();
+    assert.ok(badgeFor(f, 'p2')?.classList.contains('tb-unread'), 'the one nobody opened is rung');
+    assert.ok(!badgeFor(f, 'p1')?.classList.contains('tb-unread'), 'and the one they had read is not');
+  } finally { f.restore(); }
+});
+
+test('a redraw that nothing else follows still leaves the rings on', () => {
+  // Badges are rebuilt from scratch by a redraw, so every class they carried goes with them. A reflow
+  // — a resize, a re-render of the host page — redraws without changing the store, so there is no
+  // announcement afterwards to put anything back. Relying on the announcement alone loses the ring
+  // exactly when the page moved, which is when a reader is most likely to be looking at it.
+  const f = mountPanel({ instrument: true, setup: twoBlocks });
+  try {
+    f.core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'nobody has read this' });
+    f.env.drainMicrotasks();
+    assert.ok(badgeFor(f, 'p1').classList.contains('tb-unread'));
+
+    f.core.recalculateAnchors();
+    f.env.drainMicrotasks();
+    assert.equal(f.core.unreadCount('block:p1'), 1, 'nothing about the reading changed');
+    assert.ok(badgeFor(f, 'p1').classList.contains('tb-unread'), 'so the ring is still there');
   } finally { f.restore(); }
 });

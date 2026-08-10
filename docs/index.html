@@ -346,7 +346,7 @@
   // A seam nobody can observe is a seam nobody can trust.
   const EVENTS = ['ready', 'change', 'comment:add', 'comment:update', 'comment:delete', 'comments:delete',
     'attention:change', 'transport:change', 'anchor:orphaned', 'recalculate', 'rev:mismatch',
-    'submit:batch', 'thread:visibility', 'error'];
+    'submit:batch', 'thread:visibility', 'unread:change', 'error'];
   const logEl = document.getElementById('event-log');
   const logLines = [];
   const summarize = (name, e) => {
@@ -368,6 +368,11 @@
       const shown = e.visible.map((v) => `${v.threadKey} (${v.comments.length})`).join(', ') || 'nothing readable';
       const moved = [e.opened.length ? `+${e.opened.length}` : '', e.closed.length ? `-${e.closed.length}` : ''].filter(Boolean).join(' ');
       return moved ? `${shown}  [${moved}]` : shown;
+    }
+    // Where there is something new, as a whole picture — including the empty one, which is the report
+    // that says the reader has caught up and is the half that used to be missing entirely.
+    if (name === 'unread:change') {
+      return e.threads.map((t) => `${t.threadKey} (${t.count})`).join(', ') || 'nothing unread';
     }
     if (name === 'comments:delete') return `${e.ids.length} in one act`;
     if (name === 'comment:delete') return e.id;

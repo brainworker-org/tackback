@@ -36,10 +36,23 @@ export function buildEnvelope({ document, now, version, exportedBy = null, react
 }
 
 /**
+ * What comes out of reading an envelope, whatever shape went in. Declared once and named by the
+ * parser, because a return type written inline drifts from what is actually returned and nothing
+ * notices: `deleted` and `surfaces` were carried at runtime and absent from the type for as long as
+ * they have existed, so a consumer reading the declaration could not see the tombstones at all.
+ * @typedef {object} ParsedEnvelope
+ * @property {import('./model.js').Comment[]} comments  migrated to the current shape
+ * @property {{ id?: string, revisionHash?: string, [k: string]: any }} [document]
+ * @property {any[]} [reactions]
+ * @property {string[]} [deleted]   ids the producer says are gone
+ * @property {any[]} [surfaces]     raster-surface descriptors, carried through for replay
+ */
+
+/**
  * Parse + normalize an envelope (or a bare comment array) to v2 comments. Legacy records are
  * migrated. Throws TackbackError('IMPORT_INVALID') on unrecognized input.
  * @param {unknown} json
- * @returns {{ comments: import('./model.js').Comment[], document?: object, reactions?: any[] }}
+ * @returns {ParsedEnvelope}
  */
 export function parseEnvelope(json) {
   let data = json;

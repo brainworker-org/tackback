@@ -7,7 +7,7 @@
 import { Emitter } from './events.js';
 import { CommentStore } from './store.js';
 import { localStorageAdapter } from './storage.js';
-import { createComment, createReply, isValidAnchor, appendAnchorEvent } from './model.js';
+import { createComment, createReply, isValidAnchor, appendAnchorEvent, threadKeyOf, sanitizeComments } from './model.js';
 import { documentSurface, DOCUMENT_SURFACE_ID } from './media.js';
 import { buildEnvelope, parseEnvelope } from './export.js';
 import { TackbackError } from './errors.js';
@@ -87,8 +87,37 @@ class TackbackInstance {
                                    // state driven by the integrator; NOT persisted, NOT exported, and
                                    // WITHOUT any built-in meaning (see setAnchorAttention).
 
+    // ---- what has arrived, and how far a reader has got ------------------------------------------
+    //
+    // Two numbers and one rule: an utterance is unread when it arrived after the last time its thread
+    // was seen. The numbers are the library's own, handed out in the order things reach THIS
+    // environment, so nothing here consults `createdAt`. An utterance written a year ago and reaching
+    // this reader now is new to them, and that is the only sense of "new" a reader can act on.
+    //
+    // Both are environment-local facts with no source outside this instance: they are not a cached
+    // view of something else, so keeping them is not the copy this codebase otherwise refuses to make.
+    this._arrival = new Map();       // utterance id → the order it reached here (a positive integer)
+    this._observed = new Map();      // thread key → how far that thread has been seen
+    this._arrivalNext = 1;
+    this._lastUnreadSig = '[]';      // the last unread snapshot announced, as JSON, to suppress repeats
+    this._loadFaults = [];           // entries refused while restoring; reported just before `ready`
+    this._saveChain = Promise.resolve();
+    this._persistQueued = false;
+
     const key = options.storageKey || `tackback::${this._doc.id}`;
-    this._store = new CommentStore(options.storage || localStorageAdapter(key), this._doc.id);
+    // The engine writes environment-local state itself, so it holds the adapter too. The store keeps
+    // being the store of COMMENTS — widening it to carry per-reader state would put two unrelated
+    // lifetimes behind one save.
+    const adapter = options.storage || localStorageAdapter(key);
+    this._envAdapter = adapter;
+    // Restoration is intercepted rather than pushed into the store: what comes back from an adapter is
+    // outside input like any envelope, and only what survives validation may reach the store at all.
+    const hydrate = (d) => this._hydrateEnv(d);
+    this._store = new CommentStore({
+      load: () => { const r = adapter.load(); return (r && typeof r.then === 'function') ? r.then(hydrate) : hydrate(r); },
+      save: (d) => adapter.save(d),
+      ...(typeof adapter.subscribe === 'function' ? { subscribe: (cb) => adapter.subscribe(cb) } : {}),
+    }, this._doc.id);
 
     // The default HTML surface = the document content box (REQ-005); region anchors with
     // surfaceId:'document' resolve against it. Registered when the consumer mounts with an explicit
@@ -104,7 +133,18 @@ class TackbackInstance {
     // detect initialization problems; do not treat `await ready` as a success signal.
     this.ready = this._store.beginLoad()
       .then(() => this._mountAdapters())
-      .then(() => { if (!this._destroyed) this._emitter.emit('ready'); })
+      .then(() => {
+        if (this._destroyed) return;
+        // Entries refused while restoring are reported HERE rather than as they were found. A
+        // synchronous adapter finishes loading inside the constructor, before the caller has had a
+        // chance to subscribe — reporting there would mean the only listeners who could hear about
+        // corrupt stored data are the ones who did not exist yet.
+        for (const fault of this._loadFaults.splice(0)) this._fail('IMPORT_ENTRY_DROPPED', fault.message);
+        // One look, armed before `ready` and taken after it: whatever was restored as unread reaches a
+        // subscriber as an ordinary report rather than as a special case for starting up.
+        this._scheduleVisibility();
+        this._emitter.emit('ready');
+      })
       .catch((err) => this._fail('ADAPTER_FAILED', 'initialization failed', err));
   }
 
@@ -307,16 +347,7 @@ class TackbackInstance {
     if (importedRev != null && currentRev != null && importedRev !== currentRev) {
       this._emitter.emit('rev:mismatch', { expected: currentRev, actual: importedRev });
     }
-    // Validate before ingesting — a malformed record must never corrupt store state.
-    const valid = comments.filter((c) => c && typeof c.id === 'string' && c.id.length > 0 && isValidAnchor(c.anchor));
-    const dropped = comments.length - valid.length;
     const mode = opts.mode || 'merge';
-    // 'replace' wipes existing comments first; refuse to do that on a partially-invalid import — a
-    // malformed file must not silently destroy the user's current comments. Pass
-    // allowPartial:true to opt into a partial replace.
-    if (dropped > 0 && mode === 'replace' && !opts.allowPartial) {
-      throw new TackbackError('IMPORT_INVALID', `replace import has ${dropped} invalid record(s); refusing to clear existing comments`);
-    }
     // Precedence is decided BEFORE the store is touched, and it belongs to the ENVELOPE, not to the
     // mode the reader happens to pass: a producer emits one envelope, and its meaning cannot depend
     // on an option chosen at the other end. An envelope that both lists an id and buries it is saying
@@ -330,8 +361,43 @@ class TackbackInstance {
     const doomed = Array.isArray(incomingDeleted)
       ? new Set(incomingDeleted.filter((id) => typeof id === 'string'))
       : null;
-    const ingestible = doomed && doomed.size ? valid.filter((c) => !doomed.has(c.id)) : valid;
-    const { diff, result } = this._store.ingest(ingestible, mode, opts.onConflict || 'skip');
+    // Who is here now, so an entry cannot quietly take an id that already belongs to something else,
+    // or carry a known utterance to a different thread. Both break the same promise: that an id names
+    // one utterance and that an utterance stays in the conversation it was written into. Broken, the
+    // symptom is an utterance the reader has never seen being counted as already read.
+    const known = new Map();
+    for (const c of this._store.list()) {
+      const key = threadKeyOf(c);
+      known.set(c.id, { threadKey: key, reply: false });
+      for (const r of c.replies || []) known.set(r.id, { threadKey: key, reply: true });
+    }
+    const checked = sanitizeComments(comments, { known, doomed, checkAnchor: true });
+    const dropped = checked.dropped;
+    // A REPLACE declares a complete state, so accepting the good half of one composes a document
+    // neither side ever asked for: the rows the envelope meant to keep are gone with everything else,
+    // and what is left was nobody's idea of the truth. A replacement is all or nothing.
+    //
+    // A MERGE is the opposite case and gets the opposite answer: a polling integration carries the
+    // same envelope over and over, and refusing the whole thing would stop synchronising completely
+    // from the first time a producer emitted one bad row. Drop that row, keep going, say so.
+    //
+    // A buried entry is not counted here in either mode. The envelope saying an id is gone is the
+    // envelope being read correctly, not a fault in it.
+    if (mode === 'replace') {
+      // The malformed-file guard that predates all of this: a file whose records cannot be placed
+      // must not be able to clear what the reader already has. `allowPartial` still opts in.
+      const unplaceable = checked.faults.filter((f) => f.kind === 'anchor').length;
+      if (unplaceable > 0 && !opts.allowPartial) {
+        throw new TackbackError('IMPORT_INVALID', `replace import has ${unplaceable} invalid record(s); refusing to clear existing comments`);
+      }
+      const identity = checked.faults.filter((f) => f.kind === 'identity').length;
+      if (identity > 0) {
+        this._fail('IMPORT_REPLACE_REJECTED',
+          `replacement refused: ${identity} entr${identity === 1 ? 'y' : 'ies'} would break which utterance is which`);
+        return { added: 0, updated: 0, skipped: 0, conflicts: 0, dropped, deleted: 0 };
+      }
+    }
+    const { diff, result } = this._store.ingest(checked.comments, mode, opts.onConflict || 'skip');
     // A MERGE only ever added, so an integrator polling a server's envelope resurrected everything
     // the server had deleted. The envelope can now say what is gone, and merge honours it. The
     // CLIENT keeps no tombstones: the party that knows about a deletion is the one that recorded it,
@@ -342,18 +408,33 @@ class TackbackInstance {
     // envelope is still honoured — a buried id simply cannot come back in through the front door.
     // Everything removed below was ALREADY in the store, so the emitted diff is a true before/after.
     const gone = [], gonePrev = [];
+    const buriedReplies = [];
     for (const id of (doomed || [])) {
-      if (!this._store.has(id)) continue;
-      const r = this._store.delete(id);
+      if (this._store.has(id)) {
+        const r = this._store.delete(id);
+        this._attention.delete(id);
+        gone.push(id); gonePrev.push(r.previous);
+        diff.removed.push(...r.diff.removed);
+        continue;
+      }
+      // A tombstone names an UTTERANCE, and a reply is one. Refusing the envelope's own copy of a
+      // buried reply is only half of honouring it — the resident copy has to go too, or the envelope
+      // has been read and only partly obeyed. It shows up as its thread being updated, which is how
+      // an import reports every other modification; the per-comment delete events stay about comments.
+      const r = this._store.deleteReply(id);
+      if (!r) continue;
       this._attention.delete(id);
-      gone.push(id); gonePrev.push(r.previous);
-      diff.removed.push(...r.diff.removed);
+      buriedReplies.push(r);
+      diff.updated.push(...r.diff.updated);
     }
     this._commit(diff, 'import');
     // the same payload every other deletion carries — a listener reading `previous` must not find
     // that an import is the one path that hands it nothing
     for (let i = 0; i < gone.length; i++) this._emitter.emit('comment:delete', { id: gone[i], previous: gonePrev[i] });
     if (gone.length) this._emitter.emit('comments:delete', { ids: gone, previous: gonePrev });
+    // Dropped, but never silently. Said once per fault and after the document has settled, so a
+    // listener that reacts to one is looking at the import's finished result rather than its middle.
+    for (const fault of checked.faults) this._fail('IMPORT_ENTRY_DROPPED', fault.message);
     return { ...result, dropped, deleted: gone.length };
   }
 
@@ -492,6 +573,101 @@ class TackbackInstance {
   /** Ask for a report to be reconsidered at the next boundary. Reports that change nothing are dropped. */
   reportThreadVisibility() { this._scheduleVisibility(); }
 
+  // ---- what a reader has not got to yet ----------------------------------------------------------
+  //
+  // ONE rule, computed every time and never stored: a thread is unread when it holds an utterance that
+  // arrived after the last time that thread was seen.
+  //
+  //     unread(t)  ⇔  ∃ u ∈ t : arrival[u] > observed[t]
+  //
+  // No flag is kept, because a flag is a second answer that can disagree with the first. The numbers
+  // it is derived from are kept, because they are first-hand facts about this environment with no
+  // source anywhere else — recording them creates the authority rather than copying one.
+
+  /**
+   * How many utterances are unread, per thread. The one place the rule is written; both public
+   * queries read it, so they cannot come to different conclusions about the same document.
+   * @returns {Map<string, number>} every thread with utterances, including those at zero
+   */
+  _unreadTally() {
+    const counts = new Map();
+    for (const c of this._store.list()) {
+      const key = threadKeyOf(c);
+      if (!key) continue;
+      const seen = this._observed.get(key) ?? 0;
+      let n = counts.get(key) ?? 0;
+      if ((this._arrival.get(c.id) ?? 0) > seen) n += 1;
+      for (const r of c.replies || []) if ((this._arrival.get(r.id) ?? 0) > seen) n += 1;
+      counts.set(key, n);
+    }
+    return counts;
+  }
+
+  /**
+   * How many utterances in this thread the reader has not seen yet.
+   * @param {string} threadKey
+   * @returns {number} 0 for a thread that does not exist, and for anything that is not a thread key —
+   *   this is a question, not an instruction, and there is no state a wrong key could corrupt
+   */
+  unreadCount(threadKey) {
+    if (typeof threadKey !== 'string' || !threadKey) return 0;
+    return this._unreadTally().get(threadKey) ?? 0;
+  }
+
+  /**
+   * Every thread holding something unread, by thread key. Threads at zero are absent rather than
+   * present with a count of nought — the answer is "where is there something new", and a list of
+   * places with nothing new in them is not that.
+   * @returns {Array<{threadKey: string, count: number}>} freshly built, ordered by key
+   */
+  unreadThreads() {
+    return [...this._unreadTally()]
+      .filter(([, n]) => n > 0)
+      .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+      .map(([threadKey, count]) => ({ threadKey, count }));
+  }
+
+  /**
+   * Move each visible thread's cursor up to the newest utterance the reader could see in it.
+   *
+   * Only ever called from a look that SUCCEEDED. A look that failed is not evidence that anything was
+   * on screen, and treating it as evidence marks things read that nobody saw — the one failure this
+   * whole mechanism has to be incapable of.
+   * @param {Array<{threadKey: string, comments: string[]}>} visible
+   * @returns {boolean} whether any cursor moved
+   */
+  _advanceObserved(visible) {
+    let moved = false;
+    for (const entry of visible) {
+      const was = this._observed.get(entry.threadKey) ?? 0;
+      let now = was;
+      for (const id of entry.comments) {
+        const seq = this._arrival.get(id);
+        // An id the store has never heard of is not a fact about what was on screen, so it does not
+        // move anything. One of them does not spoil the rest of an otherwise good look.
+        if (seq !== undefined && seq > now) now = seq;
+      }
+      if (now !== was) { this._observed.set(entry.threadKey, now); moved = true; }
+    }
+    return moved;
+  }
+
+  /**
+   * Announce the unread snapshot, if it is not the one already announced.
+   *
+   * A snapshot rather than a difference, for the reason the visibility report is one: a consumer that
+   * misses a difference stays wrong forever, while one that misses a snapshot is corrected by the next.
+   * The core keeps only the string it compares against, so nothing a subscriber does to what it was
+   * handed can change what the core believes it said.
+   */
+  _emitUnreadIfChanged() {
+    const threads = this.unreadThreads();
+    const sig = JSON.stringify(threads);
+    if (sig === this._lastUnreadSig) return;
+    this._lastUnreadSig = sig;
+    this._emitter.emit('unread:change', { threads });
+  }
+
   /**
    * The readable threads, right now. Same shape as the event's `visible`, answered without waiting.
    * @returns {Array<{threadKey:string, anchor:object, comments:string[]}>}
@@ -589,20 +765,25 @@ class TackbackInstance {
       // asked for another report. Belt and braces — every generation change goes through
       // `_newVisibilityEpisode`, so nothing is left to spend here anyway — but the rule is written
       // where the decision is made rather than inferred from somewhere else.
-      if (!attempt.error) return;
-      if (this._visibilityRetries < VISIBILITY_RETRIES) {
-        this._visibilityRetries += 1;
-        this._retryVisibilityLater();
-        return;
+      if (attempt.error) {
+        if (this._visibilityRetries < VISIBILITY_RETRIES) {
+          this._visibilityRetries += 1;
+          this._retryVisibilityLater();
+        } else if (!this._visibilityReported) {
+          // Out of attempts, so responsibility passes to the caller — which is what the error MEANS,
+          // and why it is not said earlier: a display that is unreadable for a moment and readable by
+          // the next look never needed anyone told. It is said ONCE, because "this display cannot be
+          // read" is one fact and does not become several by being rediscovered on every later
+          // mutation. Saying it again takes a successful look in between, or a different display.
+          this._visibilityReported = true;
+          this._fail('ADAPTER_FAILED', 'a display could not report what is visible', attempt.error);
+        }
       }
-      // Out of attempts, so responsibility passes to the caller — which is what the error MEANS, and
-      // why it is not said earlier: a display that is unreadable for a moment and readable by the
-      // next look never needed anyone told. It is said ONCE, because "this display cannot be read"
-      // is one fact and does not become several by being rediscovered on every later mutation.
-      // Saying it again takes a successful look in between, or a different display.
-      if (this._visibilityReported) return;
-      this._visibilityReported = true;
-      this._fail('ADAPTER_FAILED', 'a display could not report what is visible', attempt.error);
+      // Being unable to LOOK is not being unable to COUNT. What has arrived and how far each thread
+      // was seen are both already here; a broken display changes neither. Stopping here would let one
+      // stuck display starve the reader of every notice that something new came in — which is the
+      // first half of the whole point, held hostage by the second.
+      this._emitUnreadIfChanged();
       return;
     }
     const visible = attempt.visible;
@@ -619,12 +800,22 @@ class TackbackInstance {
     // from here, and its report must be diffed against what was just delivered — not overwritten by
     // this frame writing back a world its own handler has already left.
     this._visibilityDelivered = now;
-    if (!changed) return;
-    // Built fresh for this delivery. What a subscriber is given is not the baseline the next diff is
-    // measured against, so nothing it does to the payload can rewrite what the core believes it said.
-    this._emitter.emit('thread:visibility', {
-      visible: visible.map(visibilityDTO), opened: opened.map(visibilityDTO), closed: closed.map(visibilityDTO),
-    });
+    // BEFORE the early return, deliberately. Whether the visible SET changed and whether a cursor has
+    // catching up to do are different questions: the same threads reported again after a reload is a
+    // report that changes nothing and moves everything. Putting this after the return would make the
+    // reader's progress depend on something moving on screen.
+    if (this._advanceObserved(visible)) this._schedulePersist();
+    if (changed) {
+      // Built fresh for this delivery. What a subscriber is given is not the baseline the next diff is
+      // measured against, so nothing it does to the payload can rewrite what the core believes it said.
+      this._emitter.emit('thread:visibility', {
+        visible: visible.map(visibilityDTO), opened: opened.map(visibilityDTO), closed: closed.map(visibilityDTO),
+      });
+    }
+    // Last, and after the cursors moved. A flush always ends by asking whether the unread picture
+    // changed — so an utterance landing in a thread the reader already has open is read by the time
+    // anyone is told about it, and never flickers as unread on its way in.
+    this._emitUnreadIfChanged();
   }
 
   _retryVisibilityLater() {
@@ -671,15 +862,163 @@ class TackbackInstance {
   /** Persist (async, decoupled) + emit the unified `change` with a diff payload. */
   _commit(diff, source) {
     const comments = this._store.list();
+    // Every path that changes anything meets here, which is why numbering happens here and nowhere
+    // else. Spreading it over the entry points would mean each new one had to remember, and the way
+    // it fails when someone does not is that an utterance is displayed and never counted as new.
+    this._ensureArrival(comments);
+    this._pruneEnvState(comments);
     this._pruneAttention(comments);   // BEFORE the emit, so listeners never render a ghost flag
-    const payload = { comments, changes: diff, source };
-    this._emitter.emit('change', payload);
     // Every mutation can change what a reader is looking at, so every mutation schedules a report.
     // Scheduling too often costs one comparison that finds nothing; scheduling too rarely leaves the
     // consumer acting on a world that has moved. Only one of those two errors is recoverable.
+    //
+    // Asked for BEFORE the change goes out, so that this look is ahead of anything a handler defers
+    // to the same boundary. A subscriber that redraws on `change` and then wants to know what is
+    // still unread has to be answered from after the cursors moved, not from the middle of the turn.
     this._scheduleVisibility();
-    Promise.resolve(this._store.persist()).catch((err) =>
-      this._fail(err instanceof TackbackError ? err.code : 'STORAGE_SAVE_FAILED', 'persist failed', err));
+    const payload = { comments, changes: diff, source };
+    this._emitter.emit('change', payload);
+    this._schedulePersist();
+  }
+
+  /**
+   * Give an arrival number to every utterance that has none. Never to one that already has: a number
+   * is what "this is the same utterance I already had" MEANS, so re-issuing it on an edit, or on the
+   * same envelope arriving again, would make everything a reader has already read new all over again.
+   * @param {readonly import('./model.js').Comment[]} comments
+   */
+  _ensureArrival(comments) {
+    for (const c of comments) {
+      if (!this._arrival.has(c.id)) this._arrival.set(c.id, this._arrivalNext++);
+      for (const r of c.replies || []) {
+        if (!this._arrival.has(r.id)) this._arrival.set(r.id, this._arrivalNext++);
+      }
+    }
+  }
+
+  /**
+   * Forget what is gone — the same shape and the same place as the attention sweep.
+   *
+   * Safe because numbers only ever go up: a thread that is emptied and later written in again receives
+   * a number above anything its old cursor could have been, so it reads as new without the record
+   * having to survive. That is also the intended meaning of deletion — this environment has forgotten
+   * the utterance, so the same id arriving later is a fresh arrival rather than something already read.
+   * @param {readonly import('./model.js').Comment[]} comments
+   */
+  _pruneEnvState(comments) {
+    const alive = new Set();
+    const threads = new Set();
+    for (const c of comments) {
+      alive.add(c.id);
+      for (const r of c.replies || []) alive.add(r.id);
+      const key = threadKeyOf(c);
+      if (key) threads.add(key);
+    }
+    for (const id of this._arrival.keys()) if (!alive.has(id)) this._arrival.delete(id);
+    for (const key of this._observed.keys()) if (!threads.has(key)) this._observed.delete(key);
+  }
+
+  /** Everything worth keeping, as one whole. Written in full every time, so a save never depends on
+   *  an earlier one having landed. */
+  _snapshotStored() {
+    return {
+      schemaVersion: 1,
+      documentId: this._doc.id,
+      comments: [...this._store.list()],
+      arrival: Object.fromEntries(this._arrival),
+      observed: Object.fromEntries(this._observed),
+      arrivalNext: this._arrivalNext,
+    };
+  }
+
+  /**
+   * Ask for the current state to be written. One save at a time, and while one is in flight any number
+   * of further requests collapse into a single later one that writes the state as it is THEN.
+   *
+   * Serial because the alternative loses read state in a way nobody can see: two saves in flight
+   * finish in whatever order the storage feels like, and an older snapshot landing last quietly puts
+   * a thread back to unread. Coalescing because the intermediate states have no value — every save
+   * carries everything, so the last one is the only one that has to arrive.
+   */
+  _schedulePersist() {
+    if (this._persistQueued) return;
+    this._persistQueued = true;
+    this._saveChain = this._saveChain
+      .then(() => {
+        this._persistQueued = false;
+        if (this._destroyed) return undefined;   // a queued save has nothing left to be about
+        return this._envAdapter.save(this._snapshotStored());
+      })
+      // A failed save is a durability failure, not a meaning one: the reader did read it. Memory keeps
+      // what it knows, the failure is reported, and the next save — every change and every observation
+      // schedules one — carries the whole state again and catches up on its own.
+      .catch((err) => this._fail(err instanceof TackbackError ? err.code : 'STORAGE_SAVE_FAILED', 'persist failed', err));
+  }
+
+  /**
+   * Take a stored document apart: validate it, recover what it says about arrival and observation, and
+   * hand back the document the store is allowed to see.
+   *
+   * The order matters and is fixed. Broken records fall on the side of asking the reader to look
+   * again, never on the side of quietly claiming they already did — an unread mark that should not be
+   * there is a small annoyance a glance repairs, and one that should be there but is not is the whole
+   * failure this version exists to fix, arriving silently.
+   * @param {import('./storage.js').StoredDocument|null} doc
+   */
+  _hydrateEnv(doc) {
+    if (!doc) { this._arrivalNext = 1; return doc; }
+    // An adapter's answer is outside input, exactly like an envelope, and gets the same check.
+    const { comments, faults } = sanitizeComments(doc.comments);
+    this._loadFaults.push(...faults);
+    // No environment metadata AT ALL means this was written before there was any — not that nothing
+    // has been read. Reading it as "nothing has been read" would turn every thread in every document
+    // unread on the day this version ships, which is the exact state the feature exists to end.
+    // One field present is enough to mean the opposite: this writer knew about reading, and a thread
+    // it does not mention is one nobody has opened.
+    const legacy = doc.arrival === undefined && doc.observed === undefined && doc.arrivalNext === undefined;
+    const counts = (v) => Number.isSafeInteger(v) && v >= 1;
+
+    const declared = (doc.arrival && typeof doc.arrival === 'object') ? doc.arrival : {};
+    const byNumber = new Map();
+    for (const [id, v] of Object.entries(declared)) {
+      if (!counts(v)) continue;                       // not a number that could have been handed out
+      if (!byNumber.has(v)) byNumber.set(v, []);
+      byNumber.get(v).push(id);
+    }
+    for (const [v, sharing] of byNumber) {
+      // A number two utterances both claim identifies neither. Which one is the real holder is not
+      // recoverable, so both give theirs up and are numbered again — landing them after everything
+      // read so far, which is the side that asks for another look.
+      if (sharing.length === 1) this._arrival.set(sharing[0], v);
+    }
+    let highest = 0;
+    for (const v of this._arrival.values()) if (v > highest) highest = v;
+    // Never hand out a number twice, whatever the stored counter says. A reused number is read as
+    // already-seen by whatever cursor is sitting above it.
+    this._arrivalNext = Math.max(counts(doc.arrivalNext) ? doc.arrivalNext : 1, highest + 1);
+    this._ensureArrival(comments);
+
+    const issued = this._arrivalNext - 1;
+    const observed = (doc.observed && typeof doc.observed === 'object') ? doc.observed : {};
+    for (const [key, v] of Object.entries(observed)) {
+      // Structurally wrong — not an integer, or not positive — is treated as never written, which in a
+      // record that knows about reading means unread.
+      if (!Number.isSafeInteger(v) || v < 1) continue;
+      // A cursor ABOVE everything currently here is not damage: delete a thread's utterances and their
+      // numbers go with them while the fact that they were read stays. Trimmed to what has actually
+      // been handed out, so a cursor cannot swallow arrivals that have not happened yet.
+      this._observed.set(key, Math.min(v, issued));
+    }
+    if (legacy) {
+      for (const c of comments) {
+        const key = threadKeyOf(c);
+        if (key) this._observed.set(key, issued);
+      }
+    }
+    this._pruneEnvState(comments);
+    // Nothing is written back here. The normalization rides out on the next ordinary save, so a mount
+    // that reads and never observes anything leaves the stored document alone.
+    return { ...doc, comments };
   }
 
   /**

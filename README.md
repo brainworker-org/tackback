@@ -203,6 +203,53 @@ The flag is **session-only**: never persisted, never written into the export env
 UI state can't leak into a shared file. It lives as long as its comment — deleting or wiping the comment
 drops it, and re-importing that comment id starts unflagged. Restyle it via the `--tb-attention` token.
 
+> Since 0.9.7 you no longer need attention to mean "unread" — Tackback tracks and paints that itself
+> (below). Attention is back to being a flag with no meaning of its own.
+
+### What this reader has not got to yet
+
+Somewhere in the document there is something new, and a reader needs to see **where** — and needs the
+mark to go away once they have read it. A mark that never clears says "everything", which is the same
+as saying nothing.
+
+```js
+tb.unreadCount('block:intro');   // → how many utterances in that thread they have not seen
+tb.unreadThreads();              // → [{ threadKey, count }] — only threads with something in them
+tb.on('unread:change', ({ threads }) => {/* the whole picture, every time */});
+```
+
+The panel draws it for you: an anchor holding something unread gets a **ring** in `--tb-unread`, and
+the document lane's count gets one when the document thread does. Attention fills, unread outlines —
+an anchor that is both wears both, so neither can hide the other.
+
+**New means new HERE.** Tackback numbers utterances in the order they reach this environment and never
+looks at `createdAt`. An utterance written a year ago that reaches this reader now is new to them,
+which is the only sense of "new" a reader can act on. Editing a body or receiving the same utterance
+again is not an arrival; a reply is.
+
+**Read means it was on screen.** A thread counts as read up to the newest utterance that was in an
+open thread area — a Pane that is open, or the document lane expanded. That is a fact the library can
+actually establish. What it deliberately does not claim:
+
+- it is **not** "a person read it" — only that it was displayed;
+- the viewport and your own CSS are not consulted, so a panel you have hidden still counts as showing;
+- there is **no** screen-reader text or sound for unread in this version — the distinction is carried
+  by colour *and* by shape (ring or no ring), and that is an accepted limit, not an oversight.
+
+Both records belong to **this environment** — the browser profile, not the person and not the server.
+They ride in the same storage adapter as your comments, and they are **never** in the export envelope:
+what one reader has read is not part of a shared file.
+
+```js
+// Everything a reader has read is in the adapter you already provide, under `arrival` / `observed` /
+// `arrivalNext`. Two things the adapter contract now requires:
+//   1. one storage belongs to ONE environment — a server-backed adapter shared between viewers would
+//      make one person's reading everybody's;
+//   2. one instance at a time per environment — numbering is per instance, and two of them would hand
+//      out the same numbers and overwrite each other's snapshots.
+// A readOnly mount DOES write: a reader who cannot comment is exactly who this is for.
+```
+
 ### Which threads a reader can see
 
 A flag like attention is only half of it: something has to decide when to *clear* it. That takes
@@ -368,8 +415,25 @@ you inject your own pdf.js into `createPdfAdapter`, so nothing of pdf.js is redi
   against the current document — callers are responsible for matching. This bites hardest on the
   **document** anchor: block/range/region anchors from a foreign envelope fail visibly (they do not
   resolve, so they orphan), but a document anchor always resolves, so a foreign document thread merges
-  into this one with no signal at all. A partially-invalid `replace`
-  import is refused (throws `IMPORT_INVALID`) unless `allowPartial: true`, so a malformed file can't
-  silently wipe existing comments.
+  into this one with no signal at all. A `replace` import whose records cannot be placed is refused
+  (throws `IMPORT_INVALID`) unless `allowPartial: true`, so a malformed file can't silently wipe
+  existing comments.
+- **An import may not change which utterance is which.** Every utterance needs a non-empty id, unique
+  across the document, and stays in the thread it was written into. An entry that breaks either — an
+  id-less reply, an id already in use, a known utterance carried to another anchor, or one the same
+  envelope also buries — is dropped, and an `IMPORT_ENTRY_DROPPED` error names it. A **merge** drops
+  the entry and keeps going, because a polling integration would otherwise stop synchronising on the
+  first bad row. A **replace** is refused whole (`IMPORT_REPLACE_REJECTED`, document untouched),
+  because taking the good half of a complete-state declaration composes a document neither side asked
+  for; `allowPartial` does not override this. The one way to move an utterance is to bury the old id
+  and create a new one at the new anchor — both in the same envelope is fine.
+  A stored document coming back from your adapter is checked the same way.
+- **Unread state does not survive a downgrade.** `arrival` / `observed` / `arrivalNext` are optional
+  fields in the stored document, so 0.9.6 reads 0.9.7 data happily — but it drops them when it saves.
+  Coming back to 0.9.7 afterwards, the document looks like it predates unread tracking and everything
+  in it counts as already read.
+- **A failed save is not retried on its own.** It is reported, memory keeps what it knows, and the
+  next save carries everything again. If nothing further changes and nothing further is read, that
+  last state is not written.
 - **`ready` resolves, never rejects.** Initialization/adapter failures surface on the `error` event
   (fail-soft); don't treat `await ready` as an all-adapters-mounted signal.

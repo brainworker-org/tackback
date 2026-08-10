@@ -63,6 +63,42 @@ export class CommentStore {
     return Object.freeze([...this._byId.values()].map((c) => Object.freeze({ ...c })));
   }
 
+  /**
+   * Every id in use, roots and replies alike. An id names an UTTERANCE, not a record, so anything
+   * minting one has to avoid all of them and not just the top level.
+   * @returns {Set<string>}
+   */
+  _takenIds() {
+    const ids = new Set();
+    for (const c of this._byId.values()) {
+      ids.add(c.id);
+      for (const r of c.replies || []) ids.add(r.id);
+    }
+    return ids;
+  }
+
+  /**
+   * Remove one reply from the thread it hangs under. A tombstone names an utterance and a reply is
+   * one; without this a buried reply survived on a resident root while the same envelope's copy of it
+   * was correctly refused, so the deletion was half-applied and nothing said which half.
+   * @param {string} replyId
+   * @returns {{ diff: Diff, previous: Comment, next: Comment }|null} null when no thread holds it
+   */
+  deleteReply(replyId) {
+    for (const prev of this._byId.values()) {
+      const replies = prev.replies || [];
+      if (!replies.some((r) => r.id === replyId)) continue;
+      const next = { ...prev, replies: replies.filter((r) => r.id !== replyId) };
+      this._byId.set(prev.id, next);
+      return {
+        diff: { ...EMPTY_DIFF(), updated: [Object.freeze({ ...next })] },
+        previous: Object.freeze({ ...prev }),
+        next: Object.freeze({ ...next }),
+      };
+    }
+    return null;
+  }
+
   /** @param {string} id @returns {Comment|undefined} */
   get(id) {
     const c = this._byId.get(id);
@@ -126,6 +162,19 @@ export class CommentStore {
   ingest(incoming, mode, onConflict) {
     const diff = EMPTY_DIFF();
     const result = { added: 0, updated: 0, skipped: 0, conflicts: 0 };
+    // Everything an id could collide with, reserved BEFORE anything is minted: what is stored, and
+    // what this envelope supplies. Reserving only the stored side let a generated name take an
+    // identity the same envelope was about to deliver — so an utterance that conflicted with nothing
+    // was renamed and reported as a conflict, on account of a name invented for somebody else. Taken
+    // before the wipe below, because under a replacement the store is about to be empty and the
+    // envelope's own identities are then the only ones left to avoid.
+    const reserved = this._takenIds();
+    for (const c of incoming) {
+      if (c && typeof c.id === 'string') reserved.add(c.id);
+      for (const r of (c && Array.isArray(c.replies) ? c.replies : [])) {
+        if (r && typeof r.id === 'string') reserved.add(r.id);
+      }
+    }
     if (mode === 'replace') {
       for (const prev of this._byId.values()) diff.removed.push(Object.freeze({ ...prev }));
       this._byId.clear();
@@ -141,9 +190,12 @@ export class CommentStore {
         result.conflicts++;
         if (onConflict === 'skip') { result.skipped++; continue; }
         if (onConflict === 'keepBoth') {
-          let dupId = `${c.id}-dup`, n = 1;
-          while (this._byId.has(dupId)) dupId = `${c.id}-dup${++n}`;  // never overwrite
-          c.id = dupId;
+          // A kept-both copy is a NEW utterance, and so is every reply under it. Renaming only the
+          // root left the copy's replies wearing the originals' ids, so one id named two utterances —
+          // which makes "how many are there" and "have I seen this one" unanswerable, quietly.
+          const fresh = (base) => { let id = `${base}-dup`, n = 1; while (reserved.has(id)) id = `${base}-dup${++n}`; reserved.add(id); return id; };
+          c.id = fresh(c.id);
+          if (Array.isArray(c.replies)) c.replies = c.replies.map((r) => ({ ...r, id: fresh(r.id) }));
           this._byId.set(c.id, c);
           diff.added.push(Object.freeze({ ...c }));
           result.added++;

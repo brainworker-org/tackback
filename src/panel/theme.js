@@ -13,6 +13,11 @@ export const TOKENS = [
   // (setAnchorAttention). It is a generic "needs-notice" tint — the *meaning* of the flag (e.g.
   // "unread") is the integrator's, never Tackback's. Override it like any other token.
   '--tb-attention',
+  // `--tb-unread` rings an anchor holding something this reader has not got to yet. Deliberately a
+  // different channel from attention rather than a different value of the same one: attention fills,
+  // unread outlines, and an anchor that is both wears both. One tint doing two jobs is how "I read it
+  // and the mark is still there" comes back — the exact failure this version removes.
+  '--tb-unread',
 ];
 
 export const LIGHT = {
@@ -20,7 +25,7 @@ export const LIGHT = {
   '--tb-mark-bg': 'rgba(255,210,0,.20)', '--tb-mark-outline': '#d9a400',
   '--tb-pin-bg': '#d9a400', '--tb-pin-fg': '#000000',
   '--tb-popup-bg': '#ffffff', '--tb-popup-fg': '#111111', '--tb-muted': '#777777', '--tb-danger': '#cc3333',
-  '--tb-attention': '#ef7f0e',
+  '--tb-attention': '#ef7f0e', '--tb-unread': '#2f6fed',
 };
 
 export const DARK = {
@@ -28,7 +33,7 @@ export const DARK = {
   '--tb-mark-bg': 'rgba(255,210,0,.16)', '--tb-mark-outline': '#d9a400',
   '--tb-pin-bg': '#d9a400', '--tb-pin-fg': '#000000',
   '--tb-popup-bg': '#2a2c2e', '--tb-popup-fg': '#eeeeee', '--tb-muted': '#aaaaaa', '--tb-danger': '#e06666',
-  '--tb-attention': '#f59331',
+  '--tb-attention': '#f59331', '--tb-unread': '#6ea8fe',
 };
 
 /**
