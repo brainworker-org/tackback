@@ -1771,9 +1771,9 @@ test('restoring: every reachable combination of declaration, capability and reco
   const SAYS_READ = { arrival: { c1: 1 }, observed: { 'block:p1': 1 }, arrivalNext: 2 };
 
   const CASES = [
-    // declaration absent — nothing here says a separate record was ever expected
+    // declaration absent — nothing surviving says a separate record is expected
     ['absent · unavailable',            false, 'unavailable', null, 0, 0,
-      'no record was ever expected here: what is stored is what the reader has lived with'],
+      'nothing surviving says a record was expected: what is stored is what the reader has lived with'],
     ['absent · complete · no record',   false, 'complete', null, 0, 0,
       'the same, and being able to look changes nothing about what is there to find'],
     ['absent · complete · unreadable',  false, 'complete', 'unreadable', 1, 1,
@@ -1824,7 +1824,7 @@ test('restoring: every reachable combination of declaration, capability and reco
 test('restoring: what may be called read, stated as a rule rather than as ten numbers', async () => {
   // A table of expected numbers can go on being satisfied while the principle underneath it quietly
   // stops holding, and no individual row would fail. The principle: reading is claimed only where a
-  // record SAYS so, or where no record was ever expected. Everywhere else — expected and missing,
+  // record SAYS so, or where the surviving shape declares none. Everywhere else — expected and missing,
   // present and unreadable, out of reach — the reader is left to look again, because unknown is never
   // turned into read.
   const comments = [entry('c1', 'p1')];
@@ -1851,7 +1851,7 @@ test('restoring: what may be called read, stated as a rule rather than as ten nu
     }
   }
   // No record says anything in any of these, so the only cells that may claim reading are the ones
-  // where none was ever expected.
+  // whose surviving shape declares none.
   assert.deepEqual(claimedRead,
     ['declared=false capability=unavailable record=null', 'declared=false capability=complete record=null'],
     'with no record speaking, only an undeclared document counts as read');

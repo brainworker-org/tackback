@@ -61,8 +61,8 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
   failed. Absent is its only other value, and a value nobody recognises means the shape itself cannot
   be read: reported, and the record not believed.
 
-  **Exactly one outcome counts as read without a record saying so**: a document that never declared
-  one. Declared and missing, present and unreadable, out of reach — all leave everything to be looked
+  **Exactly one outcome counts as read without a record saying so**: a document whose surviving shape
+  declares none. Declared and missing, present and unreadable, out of reach — all leave everything to be looked
   at again. Unknown is never turned into already-read, because a mark that should be there and is not
   is the failure this version exists to remove. An `error` names the cases that are actually broken —
   a document shape that cannot be read, a record that cannot be read, half a progress pair — and stays
