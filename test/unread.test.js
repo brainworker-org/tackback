@@ -1709,3 +1709,120 @@ test('a document whose progress never landed is not mistaken for one written bef
   assert.deepEqual(legacy.unreadThreads(), [], 'no marker, no record: written before any of this');
   legacy.destroy();
 });
+
+test('a document kept by an adapter that cannot hold progress does not claim it does', async () => {
+  // The marker says a progress record is EXPECTED. An adapter with nowhere to put one will never have
+  // it, so claiming otherwise turns a permanent, ordinary arrangement into "the write must have
+  // failed" — and everything reads as unread every time, for ever.
+  let document = null;
+  const documentOnly = { load: () => document, save: (d) => { document = d; } };
+  const first = mount({ storage: documentOnly });
+  await first.ready;
+  first.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'written with nowhere to keep progress' });
+  await quiet();
+  assert.equal(first.unreadCount('block:p1'), 1, 'unread within the session');
+  assert.ok(!document.keepsProgress, 'and the document does not claim a record is coming');
+  first.destroy();
+
+  const second = mount({ storage: documentOnly });
+  await second.ready;
+  await quiet();
+  assert.deepEqual(second.unreadThreads(), [],
+    'next time, what is stored is the baseline — the documented session-only arrangement');
+  invariants(second, 'document-only adapter');
+  second.destroy();
+});
+
+// ---- the whole domain, not the cases somebody happened to hit -------------------------------------
+//
+// Restoring is decided by three things at once: what SHAPE the stored document says it was written in,
+// whether this adapter can reach a progress record at all, and what state that record is in. Every
+// defect found in this area was one unenumerated cell of that product, found by reproduction, fixed
+// one at a time. The table is the fix for the class: a cell with no row is a question nobody asked.
+//
+// Capability comes first, because without it the record is never consulted — so those rows have no
+// record axis rather than an empty one.
+
+test('restoring: the whole table of shape × capability × record', async () => {
+  const stored = (over = {}) => ({ schemaVersion: 1, documentId: 'd', comments: [entry('c1', 'p1')], ...over });
+  const usable = { arrival: { c1: 1 }, observed: {}, arrivalNext: 2 };          // c1 arrived, unread
+  const read = { arrival: { c1: 1 }, observed: { 'block:p1': 1 }, arrivalNext: 2 };
+
+  const CASES = [
+    // no capability — the record is never reached, so there is no record axis here
+    ['no marker  · cannot keep progress · —',
+      stored(), 'none', null, 0,
+      'written before any of this: what is in it is what the reader has lived with'],
+    ['marker     · cannot keep progress · —',
+      stored({ keepsProgress: true }), 'none', null, 1,
+      'a record was expected and this adapter cannot reach it — nothing is known, so nothing is seen'],
+
+    // can keep progress
+    ['no marker  · can keep progress · no record',
+      stored(), 'capable', null, 0,
+      'still the old shape: no marker and no record means it predates progress'],
+    ['no marker  · can keep progress · unreadable',
+      stored(), 'capable', 'unreadable', 1,
+      'a record is there and cannot be read: nothing is known'],
+    ['no marker  · can keep progress · readable, nothing read',
+      stored(), 'capable', usable, 1,
+      'the record is believed, and it says nothing has been read'],
+    ['marker     · can keep progress · no record',
+      stored({ keepsProgress: true }), 'capable', null, 1,
+      'the document expected a record and there is none: the write never landed'],
+    ['marker     · can keep progress · unreadable',
+      stored({ keepsProgress: true }), 'capable', 'unreadable', 1,
+      'nothing is known'],
+    ['marker     · can keep progress · readable, already read',
+      stored({ keepsProgress: true }), 'capable', read, 0,
+      'the record is believed, and it says this was read'],
+  ];
+
+  for (const [name, doc, capability, record, expected, why] of CASES) {
+    const adapter = { load: () => doc, save: () => {} };
+    if (capability === 'capable') {
+      adapter.loadProgress = () => {
+        if (record === 'unreadable') throw new Error('corrupt');
+        return record;
+      };
+      adapter.saveProgress = () => {};
+    }
+    const core = mount({ storage: adapter });
+    core.on('error', () => {});
+    await core.ready;
+    await quiet();
+    assert.equal(core.unreadCount('block:p1'), expected, `${name} → ${why}`);
+    invariants(core, name);
+    core.destroy();
+  }
+});
+
+test('restoring: only one cell of the table ever answers "already seen"', async () => {
+  // The shape of the table, stated as a rule rather than as eight numbers: reading is claimed for a
+  // document ONLY when a record says so, or when there was never any such thing as a record. Every
+  // other cell — expected and missing, present and unreadable, unreachable — leaves the reader to
+  // look again. Unknown is never turned into read, and this is where that could quietly stop being
+  // true without any single case failing.
+  const comments = [entry('c1', 'p1')];
+  const seenWithoutARecord = [];
+  for (const marker of [false, true]) {
+    for (const capable of [false, true]) {
+      for (const record of [null, 'unreadable']) {
+        if (!capable && record === 'unreadable') continue;   // never consulted
+        const adapter = { load: () => ({ schemaVersion: 1, documentId: 'd', keepsProgress: marker, comments }), save: () => {} };
+        if (capable) {
+          adapter.loadProgress = () => { if (record === 'unreadable') throw new Error('corrupt'); return null; };
+          adapter.saveProgress = () => {};
+        }
+        const core = mount({ storage: adapter });
+        core.on('error', () => {});
+        await core.ready;
+        await quiet();
+        if (core.unreadCount('block:p1') === 0) seenWithoutARecord.push(`marker=${marker} capable=${capable} record=${record}`);
+        core.destroy();
+      }
+    }
+  }
+  assert.deepEqual(seenWithoutARecord, ['marker=false capable=false record=null', 'marker=false capable=true record=null'],
+    'the only cells that count as seen without a record are the ones with no marker — the old shape');
+});

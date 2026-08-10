@@ -1018,7 +1018,15 @@ class TackbackInstance {
     // its own. Not what anybody read, so it is still the document's to carry: without it, a document
     // written by this build whose very first progress write never landed is indistinguishable from one
     // written before progress existed, and everything in it silently counts as already seen.
-    return { schemaVersion: 1, documentId: this._doc.id, keepsProgress: true, comments: [...this._store.list()] };
+    return {
+      schemaVersion: 1,
+      documentId: this._doc.id,
+      // Only when progress can actually be kept. An adapter with nowhere to put one will never have a
+      // record, so claiming that one is expected turns a permanent, ordinary arrangement into "the
+      // write must have failed" — and everything reads as unread every time, for ever.
+      keepsProgress: this._progressCapable,
+      comments: [...this._store.list()],
+    };
   }
 
   /**
