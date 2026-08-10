@@ -209,7 +209,7 @@ export function attachPanel(core, options = {}) {
    */
   const onCore = (event, fn) => { own(core.on(event, (...a) => { if (!destroyed) fn(...a); })); };
   /**
-   * Defer work, and hand back a cancel that matches how it was scheduled. Both surfaces and the
+   * Defer work, and hand back a cancel that matches how it was scheduled. Both the Panes and the
    * repaint used to defer without keeping a handle at all. Where the host has animation frames that
    * merely meant nothing could be cancelled; where it has none the work is a timer, which
    * `cancelAnimationFrame` cannot take back, so it carried straight across teardown.
@@ -695,7 +695,7 @@ export function attachPanel(core, options = {}) {
    *
    * Deliberately not a ledger kept up to date at each transition: a projection that is asked one
    * moment late is merely late, while a ledger that missed one transition is wrong until something
-   * else happens to correct it. Every path that changes a surface only has to say "something moved",
+   * else happens to correct it. Every path that changes a host only has to say "something moved",
    * and even forgetting that costs a delayed report rather than a false one.
    *
    * The registered conversations are NOT the answer — the lane keeps its conversation registered
@@ -1104,7 +1104,8 @@ export function attachPanel(core, options = {}) {
   };
   onDoc('contextmenu', onContext);
 
-  // A modal is a surface like any other: at most one at a time, and it goes when the panel does.
+  // A modal belongs to the panel like anything else it puts on screen: at most one at a time, and it
+  // goes when the panel does.
   // They used to append unclassed children straight to the body, outside every sweep and every
   // count — so repeated clicks stacked several, and an import modal opened before teardown could
   // still write into the core afterwards.

@@ -971,7 +971,7 @@ test('panel: a Pane replaced before its deferred callback fires leaves no listen
   } finally { f.restore(); }
 });
 
-test('panel: a modal is a surface — one at a time, and it goes when the panel does', async () => {
+test('panel: a modal belongs to the panel — one at a time, and it goes when the panel does', async () => {
   // They used to be unclassed children appended straight to the body: outside every sweep and every
   // count, stacking one per click, and an import modal opened before teardown could still write into
   // the core afterwards.
@@ -1172,7 +1172,7 @@ test('panel: a modal dismissing itself does not close the one that replaced it',
 // These encode the settled decisions rather than the implementation, so they stay meaningful if the
 // mechanism is rewritten. The shape they are protecting: the core announces WHICH THREADS ARE
 // READABLE NOW, as a settled snapshot projected from live state at a microtask boundary — never as a
-// ledger accumulated at each transition, and never from the middle of a surface mutation.
+// ledger accumulated at each transition, and never from the middle of a host changing.
 
 /** Subscribe without asserting inside the handler — the emitter would swallow anything that threw. */
 function recordVisibility(core) {
@@ -1359,7 +1359,7 @@ test('visibility: a handler that closes during the flush is diffed against what 
   // and the second flush sees nothing to compare against and stays silent.
   //
   // It does NOT pin the ORDER of that commit against the emit, and reverting the order does not turn
-  // it red — because a flush is never re-entered from inside itself. A handler that changes a surface
+  // it red — because a flush is never re-entered from inside itself. A handler that changes a host
   // schedules the next flush onto the queue rather than running one, so the frame that wrote a stale
   // baseline would always be the same frame that delivered it. The order is kept as written anyway:
   // it costs nothing, and it is the order that stays correct if a synchronous path is ever added.
@@ -1443,7 +1443,7 @@ test('visibility: a second display replaces the first rather than joining it', (
     assert.deepEqual(f.core.visibleThreads(), [], 'and the live one withdrawing leaves nothing readable');
   } finally { f.restore(); }
 });
-test('visibility: a surface with nothing written in it yet is still readable', () => {
+test('visibility: a thread with nothing written in it yet is still readable', () => {
   // Being open and holding a comment are different facts. A thread the reader has just opened has
   // never been written in, and answering "not readable" while they are looking straight at it makes
   // the report describe the store rather than the reader.
