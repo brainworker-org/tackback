@@ -4,7 +4,23 @@
 // the same contract covers localStorage (sync, the offline default) and a future IndexedDB/backend
 // adapter (async) without a breaking change. The engine awaits them uniformly.
 //
-// @typedef {{ schemaVersion: 1, documentId: string, comments: import('./model.js').Comment[] }} StoredDocument
+// Since 0.9.7 a StoredDocument also carries what THIS READER has got to: `arrival` numbers utterances
+// in the order they reached this environment, `observed` records how far each thread has been seen,
+// and `arrivalNext` is the next number to hand out. An adapter must round-trip them like any other
+// field — dropping them makes the document look as though it predates unread tracking, and everything
+// in it reads as already seen. They are absent from documents written before 0.9.7, which is exactly
+// how that case is recognised.
+//
+// Two requirements come with them, and they are requirements rather than advice:
+//   1. ONE ENVIRONMENT PER STORAGE. These records say what one reader has read. An adapter that shares
+//      one document between viewers would make one person's reading everybody's.
+//   2. ONE INSTANCE AT A TIME. Numbering is per instance, so two live instances on the same storage
+//      hand out the same numbers and overwrite each other's snapshots.
+// A readOnly instance DOES call `save`: `readOnly` means the document does not change, not that the
+// reader leaves no trace.
+//
+// @typedef {{ schemaVersion: 1, documentId: string, comments: import('./model.js').Comment[],
+//   arrival?: Record<string, number>, observed?: Record<string, number>, arrivalNext?: number }} StoredDocument
 // @typedef {{ load(): StoredDocument|null|Promise<StoredDocument|null>, save(doc: StoredDocument): void|Promise<void>, subscribe?(cb: () => void): () => void }} StorageAdapter
 
 import { TackbackError } from './errors.js';

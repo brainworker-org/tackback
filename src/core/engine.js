@@ -408,12 +408,24 @@ class TackbackInstance {
     // envelope is still honoured — a buried id simply cannot come back in through the front door.
     // Everything removed below was ALREADY in the store, so the emitted diff is a true before/after.
     const gone = [], gonePrev = [];
+    const buriedReplies = [];
     for (const id of (doomed || [])) {
-      if (!this._store.has(id)) continue;
-      const r = this._store.delete(id);
+      if (this._store.has(id)) {
+        const r = this._store.delete(id);
+        this._attention.delete(id);
+        gone.push(id); gonePrev.push(r.previous);
+        diff.removed.push(...r.diff.removed);
+        continue;
+      }
+      // A tombstone names an UTTERANCE, and a reply is one. Refusing the envelope's own copy of a
+      // buried reply is only half of honouring it — the resident copy has to go too, or the envelope
+      // has been read and only partly obeyed. It shows up as its thread being updated, which is how
+      // an import reports every other modification; the per-comment delete events stay about comments.
+      const r = this._store.deleteReply(id);
+      if (!r) continue;
       this._attention.delete(id);
-      gone.push(id); gonePrev.push(r.previous);
-      diff.removed.push(...r.diff.removed);
+      buriedReplies.push(r);
+      diff.updated.push(...r.diff.updated);
     }
     this._commit(diff, 'import');
     // the same payload every other deletion carries — a listener reading `previous` must not find

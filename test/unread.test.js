@@ -93,6 +93,7 @@ const NOW_ISH = '2026-08-10T00:00:00.000Z';
 const entry = (id, elementId = 'p1', over = {}) => ({
   id, anchor: { type: 'block', elementId }, body: id, createdAt: NOW_ISH, ...over,
 });
+const reply = (id, over = {}) => ({ id, body: id, createdAt: NOW_ISH, ...over });
 const envelope = (comments, over = {}) => ({
   schemaVersion: 1, generator: { name: 'tackback', version: 'x' },
   document: { id: 'd' }, exportedAt: NOW_ISH, comments, ...over,
@@ -1059,5 +1060,98 @@ test('T43: the fact comes before what is derived from it', async () => {
   assert.deepEqual(core.unreadThreads(), [{ threadKey: 'block:p2', count: 1 }],
     'and only the one nobody was looking at is new');
   invariants(core, 'T43');
+  core.destroy();
+});
+
+// ---- a reply is an utterance everywhere, not only where it is validated --------------------------
+//
+// Validation treats roots and replies alike. The operations that follow it — resolving a conflict,
+// applying a tombstone — worked on records, which are roots. Wherever those two granularities meet is
+// where an id can end up naming two utterances, or a deletion end up half-applied, and neither says
+// anything when it happens.
+
+test('keepBoth: a duplicated thread gets new identities all the way down', async () => {
+  for (const withReplies of [true, false]) {
+    const core = mount({ storage: makeStore().adapter });
+    const thread = entry('c1', 'p1', withReplies
+      ? { replies: [reply('r1'), reply('r2')] }
+      : {});
+    core.importEnvelope(envelope([thread]), { mode: 'merge' });
+    await settle();
+    const before = idsOf(core, 'block:p1').length;
+
+    core.importEnvelope(envelope([thread]), { mode: 'merge', onConflict: 'keepBoth' });
+    await settle();
+    const ids = idsOf(core, 'block:p1');
+    assert.equal(new Set(ids).size, ids.length, `${withReplies}: no id names two utterances`);
+    assert.equal(ids.length, before * 2, `${withReplies}: the copy is a whole new thread`);
+    assert.equal(core.unreadCount('block:p1'), ids.length,
+      `${withReplies}: and the count is of utterances, not of ids counted twice`);
+    invariants(core, `keepBoth ${withReplies}`);
+    core.destroy();
+  }
+});
+
+test('keepBoth: a minted id steps around replies too, not only roots', async () => {
+  // Minting has to avoid every id in use, and a reply's id is one. Checking only the roots leaves the
+  // one name a duplicate is most likely to reach for — the one built from the id it is duplicating —
+  // free to land on a reply that already has it.
+  const core = mount({ storage: makeStore().adapter });
+  const thread = entry('c1', 'p1', { replies: [reply('r1')] });
+  core.importEnvelope(envelope([
+    thread,
+    entry('c2', 'p2', { replies: [reply('c1-dup')] }),   // the name a duplicate of c1 would want
+  ]), { mode: 'merge' });
+  await settle();
+
+  core.importEnvelope(envelope([thread]), { mode: 'merge', onConflict: 'keepBoth' });
+  await settle();
+  const all = [...idsOf(core, 'block:p1'), ...idsOf(core, 'block:p2')];
+  assert.equal(new Set(all).size, all.length, 'still no id naming two utterances');
+  invariants(core, 'keepBoth minting');
+  core.destroy();
+});
+
+test('a buried reply goes from the thread it hangs under, whatever the conflict policy', async () => {
+  // The envelope's own copy of a buried reply is refused by validation. That is only half of honouring
+  // it: the one already stored has to go too, or the deletion has been read and partly obeyed — and
+  // the reader is left looking at an utterance the sender declared gone.
+  for (const onConflict of ['skip', 'replace', 'keepBoth']) {
+    const core = mount({ storage: makeStore().adapter });
+    const d = display(core);
+    core.importEnvelope(envelope([entry('c1', 'p1', { replies: [reply('r1'), reply('r2')] })]), { mode: 'merge' });
+    await d.show('block:p1');
+    await d.show();
+    assert.equal(core.unreadCount('block:p1'), 0, `${onConflict}: all read to start with`);
+
+    const changes = [];
+    core.on('change', (e) => changes.push(e.changes));
+    core.importEnvelope(
+      envelope([entry('c1', 'p1', { replies: [reply('r1'), reply('r2')] })], { deleted: ['r1'] }),
+      { mode: 'merge', onConflict });
+    await settle();
+
+    const ids = idsOf(core, 'block:p1');
+    assert.ok(!ids.includes('r1'), `${onConflict}: the buried reply is gone from the store`);
+    assert.equal(new Set(ids).size, ids.length, `${onConflict}: and nothing was duplicated getting there`);
+    assert.equal(core.unreadCount('block:p1'), ids.length - 2,
+      `${onConflict}: what is left of the original is still read`);
+    assert.ok(changes.flatMap((c) => c.updated).some((c) => c.id === 'c1'),
+      `${onConflict}: the thread it hung under is reported as changed, however the reply left`);
+    invariants(core, `buried reply ${onConflict}`);
+    core.destroy();
+  }
+});
+
+test('a buried reply that is not here changes nothing', async () => {
+  const core = mount({ storage: makeStore().adapter });
+  core.importEnvelope(envelope([entry('c1', 'p1', { replies: [reply('r1')] })]), { mode: 'merge' });
+  await settle();
+  const updates = [];
+  core.on('comment:update', (e) => updates.push(e));
+  core.importEnvelope(envelope([], { deleted: ['r-never-seen'] }), { mode: 'merge' });
+  await settle();
+  assert.deepEqual(idsOf(core, 'block:p1'), ['c1', 'r1']);
+  assert.deepEqual(updates, [], 'nobody is told about a reply that was never here');
   core.destroy();
 });
