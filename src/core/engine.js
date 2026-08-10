@@ -1150,29 +1150,17 @@ class TackbackInstance {
     // An adapter's answer is outside input, exactly like an envelope, and gets the same check.
     const { comments, faults } = sanitizeComments(doc.comments);
     this._loadFaults.push(...faults);
-    // No environment metadata AT ALL means this was written before there was any — not that nothing
-    // has been read. Reading it as "nothing has been read" would turn every thread in every document
-    // unread on the day this version ships, which is the exact state the feature exists to end.
-    // One field present is enough to mean the opposite: this writer knew about reading, and a thread
-    // it does not mention is one nobody has opened.
-    // Nothing stored at all means this document was written before progress existed, so what is in
-    // it is what the reader has already lived with — treating it as new would light every mark in the
-    // document at once, which is the state this whole feature exists to end. A record that could not
-    // be read gets the opposite answer: nothing is known, and unknown is never 'seen'.
-    // Two different questions, so two independent tests. WAS there a record — no record means this
-    // document predates progress. Is it USABLE — a record that cannot be read leaves nothing known.
-    const nothingStored = progress === null || progress === undefined;
-    const kept = (progress && progress !== UNREADABLE) ? progress : null;
-    // Three things, not two. A document that predates progress has neither marker nor record, and
-    // what is in it is what the reader has lived with. A document written by THIS shape with no record
-    // is one whose progress never landed — nothing is known, and unknown is never 'already seen'.
-    // The declaration is normalised into three, not read as a boolean. It decides whether an absent
-    // record may be called 'already read', so a value nobody recognises cannot be allowed to mean the
-    // same as no value: stored JSON is reachable by hand and by adapters that were never typed, and
-    // corrupted format metadata silently clearing marks is the failure this whole field exists to
-    // prevent. Absent means no record was ever expected; `true` means one is; anything else means the
-    // shape itself cannot be read, which is not knowledge and never becomes 'seen'.
-    const declaration = doc.keepsProgress === undefined ? 'absent'
+    // Whether anything here may be called ALREADY READ is decided by two things, asked in order.
+    //
+    // First, can the stored shape be read at all. The document declares whether reading progress is
+    // kept in a record of its own, and that declaration decides whether an ABSENT record means "no
+    // record was ever expected" — the one answer that counts everything as seen. So a value nobody
+    // recognises must not be able to pass for no value: stored data is reachable by hand and through
+    // adapters that were never typed, and corrupted format metadata quietly clearing marks is the
+    // failure this field exists to prevent. Presence is asked separately from value, because a
+    // property that is THERE holding undefined is not one that was never written.
+    const hasDeclaration = Object.prototype.hasOwnProperty.call(doc, 'keepsProgress');
+    const declaration = !hasDeclaration ? 'absent'
       : doc.keepsProgress === true ? 'present'
         : 'malformed';
     if (declaration === 'malformed') {
@@ -1181,6 +1169,19 @@ class TackbackInstance {
         message: 'stored document declares an unrecognised progress format; nothing is taken as read',
       });
     }
+
+    // Then, and only for a shape that could be read, what the record itself says. A malformed shape
+    // stops the record being believed at all rather than merely being reported alongside it —
+    // validation that announces a problem and then trusts what it could not validate is a comment,
+    // not a boundary.
+    const nothingStored = progress === null || progress === undefined;
+    const kept = (declaration !== 'malformed' && progress && progress !== UNREADABLE) ? progress : null;
+
+    // The one cell that counts as read without a record: nothing was ever expected here. Written
+    // before progress existed, or somewhere it cannot be kept — the same thing for this decision, so
+    // one shape covers both. Everything else leaves the reader to look again, because a document that
+    // expected a record and has none, and one whose record cannot be read, are both ignorance; and
+    // turning ignorance into "already read" is how a reader stops being told about anything at all.
     const legacy = nothingStored && declaration === 'absent';
     const counts = (v) => Number.isSafeInteger(v) && v >= 1;
 

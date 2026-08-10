@@ -1864,7 +1864,9 @@ test('restoring: a declaration nobody recognises is not the same as no declarati
   // typed, and corrupted format metadata quietly clearing marks is the failure the field exists to
   // prevent. Absent still means what it always meant; anything unrecognised means the shape is
   // unreadable, which is not knowledge.
-  for (const declared of [false, 'true', 1, 0, null, {}, []]) {
+  for (const declared of [false, 'true', 1, 0, null, {}, [], undefined]) {
+    // Written as a property that is THERE, whatever it holds — including undefined, which is not the
+    // same as never having been written at all.
     const stored = { schemaVersion: 1, documentId: 'd', keepsProgress: declared, comments: [entry('c1', 'p1')] };
     const errors = [];
     const core = mount({ storage: {
@@ -1896,4 +1898,36 @@ test('restoring: a declaration nobody recognises is not the same as no declarati
     assert.deepEqual(errors, [], `${declared}: nothing wrong to report`);
     core.destroy();
   }
+});
+
+test('restoring: a shape that cannot be read stops the record being believed, not merely reported', async () => {
+  // The partition has to be a boundary. Announcing that the stored shape is unreadable and then going
+  // on to trust the record inside it is a comment, not validation — and the record is the one thing
+  // that can say "already read", which is what the whole check exists to withhold.
+  const record = { arrival: { c1: 1 }, observed: { 'block:p1': 1 }, arrivalNext: 2 };   // says: read
+  for (const declared of [false, 'true', 1, null, undefined]) {
+    const stored = { schemaVersion: 1, documentId: 'd', keepsProgress: declared, comments: [entry('c1', 'p1')] };
+    const errors = [];
+    const core = mount({ storage: {
+      load: () => stored, save: () => {}, loadProgress: () => record, saveProgress: () => {},
+    } });
+    core.on('error', (e) => errors.push(e));
+    await core.ready;
+    await quiet();
+    assert.equal(core.unreadCount('block:p1'), 1,
+      `${JSON.stringify(declared)}: the record says read, and is not believed`);
+    assert.equal(errors.filter((e) => e.code === 'STORAGE_LOAD_FAILED').length, 1);
+    invariants(core, `malformed declaration with a record ${JSON.stringify(declared)}`);
+    core.destroy();
+  }
+
+  // …and the recognised shape does believe the same record.
+  const ok = mount({ storage: {
+    load: () => ({ schemaVersion: 1, documentId: 'd', keepsProgress: true, comments: [entry('c1', 'p1')] }),
+    save: () => {}, loadProgress: () => record, saveProgress: () => {},
+  } });
+  await ok.ready;
+  await quiet();
+  assert.equal(ok.unreadCount('block:p1'), 0, 'a shape that can be read believes what is inside it');
+  ok.destroy();
 });
