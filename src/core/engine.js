@@ -1022,10 +1022,11 @@ class TackbackInstance {
     // Present only when progress can actually be kept, and then only as `true`. An adapter with
     // nowhere to put a record will never have one, so declaring that one is expected turns a
     // permanent, ordinary arrangement into "the write must have failed" — everything unread, every
-    // time, for ever. Absent means what it has always meant, and this writer produces it for two
-    // reasons — a build that predates progress, or one that cannot keep it — while a third arrives
-    // from outside: an older build rebuilding the document and dropping a field it never knew. One
-    // shape covers all of them, because nothing left in the pair separates them.
+    // time, for ever. Absent means what it has always meant. THIS writer omits it for exactly one
+    // reason: the adapter cannot keep a record. The other histories that end in the same shape arrive
+    // from outside — a build written before progress existed, and an older build rebuilding the
+    // document and dropping a field it never knew. One shape covers all three, because nothing left
+    // in the pair separates them.
     if (this._progressCapable) doc.keepsProgress = true;
     return doc;
   }
