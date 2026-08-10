@@ -460,6 +460,11 @@ export function attachPanel(core, options = {}) {
     laneHost = createHost({ collapsible: true }, () => core.reportThreadVisibility());
     laneHost.attach(laneConv, lane);
     hosts.add(laneHost);
+    // The lane outlives every Pane, so the only end it has is the panel's own. Registering that end
+    // here is what makes releaseHost the one path in fact and not just in the comment above it: the
+    // lane's node is already given back by the sweep, so without this its host would simply stop
+    // being reachable — alive, holding a conversation, and never told.
+    own(() => releaseHost(laneHost));
   }
   function laneOpen() { return !!laneHost && laneHost.timelineOpen(); }
   function toggleLane(force) {
