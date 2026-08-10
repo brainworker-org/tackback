@@ -38,7 +38,10 @@ import { newId } from './id.js';
  * @property {Reply[]} [replies]     // conversation under this comment, ordered by createdAt (spec REQ-307)
  * @property {{ section?: string, quote?: string }} [snapshot]
  * @property {{ since: string, lastError?: string }} [orphan]  // serialized orphan state (spec REQ-004)
- * @typedef {{ anchor: Anchor, body: string, reaction?: string, author?: Author|null, threadId?: string, replies?: Reply[], snapshot?: Comment['snapshot'] }} AddCommentInput
+ * @typedef {{ anchor: Anchor, body: string, reaction?: string, author?: Author|null, threadId?: string, replies?: AddReplyInput[], snapshot?: Comment['snapshot'] }} AddCommentInput
+ *   `replies` is what a reply is ASKED for, not what one looks like once stored — the id and the
+ *   timestamp are the library's to give, here as everywhere. Requiring them of a caller asked for two
+ *   values that are then discarded, and told a typed caller they could choose an identity they cannot.
  * @typedef {{ body: string, author?: Author }} AddReplyInput
  */
 

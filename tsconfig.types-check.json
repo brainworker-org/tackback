@@ -9,5 +9,5 @@
     "skipLibCheck": false,
     "strict": false
   },
-  "include": ["types/**/*.d.ts"]
+  "include": ["types/**/*.d.ts", "scripts/types-usage.ts"]
 }
