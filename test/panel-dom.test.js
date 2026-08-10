@@ -2100,3 +2100,135 @@ test('a redraw that nothing else follows still leaves the rings on', () => {
     assert.ok(badgeFor(f, 'p1').classList.contains('tb-unread'), 'so the ring is still there');
   } finally { f.restore(); }
 });
+
+// ---- a reply arriving into a timeline that is on screen ------------------------------------------
+//
+// The design principle, verbatim: "when the timeline inside a Pane — the UI where comments are
+// arranged on a time axis — is in the shown state, an arriving message is processed immediately and
+// the read marker is advanced; when it is hidden, unread is shown."
+//
+// T11 above already sends a COMMENT into a shown timeline. What was never sent into one is a REPLY,
+// and a reply is what actually arrives in a conversation: you send, and the other side answers into
+// the Pane you are still looking at. The crossing was empty in every layer at once.
+
+test('T48: a reply arriving into a Pane that is open does not ring it', () => {
+  const f = mountPanel({ instrument: true, setup: twoBlocks });
+  try {
+    const c = f.core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'sent' });
+    f.env.drainMicrotasks();
+    openPane(f, badgeFor(f, 'p1'));
+    assert.equal(f.core.unreadCount('block:p1'), 0, 'opening it read what was there');
+
+    f.core.addReply(c.id, { body: 'answered while you watch' });
+    f.env.drainMicrotasks();
+
+    assert.equal(f.core.unreadCount('block:p1'), 0, 'the timeline was shown, so the reply arrived read');
+    assert.ok(!badgeFor(f, 'p1').classList.contains('tb-unread'), 'and nothing is marked');
+  } finally { f.restore(); }
+});
+
+test('T49: shown-vs-hidden decides a reply the same way in all three thread hosts', () => {
+  // One question — is this thread's timeline shown — asked of an ordinary Pane, of the document lane,
+  // and of the document thread when it falls back to an ordinary Pane. A host that answered it its
+  // own way would show up here and nowhere else.
+  const cases = [
+    ['ordinary Pane', {}, (f) => {
+      const c = f.core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'seed' });
+      f.env.drainMicrotasks();
+      return { id: c.id, key: 'block:p1',
+        show: () => openPane(f, badgeFor(f, 'p1')),
+        hide: () => { f.doc.querySelector('.tb-popup').querySelector('.tb-cancel').click(); f.env.drainMicrotasks(); },
+        marked: () => badgeFor(f, 'p1').classList.contains('tb-unread') };
+    }],
+    ['document lane', {}, (f) => {
+      const c = f.core.addComment({ anchor: { type: 'document' }, body: 'seed' });
+      f.env.drainMicrotasks();
+      return { id: c.id, key: 'document',
+        show: () => { f.panel.toggleDocumentLane(true); f.env.drainMicrotasks(); },
+        hide: () => { f.panel.toggleDocumentLane(false); f.env.drainMicrotasks(); },
+        marked: () => f.lane().classList.contains('tb-unread') };
+    }],
+    ['document thread with no lane', { controls: { docLane: false } }, (f) => {
+      const c = f.core.addComment({ anchor: { type: 'document' }, body: 'seed' });
+      f.env.drainMicrotasks();
+      return { id: c.id, key: 'document',
+        show: () => { f.panel.openDocumentThread(); f.env.drainMicrotasks(); },
+        hide: () => { f.doc.querySelector('.tb-popup').querySelector('.tb-cancel').click(); f.env.drainMicrotasks(); },
+        marked: () => false };   // no badge and no lane: the mark has nowhere to be, so the count is the oracle
+    }],
+  ];
+  for (const [name, opts, build] of cases) {
+    const f = mountPanel({ instrument: true, setup: twoBlocks, ...opts });
+    try {
+      const t = build(f);
+      t.show();
+      assert.equal(f.core.unreadCount(t.key), 0, `${name}: shown, so what is there is read`);
+
+      f.core.addReply(t.id, { body: 'answer, timeline shown' });
+      f.env.drainMicrotasks();
+      assert.equal(f.core.unreadCount(t.key), 0, `${name}: a reply into a SHOWN timeline arrives read`);
+      assert.equal(t.marked(), false, `${name}: and nothing is marked`);
+
+      t.hide();
+      f.core.addReply(t.id, { body: 'answer, timeline hidden' });
+      f.env.drainMicrotasks();
+      assert.equal(f.core.unreadCount(t.key), 1, `${name}: a reply into a HIDDEN timeline is unread`);
+
+      t.show();
+      assert.equal(f.core.unreadCount(t.key), 0, `${name}: showing it is what clears it`);
+      assert.equal(t.marked(), false, `${name}: and the mark goes with it`);
+    } finally { f.restore(); }
+  }
+});
+
+test('T52: the reported conversation walk-through, end to end', () => {
+  // The sequence a person actually performed, kept as one test so a regression is caught as the
+  // JOURNEY rather than as five properties that each still hold on their own.
+  //
+  // Step 3 is the one that was reported wrong and is not: with an interactive transport the Pane
+  // STAYS open, because that is what a conversation is — the answer lands in front of you rather
+  // than behind a badge you have to find again. The mark that used to appear here was the demo
+  // page raising the attention flag on arrival, not the library.
+  const f = mountPanel({ instrument: true, setup: twoBlocks });
+  try {
+    f.core.setTransport({ interactive: true });                       // (2) scenario: conversation
+    f.env.drainMicrotasks();
+
+    f.core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'seed' });
+    f.env.drainMicrotasks();
+    openPane(f, badgeFor(f, 'p1'));
+    assert.ok(f.doc.querySelector('.tb-popup'), 'the Pane is on screen');
+
+    // (3) the Send itself — typed and committed, so `closeOnCommit` is actually exercised. Asserting
+    // on a Pane that was merely opened would leave this step measuring nothing.
+    const pane = f.doc.querySelector('.tb-popup');
+    assert.equal(pane.querySelector('.tb-save').textContent, 'Send', '(2) the transport made it a Send');
+    const ta = pane.querySelector('textarea');
+    ta.value = 'my message'; ta.dispatchEvent({ type: 'input' });
+    pane.querySelector('.tb-save').click();
+    f.env.drainMicrotasks();
+    assert.ok(f.doc.querySelector('.tb-popup'), '(3) a Send does NOT close a conversation — the Pane stays open');
+    const c = f.core.listComments().find((x) => x.anchor.elementId === 'p1');
+
+    f.core.addReply(c.id, { body: 'the other participant answers' });  // (4) ~a beat later
+    f.env.drainMicrotasks();
+    assert.ok(f.doc.querySelector('.tb-popup'), '(4) and it is still open when the answer lands');
+    assert.equal(f.core.unreadCount('block:p1'), 0,
+      '(4/5) the answer landed in a shown timeline, so it is read on arrival and no mark goes up');
+    assert.ok(!badgeFor(f, 'p1').classList.contains('tb-unread'));
+
+    // …and the other half of the same principle: hide the timeline, and the next answer is unread.
+    f.doc.querySelector('.tb-popup').querySelector('.tb-cancel').click();
+    f.env.drainMicrotasks();
+    assert.equal(f.doc.querySelector('.tb-popup'), null, 'the reader closes it');
+
+    f.core.addReply(c.id, { body: 'answered while they were away' });
+    f.env.drainMicrotasks();
+    assert.equal(f.core.unreadCount('block:p1'), 1, 'hidden timeline: now it IS new');
+    assert.ok(badgeFor(f, 'p1').classList.contains('tb-unread'), 'and the reader can see where');
+
+    openPane(f, badgeFor(f, 'p1'));
+    assert.equal(f.core.unreadCount('block:p1'), 0, 'reading it clears it');
+    assert.ok(!badgeFor(f, 'p1').classList.contains('tb-unread'), 'the mark goes, which is the whole promise');
+  } finally { f.restore(); }
+});
