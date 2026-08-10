@@ -19,8 +19,8 @@ const nowIso = () => new Date().toISOString();
 
 /**
  * A stored progress record that exists and cannot be read. Distinct from having none: nothing stored
- * means this document predates progress and what is in it counts as seen, while a record that cannot
- * be read means nothing is known — and nothing known must never be turned into 'already read'.
+ * is READ AS a document predating progress, so what is in it counts as seen, while a record that
+ * cannot be read means nothing is known — and nothing known must never be turned into 'already read'.
  */
 const UNREADABLE = Symbol('unreadable progress');
 
@@ -1192,9 +1192,12 @@ class TackbackInstance {
     const nothingStored = progress === null || progress === undefined;
     const kept = (declaration !== 'malformed' && progress && progress !== UNREADABLE) ? progress : null;
 
-    // The one cell that counts as read without a record: nothing was ever expected here. Written
-    // before progress existed, or somewhere it cannot be kept — the same thing for this decision, so
-    // one shape covers both. Everything else leaves the reader to look again, because a document that
+    // The one cell that counts as read without a record: nothing was expected here, as far as anything
+    // surviving can tell. Written before progress existed, written somewhere it cannot be kept, or
+    // written by an older build that dropped the declaration and since parted with its record — one
+    // shape covers all three, because no evidence is left that would separate them. It is the reading
+    // applied to that silence, not a fact about it. Everything else leaves the reader to look again,
+    // because a document that
     // expected a record and has none, and one whose record cannot be read, are both ignorance; and
     // turning ignorance into "already read" is how a reader stops being told about anything at all.
     const legacy = nothingStored && declaration === 'absent';

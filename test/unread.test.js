@@ -1414,7 +1414,7 @@ test('progress that arrives late is waited for, not missed', async () => {
 });
 
 test('progress that cannot be read is not the same as none', async () => {
-  // Nothing stored means the document predates progress, and what is in it is what the reader has
+  // Nothing stored is read as a document predating progress, and what is in it is what the reader has
   // lived with — calling that unread would light every mark at once. A record that EXISTS and cannot
   // be read means nothing is known, and nothing known must never become "already seen".
   const comments = [entry('c1', 'p1'), entry('c2', 'p2')];
@@ -1548,7 +1548,7 @@ test('an utterance that arrives and goes within one turn never takes a number', 
 test('the built-in adapter tells corrupt progress from none, like any other', async () => {
   // The distinction is worth nothing if the adapter almost everybody uses defeats it on the way in.
   // Its parser used to answer "no record" for a record it could not read, which is the one answer that
-  // silently clears marks: no record means the document predates unread, so everything counts as seen.
+  // silently clears marks: no record is read as a document predating unread, so everything counts as seen.
   const items = new Map();
   const saved = globalThis.localStorage;
   globalThis.localStorage = {
@@ -1749,8 +1749,8 @@ test('a document kept by an adapter that cannot hold progress does not claim it 
 //
 //   DECLARATION   absent | present. There is no third value: a document written where progress cannot
 //                 be kept looks exactly like one written before progress existed, because for the
-//                 purpose of this decision it IS the same — there is no record here and there never
-//                 was going to be one.
+//                 purpose of this decision it IS the same — nothing here says a record was expected,
+//                 and nothing surviving would say whether one ever was.
 //   CAPABILITY    unavailable | complete. Half a pair counts as unavailable, and is reported; that
 //                 reporting is checked on its own elsewhere, not here.
 //   RECORD        only when capability is complete, because otherwise it is never consulted. Four
@@ -1902,8 +1902,9 @@ test('restoring: a declaration nobody recognises is not the same as no declarati
 
 test('restoring: a shape that cannot be read stops the record being believed, not merely reported', async () => {
   // The partition has to be a boundary. Announcing that the stored shape is unreadable and then going
-  // on to trust the record inside it is a comment, not validation — and the record is the one thing
-  // that can say "already read", which is what the whole check exists to withhold.
+  // on to trust the record inside it is a comment, not validation — and with the shape in doubt the
+  // record is the only thing left that could say "already read", which is what the whole check exists
+  // to withhold. The one exception that says it without a record needs a shape that reads cleanly.
   const record = { arrival: { c1: 1 }, observed: { 'block:p1': 1 }, arrivalNext: 2 };   // says: read
   for (const declared of [false, 'true', 1, null, undefined]) {
     const stored = { schemaVersion: 1, documentId: 'd', keepsProgress: declared, comments: [entry('c1', 'p1')] };

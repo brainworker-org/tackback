@@ -121,9 +121,9 @@ export function localStorageAdapter(key) {
       if (!ls) return null;
       const raw = ls.getItem(`${key}::progress`);
       if (raw == null) return null;
-      // A record that is HERE and cannot be read is reported as such, never as an absent one. Absent
-      // means this document predates progress, so what is in it counts as seen — answering that for a
-      // corrupt record would silently clear marks the reader never looked at.
+      // A record that is HERE and cannot be read is reported as such, never as an absent one. An
+      // absent one is read as a document predating progress, so what is in it counts as seen —
+      // answering that for a corrupt record would silently clear marks the reader never looked at.
       try {
         return JSON.parse(raw);
       } catch (err) {
