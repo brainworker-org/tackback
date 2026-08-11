@@ -3,7 +3,7 @@
 // block, right-drag a PDF region), plus the three customization axes (theming / reactions / i18n).
 // It NEVER reaches into core internals — it drives the public API and re-renders on `change`.
 
-import { resolveTheme, buildThemeCSS, PALETTES } from './theme.js';
+import { resolveTheme, buildThemeCSS, buildUnreadInkCSS, PALETTES } from './theme.js';
 import { DEFAULT_REACTIONS, resolveReaction } from './reactions.js';
 import { LocaleRegistry } from './i18n.js';
 import { indexAnnotatable, resolveAnchorDom, clampToViewport } from './dom.js';
@@ -57,7 +57,13 @@ const PANEL_CSS = `
 .tb-popup-open .tb-pin { cursor: default; }
 .tb-draw { position: absolute; z-index: 7; border: 2px dashed var(--tb-accent); background: rgba(51,170,119,.12); pointer-events: none; }
 .tb-pending { position: absolute; z-index: 6; border: 2px dashed var(--tb-mark-outline); background: var(--tb-mark-bg); border-radius: 3px; pointer-events: none; }
-.tb-hide .tb-badge, .tb-hide .tb-pin, .tb-hide .tb-region { display: none; }
+/* Marks OFF hides what the panel drew ON the page — the badges AND the areas they mark, because a
+   dashed outline with no badge on it is the part that makes a page hard to read. What it does NOT do
+   is change what is unread: the state goes on being kept while it is out of sight, and turning marks
+   back on shows whatever arrived meanwhile. */
+.tb-hide .tb-badge, .tb-hide .tb-pin, .tb-hide .tb-region, .tb-hide .tb-mark { display: none; }
+.tb-hide .tb-mark { background: none !important; outline: none !important; }
+:root.tb-hide ::highlight(tb-range) { background: transparent; text-decoration: none; }
 ::highlight(tb-range) { background: var(--tb-mark-bg); color: inherit; text-decoration: underline dotted var(--tb-mark-outline); }
 .tb-badge.tb-orphan { opacity: .7; }
 /* an anchor carrying a live ATTENTION flag (setAnchorAttention) wears a generic "needs-notice" tint.
@@ -69,8 +75,19 @@ const PANEL_CSS = `
    two say different things, so an anchor that is both wears both and neither has to win. A box-shadow
    rather than an outline because it follows border-radius (same reason the on-surface frame uses one),
    and because the ring is then visible in grayscale as a shape, not only as a colour. */
-.tb-badge.tb-unread { box-shadow: 0 0 0 2px var(--tb-unread); }
-.tb-pin.tb-unread { box-shadow: 0 0 0 2px var(--tb-unread), 0 1px 4px rgba(0,0,0,.3); }
+/* A badge holding something this reader has not got to is FILLED and breathes. Reading the thread
+   drops the class, and the badge goes back to the colour of whoever spoke last — which the render
+   writes inline, so the fill has to outweigh it, and letting go of that weight is what puts the
+   speaker's colour back. The ink on top follows the light/dark base and is emitted with the tokens
+   (buildUnreadInkCSS) rather than published as a token of its own. */
+.tb-badge.tb-unread { background: var(--tb-unread) !important; animation: tb-unread-pulse 2s ease-in-out infinite; }
+.tb-pin.tb-unread { background: var(--tb-unread) !important; box-shadow: 0 1px 4px rgba(0,0,0,.3); animation: tb-unread-pulse 2s ease-in-out infinite; }
+@keyframes tb-unread-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+/* A pulse that never stops is the kind a reader may have asked their system to spare them. The mark
+   stays — it is the movement that goes, not the information. */
+@media (prefers-reduced-motion: reduce) {
+  .tb-badge.tb-unread, .tb-pin.tb-unread, .tb-lane.tb-unread .tb-lane-count { animation: none; }
+}
 /* The document lane: the conversation about the document as a whole, composed from a bar across the
    bottom of the viewport rather than reached from a mark, because it is about no particular place.
    It FLOATS — the library never shifts the host's layout (same reason badges are overlay-positioned)
@@ -101,11 +118,13 @@ const PANEL_CSS = `
   font: inherit; color: inherit; background: none; border: 0; padding: 0; text-align: left; }
 .tb-lane .tb-lane-title { font-weight: 600; flex: 1; }
 .tb-lane .tb-lane-count { font-size: 11px; opacity: .75; }
+/* the shape a count takes once it carries a colour — the same pill the marks below use */
+.tb-lane .tb-lane-count.tb-tinted { border-radius: 9px; padding: 0 7px; opacity: 1; }
 .tb-lane.tb-attn .tb-lane-count { background: var(--tb-attention); color: #fff; border-radius: 9px; padding: 0 7px; opacity: 1; }
 /* The document thread has no mark on the page — the lane's own count IS its mark, so the ring goes
    there. Padding and radius are repeated because the count is otherwise a bare number with nothing
    for a ring to sit around. */
-.tb-lane.tb-unread .tb-lane-count { box-shadow: 0 0 0 2px var(--tb-unread); border-radius: 9px; padding: 0 7px; opacity: 1; }
+.tb-lane.tb-unread .tb-lane-count { background: var(--tb-unread) !important; border-radius: 9px; padding: 0 7px; opacity: 1; animation: tb-unread-pulse 2s ease-in-out infinite; }
 .tb-lane .tb-lane-composer { margin-top: 8px; }
 /* Collapsed is not "closed": the composer stays, because the point of a lane rather than a button
    is that you can type into it without opening anything. Expanding adds the history above it. */
@@ -320,14 +339,18 @@ export function attachPanel(core, options = {}) {
   let mql = null, applyAutoTheme = null;
   function applyTheme(theme) {
     const prefersDark = !!(globalThis.matchMedia && globalThis.matchMedia('(prefers-color-scheme: dark)').matches);
-    themeStyleEl.textContent = buildThemeCSS(resolveTheme(theme, prefersDark));
+    themeStyleEl.textContent = buildThemeCSS(resolveTheme(theme, prefersDark))
+      + '\n' + buildUnreadInkCSS(theme, prefersDark);
     if (mql && applyAutoTheme) { mql.removeEventListener('change', applyAutoTheme); mql = null; applyAutoTheme = null; }
     // 'auto' AND palette/custom-object themes keep the light/dark BASE following the OS live
     // (a palette only overrides accent tokens; its base still flips with the OS).
     const followsOS = theme === 'auto' || theme == null || (theme && typeof theme === 'object');
     if (followsOS && globalThis.matchMedia) {
       mql = globalThis.matchMedia('(prefers-color-scheme: dark)');
-      applyAutoTheme = () => { themeStyleEl.textContent = buildThemeCSS(resolveTheme(theme, mql.matches)); };
+      applyAutoTheme = () => {
+        themeStyleEl.textContent = buildThemeCSS(resolveTheme(theme, mql.matches))
+          + '\n' + buildUnreadInkCSS(theme, mql.matches);
+      };
       mql.addEventListener('change', applyAutoTheme);
       // re-registered on every theme change, so the disposer is registered every time too and the
       // stale ones become no-ops rather than being forgotten
@@ -490,6 +513,17 @@ export function attachPanel(core, options = {}) {
     if (!lane) return;
     const n = utteranceCount(docComments);
     laneCount.textContent = n ? `💬${n}` : '';
+    // The document thread's count is a badge like any other, so it wears what a badge wears: the
+    // colour of whoever spoke last. It used to be the one mark that did not, which made "read is the
+    // speaker's colour" a rule with an exception nobody could see a reason for. While something is
+    // unread the fill above outweighs this, and reading it hands the thread back to its last speaker.
+    //
+    // Written here rather than through paintAnchor: that one also raises the attention class, and on
+    // this mark the class belongs to the lane rather than to the count (see the rule for it).
+    const laneTint = n ? actorColorOf(lastSpeaker(docComments)) : null;
+    laneCount.style.background = laneTint || '';
+    laneCount.style.color = laneTint ? '#fff' : '';
+    laneCount.classList.toggle('tb-tinted', !!laneTint);
     lane.classList.toggle('tb-attn', docComments.some((c) => core.hasAttention(c.id)));
     laneConv?.sync();
   }
@@ -1514,7 +1548,7 @@ export function attachPanel(core, options = {}) {
   }
 
   /**
-   * Ring every anchor whose thread holds something unread, and unring the rest.
+   * Mark every anchor whose thread holds something unread, and unmark the rest.
    *
    * The panel keeps NO record of what is unread. It asks, every time, and paints what it is told —
    * so the event path and the redraw path cannot drift, because neither of them remembers anything.

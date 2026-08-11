@@ -13,7 +13,7 @@ any HTML, including Markdown rendered to HTML.
 > multi-participant timeline, actor colors, attention, and the Save/Send scenarios — run
 > `demo/demo.html`: `npm run build`, serve the package root over http, and open it.
 
-> **Version 0.9.7 (staging).** Pre-1.0: the API is functional and tested but may still change before
+> **Version 0.9.8 (staging).** Pre-1.0: the API is functional and tested but may still change before
 > the 1.0 stable release. The public API is the **JavaScript** API called in the browser (not an HTTP API).
 
 ## Install
@@ -218,9 +218,13 @@ tb.unreadThreads();              // → [{ threadKey, count }] — only threads 
 tb.on('unread:change', ({ threads }) => {/* the whole picture, every time */});
 ```
 
-The panel draws it for you: an anchor holding something unread gets a **ring** in `--tb-unread`, and
-the document lane's count gets one when the document thread does. Attention fills, unread outlines —
-an anchor that is both wears both, so neither can hide the other.
+The panel draws it for you. A badge holding something unread is **filled** in `--tb-unread` and
+**breathes** on a two-second cycle; reading the thread takes the fill away and the badge goes back to
+the colour of whoever spoke last. The document lane's count is a badge like any other and does the
+same. A reader who has asked their system for less movement gets the fill without the breathing.
+
+`--tb-unread` is a token like the rest, so a different colour is one line — and the ink written on
+top of it is not a token, because it is only ever whatever stays legible on the fill beside it.
 
 **One boundary, so one answer.** An arrival is recognised and the reader's progress moves at the same
 settling point, so `unreadCount` and `unreadThreads` always give the settled picture — including if

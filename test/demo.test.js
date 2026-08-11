@@ -97,45 +97,13 @@ test('T51: no demo page decides "read" from a click, either', () => {
   assert.deepEqual(offenders, [], `a demo is deciding "read" for itself again:\n  ${offenders.join('\n  ')}`);
 });
 
-/** A page with its alternate palette removed — what the reader gets before touching anything. */
-const asDefaultView = (text) => {
-  const at = text.indexOf('ALT_THEME');
-  return at < 0 ? text : text.replace(blockAt(text, at), '');
-};
-const SETS_THE_MARK = /--tb-unread['"]?\s*:/;
+// T53 and T54 have gone. They fixed that each demo page CHOSE the mark's colour and drew it as a
+// fill that breathes — which the pages had to do while the library still shipped a blue ring. The
+// library ships the fill now, so a page that set it would be restating the default, and a check that
+// it does would fail the day someone tidied that up. What the mark looks like is fixed against the
+// panel instead: panel-dom.test S3-U1..U4.
 
-test('T53: every demo page chooses its one mark\'s colour for the view it opens in', () => {
-  // The vocabulary is "new is orange", and the library still ships blue as this token's default until
-  // that changes in its own version. So each page has to SET it — and set it where the reader will
-  // actually meet it. Reading the whole file would be satisfied by the alternate palette, which is
-  // behind a button nobody has pressed yet, so the alternate palette is taken out before looking.
-  const missing = [];
-  for (const { rel, text } of demoPages()) {
-    if (!SETS_THE_MARK.test(asDefaultView(text))) missing.push(rel);
-  }
-  assert.deepEqual(missing, [],
-    `these pages leave their opening view on the shipped default: ${missing.join(', ')}`);
-});
-
-test('T54: every demo page draws its one mark as a fill that breathes, not as the ring it replaces', () => {
-  // The look was chosen rather than inherited: while a thread holds something new the whole badge is
-  // orange and pulses on a two-second cycle, and reading it puts the speaker's colour back. The
-  // library draws this state as a ring, so a page that only sets the token would show the ring — the
-  // fill has to be stated, and the ring has to be cleared, or the reader gets both at once.
-  const missing = [];
-  for (const { rel, text } of demoPages()) {
-    const view = asDefaultView(text);
-    const rule = /\.tb-badge\.tb-unread[^{]*\{[^}]*\}/.exec(view)?.[0] || '';
-    if (!/background\s*:[^;]*!important/.test(rule)) missing.push(`${rel}: the mark is not filled`);
-    if (!/box-shadow\s*:\s*none\s*!important/.test(rule)) missing.push(`${rel}: the ring it replaces is still drawn`);
-    if (!/animation\s*:[^;]*\b2s\b/.test(rule)) missing.push(`${rel}: the mark does not breathe on the agreed cycle`);
-    if (!/@keyframes\s+tb-unread-pulse/.test(view)) missing.push(`${rel}: the cycle it names is not defined`);
-    if (!/prefers-reduced-motion/.test(view)) missing.push(`${rel}: a pulse that never stops is not offered a way out`);
-  }
-  assert.deepEqual(missing, [], `the one mark is not drawn as agreed:\n  ${missing.join('\n  ')}`);
-});
-
-test('T50/T51/T53/T54: the sweep answers about real text, and is not just failing to match', () => {
+test('T50/T51: the sweep answers about real text, and is not just failing to match', () => {
   // The failure an absence check has: reading nothing, finding nothing, and reporting that as clean.
   // So the same readings are pointed at the wiring that was removed, which they must catch.
   const onArrival = `
@@ -155,14 +123,4 @@ test('T50/T51/T53/T54: the sweep answers about real text, and is not just failin
   assert.match(blockAt(clickClear, clickClear.indexOf("addEventListener('click'")), /setAnchorAttention/,
     'and the click-clear is found where it was');
 
-  assert.doesNotMatch('const NOTHING = { "--tb-accent": "#000" };', SETS_THE_MARK,
-    'and a page that sets some other token is not mistaken for one that sets this one');
-
-  const onlyInTheAlternate = `
-    const ALT_THEME = { '--tb-accent': '#0f766e', '--tb-unread': '#b45309' };
-    let altColors = false;
-  `;
-  assert.match(onlyInTheAlternate, SETS_THE_MARK, 'the token IS in that page, read whole…');
-  assert.doesNotMatch(asDefaultView(onlyInTheAlternate), SETS_THE_MARK,
-    '…and is gone once the palette nobody has opened yet is set aside, which is the point');
 });
