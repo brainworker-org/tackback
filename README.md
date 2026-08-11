@@ -387,6 +387,162 @@ is `0`; the removal appears only in the aggregate `removed` of the `change`.
 even when tombstones were honoured — the wipe already accounts for everything the incoming set
 omits, so there is nothing left for a tombstone to take.
 
+## Errors
+
+Everything that can fail reports it as a `TackbackError` — one type, with a stable `code` you can
+branch on. The message is for a human reading a log; **the code is the contract.**
+
+A failure reaches you by one of two routes, and which one it is depends on the failure, not on you:
+
+- **thrown** — the call you made could not be done. Wrap the call.
+- **emitted** — something failed that no single call is responsible for, so it arrives on
+  `tb.on('error', …)`. The instance keeps working.
+
+The route is fixed per situation and listed below. One code, `ADAPTER_FAILED`, can arrive either way,
+because it covers both a call you made and a background failure — the table says which is which.
+
+| Code | Route | When |
+|---|---|---|
+| `INVALID_ANCHOR` | thrown | the anchor is not one this build can use, or a region move would leave its surface |
+| `COMMENT_NOT_FOUND` | thrown | the id you named is not in this document |
+| `READ_ONLY` | thrown | this instance is `readOnly` and you called something that changes the document |
+| `IMPORT_INVALID` | thrown | the input cannot be read as an envelope, or a `replace` could not be placed |
+| `IMPORT_ENTRY_DROPPED` | emitted | one entry was refused and the rest went in — one per entry |
+| `IMPORT_REPLACE_REJECTED` | emitted | a `replace` carried an identity it could not accept, so none of it was applied |
+| `STORAGE_LOAD_FAILED` | emitted | your storage had something that could not be read back |
+| `STORAGE_SAVE_FAILED` | emitted | a write to your storage failed |
+| `ADAPTER_FAILED` | either | see below |
+
+**`INVALID_ANCHOR`** — *thrown.* Thrown by `addComment` when the anchor fails validation, and by
+`recordRegionEvent` when the event type is not `move`/`resize`, when the comment is not a region, when
+`after.rect` is missing, or when the resulting rectangle is out of bounds or has no area. **Nothing is
+written when this throws.**
+
+**`COMMENT_NOT_FOUND`** — *thrown.* Thrown by `updateComment`, `addReply`, `deleteComment` and
+`recordRegionEvent`. Nothing is written when this throws.
+
+`deleteComments` does not throw this, and that is deliberate. Naming one comment and naming a list are
+different acts. Naming one is a claim that it is there, so being wrong about it is worth saying. A list
+is a **sweep** — clear this anchor, clear this document — and a sweep that fails because part of it was
+already done is a sweep you cannot safely repeat. It skips ids it does not hold and tells you what it
+actually removed, so running it twice is the same as running it once.
+
+**`READ_ONLY`** — *thrown.* You called `addComment`, `updateComment`, `addReply`, `deleteComment`,
+`deleteComments`, `recordRegionEvent` or `importEnvelope` on a `readOnly: true` instance.
+
+A readOnly instance **still writes reading progress**. `readOnly` means the document does not change,
+not that the reader leaves no trace.
+
+**`IMPORT_INVALID`** — *thrown.* The input is not something that can be read as an envelope at all —
+not valid JSON, or valid JSON with no comments in it. Also thrown when a **replace** import carries
+records whose anchors cannot be placed and you did not pass `allowPartial: true`; the existing document
+is left untouched rather than being cleared by a file that could not be read properly.
+
+**`IMPORT_ENTRY_DROPPED`** — *emitted, one per entry.* An entry was refused and the rest went in, with
+a message naming what was wrong with it. This happens on **merge** imports and when a stored document
+is restored. The number refused is also in the import's return value as `dropped`. **The entry is not
+applied** — nothing partial is written from a refused entry.
+
+**`IMPORT_REPLACE_REJECTED`** — *emitted.* A **replace** import carried at least one entry whose
+identity could not be accepted, so the whole import was refused and your document was left exactly as
+it was. **`allowPartial` does not override this** — taking the good half of a complete-state
+declaration composes a document neither side asked for. The call returns a result with everything at
+zero rather than throwing.
+
+**`STORAGE_LOAD_FAILED`** — *emitted.* Your storage adapter had something stored that could not be
+read back. **Unreadable is not the same as empty**: what could not be read is not believed, and reading
+progress that cannot be read leaves everything to be looked at again rather than taken as already read.
+
+**`STORAGE_SAVE_FAILED`** — *emitted.* A write to your storage adapter failed. **What is in memory is
+kept and not rolled back** — the reader did what they did, and failing to record it is a durability
+failure, not a change of meaning. The document and this reader's progress are written **independently**;
+one failing does not stop the other being attempted. **There is no silent retry.** A failed write is
+reported, memory is left as it is, and nothing tries again on its own. The next save carries everything
+— so if nothing further changes and nothing further is read, that state stays unwritten until
+something does.
+
+**`ADAPTER_FAILED`** — *thrown in some situations, emitted in others.*
+
+*Thrown* when you call something that changes the document on an instance that has been destroyed, and
+when `visibleThreads()` is asked while the registered display cannot answer — a pull has no honest
+synchronous answer, so it throws rather than handing back something from before.
+
+*Emitted* when a media adapter fails to mount, when initialisation fails, and when a scheduled look at
+the display has failed and the core has stopped retrying. That last one is said **once per failure
+episode**, not once per attempt: it ends when a look succeeds or the display is replaced.
+
+A misconfigured adapter arrives here too. Leaving out something an adapter requires — the pdf.js
+module, or the document to render — is reported as `ADAPTER_FAILED` like any other adapter failure,
+rather than as a code of its own. The message says which option was missing.
+
+## What an import may not do
+
+An import can add to your document and it can replace it. What it may **not** do is change which
+utterance is which. Every entry is checked **before anything is applied**, and the rules below are the
+whole of that check — they are the specification, not a description of it.
+
+A refused entry is never partially applied, and never silent: each one produces an
+`IMPORT_ENTRY_DROPPED` on `error`, and the count is the import's `dropped`.
+
+**Notation.** `E` is the entry being checked — an utterance, or a reply hanging off one. `TAKEN` is the
+set of ids **already accepted within this check**. `HELD` is what the document **already holds**.
+`BURIED` is the set of ids named by the same envelope's `deleted[]`. `thread(E)` is the thread the
+entry belongs to. `checkAnchor` is true for an import and false for a restore. *Collateral* means a
+refused utterance takes its replies with it.
+
+Entries are walked **utterance, then its replies, then the next utterance**, and the first rule that
+matches ends the check for that entry.
+
+| # | Refused when | Effect |
+|---|---|---|
+| R1 | `E` is not an object, or not shaped like an utterance | refuse |
+| R2 | `E.id` is not usable | refuse + collateral |
+| R3 | `E.id ∈ BURIED` | refuse + collateral |
+| R4 | `checkAnchor ∧ E.anchor` is not valid | refuse + collateral |
+| R5 | `E.id ∈ TAKEN` | refuse + collateral |
+| R6 | `E.id ∈ HELD` and what is held is a **reply** | refuse + collateral |
+| R7 | `E.id ∈ HELD` and `thread(E)` differs from the held one's | refuse + collateral |
+| R8 | a reply's id is not usable | refuse that reply |
+| R9 | a reply's id `∈ BURIED` | refuse that reply |
+| R10 | a reply's id `∈ TAKEN` | refuse that reply |
+| R11 | a reply's id `∈ HELD` under a different utterance | refuse that reply |
+
+R1–R7 apply to utterances, R8–R11 to replies. A refused reply is refused alone: its utterance and its
+siblings stay.
+
+**An entry is accepted exactly when none of R1–R11 matched.** An accepted `E` joins `TAKEN`.
+
+**A refusal does not consume the id.** A later entry with the same id is not refused by R5 for that
+reason — it can still be accepted.
+
+**The same envelope always builds the same document.** For any id, only the first entry carrying it is
+accepted; later ones fall to R5 or R10. Order therefore decides the outcome, so a producer must keep
+its order stable.
+
+**What happens after a refusal depends on the mode:**
+
+| Mode | Condition | Result |
+|---|---|---|
+| merge | anything refused | apply the rest; one `IMPORT_ENTRY_DROPPED` per refusal |
+| replace | an anchor was refused, no `allowPartial` | **throws `IMPORT_INVALID`. The document does not change.** |
+| replace | an anchor was refused, `allowPartial: true` | replace using what could be placed |
+| replace | an **identity** was refused | **`IMPORT_REPLACE_REJECTED`. The document does not change**, and the result is all zeros |
+| replace | an identity was refused, `allowPartial: true` | **the same** — `allowPartial` does not reach identity |
+| restore | anything refused | drop those and carry on; reported just before `ready` |
+
+That last distinction is the point of the two kinds: an **anchor** you cannot place is something
+`allowPartial` can let you past. An **identity** you cannot accept is not.
+
+**An import and a restore differ in exactly one way.** An import must supply anchors this build can
+place, and refuses the ones it cannot (R4). A restore keeps them: an import asks to change the document
+*now*, while a stored anchor may simply have been written by a **newer** build, and destroying it would
+be worse than keeping it.
+
+**What this does not promise:** the wording of any message (the code and the kind are the contract);
+that `faults` are handed to you (that is a later version's question); and which rule an entry that
+breaks several of them is reported under — evaluation runs top to bottom, but that order is not itself
+promised.
+
 ## Modules
 | import | responsibility |
 |---|---|
