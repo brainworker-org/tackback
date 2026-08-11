@@ -57,11 +57,15 @@ const PANEL_CSS = `
 .tb-popup-open .tb-pin { cursor: default; }
 .tb-draw { position: absolute; z-index: 7; border: 2px dashed var(--tb-accent); background: rgba(51,170,119,.12); pointer-events: none; }
 .tb-pending { position: absolute; z-index: 6; border: 2px dashed var(--tb-mark-outline); background: var(--tb-mark-bg); border-radius: 3px; pointer-events: none; }
-/* Marks OFF hides what the panel drew ON the page — the badges AND the areas they mark, because a
-   dashed outline with no badge on it is the part that makes a page hard to read. What it does NOT do
-   is change what is unread: the state goes on being kept while it is out of sight, and turning marks
-   back on shows whatever arrived meanwhile. */
-.tb-hide .tb-badge, .tb-hide .tb-pin, .tb-hide .tb-region, .tb-hide .tb-mark { display: none; }
+/* Marks OFF hides what the panel PUT ON the page — the badges, and the boxes it drew over an area.
+   What it does NOT do is hide the page: tb-mark sits on the host's OWN paragraph, so hiding
+   elements wearing it takes the document's text with it. What that class contributes is a tint and a
+   dashed outline, and those are what come off. The distinction is the whole of this rule: a class the
+   panel OWNS may be hidden, a class the panel BORROWED may only be undressed.
+
+   It does not change what is unread either: the state goes on being kept while it is out of sight,
+   and turning marks back on shows whatever arrived meanwhile. */
+.tb-hide .tb-badge, .tb-hide .tb-pin, .tb-hide .tb-region { display: none; }
 .tb-hide .tb-mark { background: none !important; outline: none !important; }
 :root.tb-hide ::highlight(tb-range) { background: transparent; text-decoration: none; }
 ::highlight(tb-range) { background: var(--tb-mark-bg); color: inherit; text-decoration: underline dotted var(--tb-mark-outline); }
