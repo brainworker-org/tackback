@@ -27,13 +27,13 @@ const PANEL_CSS = `
 .tb-console-count { font-weight: 700; }
 .tb-console-hint { font-size: 11px; color: #bbb; line-height: 1.45; }
 .tb-commentable { background: var(--tb-mark-bg) !important; outline: 1px dashed var(--tb-mark-outline); outline-offset: 1px; }
-/* line-height is set EXPLICITLY: the badge/pin is appended inside the surface element, so it would
+/* line-height is set EXPLICITLY: a badge is appended inside the surface element, so it would
    otherwise INHERIT the host's line-height — a surface with line-height:0 (e.g. a figure wrapping an
    image/SVG) collapses the pill to 0px tall, leaving only the bare glyph ("white & small"). An explicit
-   value makes the pin render identically on every surface (Keisuke 2026-06-16). */
-.tb-badge, .tb-pin { cursor: pointer; font-size: 11px; line-height: 1.6; font-weight: 700; background: var(--tb-pin-bg); color: var(--tb-pin-fg); border-radius: 10px; padding: 0 7px; white-space: nowrap; }
+   value makes a badge render identically on every surface. */
+.tb-badge { cursor: pointer; font-size: 11px; line-height: 1.6; font-weight: 700; background: var(--tb-badge-bg); color: var(--tb-badge-fg); border-radius: 10px; padding: 0 7px; white-space: nowrap; }
 /* badges are absolutely positioned on the document surface overlay (NOT inserted into the DOM) so they
-   never shift the page layout — same surface-overlay model as region pins (Keisuke 2026-06-15, W-DB5V). */
+   never shift the page layout — the same surface-overlay model a floating badge uses. */
 .tb-badge { position: absolute; z-index: 6; transform: translateY(-50%); }
 .tb-region { position: absolute; z-index: 5; border: 2px solid var(--tb-mark-outline); background: var(--tb-mark-bg); border-radius: 3px; pointer-events: none; cursor: default; }
 /* the resize handle is a top-left CORNER BRACKET (「), revealed only on hover; the box body is not a
@@ -41,12 +41,15 @@ const PANEL_CSS = `
 .tb-grip { position: absolute; width: 13px; height: 13px; display: none; }
 .tb-region:hover .tb-grip { display: block; }
 .tb-grip-nw { left: -3px; top: -3px; border-top: 3px solid var(--tb-mark-outline); border-left: 3px solid var(--tb-mark-outline); cursor: nwse-resize; }
-.tb-pin { position: absolute; z-index: 6; transform: translate(-50%,-50%); box-shadow: 0 1px 4px rgba(0,0,0,.3); cursor: move; }
+/* A badge that floats ON a picture rather than beside text: centred on its point instead of hung
+   off a line, lifted by a shadow so it reads against whatever is underneath, and draggable because
+   the region it belongs to can be moved. Everything else about it is a badge. */
+.tb-badge.tb-floating { transform: translate(-50%,-50%); box-shadow: 0 1px 4px rgba(0,0,0,.3); cursor: move; }
 /* A region bound to a sub-surface (an image/figure/canvas/PDF page that owns its own coordinate space)
    reads differently from a free region on the document surface: a DOUBLE frame border says "this is
    locked inside that surface and moves/scales with it". A plain document region keeps the single-line
-   border. The pin (anchor icon) looks the SAME on both — the distinction lives in the border only
-   (Keisuke 2026-06-16: the pin is too small to carry the signal legibly). */
+   border. The badge looks the SAME on both — the distinction lives in the border only, because a
+   badge is too small to carry the signal legibly. */
 /* the double frame is drawn with an inset box-shadow (outer border + gap + inner line) rather than the
    CSS double border-style, which renders unevenly at subpixel sizes / with border-radius (Keisuke
    2026-06-16: the double line was not drawing stably). box-shadow rings are crisp and follow the radius. */
@@ -54,7 +57,7 @@ const PANEL_CSS = `
 /* while a comment pane is open the region is locked (REQ-008): hide the hover resize grip and drop the
    move cursor on the icon, so the UI never invites a move/resize that is disabled (Keisuke 2026-06-15). */
 .tb-pane-open .tb-region:hover .tb-grip { display: none; }
-.tb-pane-open .tb-pin { cursor: default; }
+.tb-pane-open .tb-badge.tb-floating { cursor: default; }
 .tb-draw { position: absolute; z-index: 7; border: 2px dashed var(--tb-accent); background: rgba(51,170,119,.12); pointer-events: none; }
 .tb-pending { position: absolute; z-index: 6; border: 2px dashed var(--tb-mark-outline); background: var(--tb-mark-bg); border-radius: 3px; pointer-events: none; }
 /* Marks OFF hides what the panel PUT ON the page — the badges, and the boxes it drew over an area.
@@ -65,7 +68,7 @@ const PANEL_CSS = `
 
    It does not change what is unread either: the state goes on being kept while it is out of sight,
    and turning marks back on shows whatever arrived meanwhile. */
-.tb-hide .tb-badge, .tb-hide .tb-pin, .tb-hide .tb-region { display: none; }
+.tb-hide .tb-badge, .tb-hide .tb-region { display: none; }
 .tb-hide .tb-commentable { background: none !important; outline: none !important; }
 :root.tb-hide ::highlight(tb-range) { background: transparent; text-decoration: none; }
 ::highlight(tb-range) { background: var(--tb-mark-bg); color: inherit; text-decoration: underline dotted var(--tb-mark-outline); }
@@ -74,7 +77,7 @@ const PANEL_CSS = `
    It overrides the per-actor tint (which is set inline) via !important, and disappears the moment the
    flag is cleared. The MEANING of the flag (e.g. "unread") is the integrator's — Tackback only paints
    and clears it; it attaches no semantics of its own. */
-.tb-badge.tb-attn, .tb-pin.tb-attn { background: var(--tb-attention) !important; color: #fff !important; }
+.tb-badge.tb-attn { background: var(--tb-attention) !important; color: #fff !important; }
 /* Something here has not been read yet. A RING, not a fill: attention already owns the fill, and the
    two say different things, so an anchor that is both wears both and neither has to win. A box-shadow
    rather than an outline because it follows border-radius (same reason the on-surface frame uses one),
@@ -85,12 +88,11 @@ const PANEL_CSS = `
    speaker's colour back. The ink on top follows the light/dark base and is emitted with the tokens
    (buildUnreadInkCSS) rather than published as a token of its own. */
 .tb-badge.tb-unread { background: var(--tb-unread) !important; animation: tb-unread-pulse 2s ease-in-out infinite; }
-.tb-pin.tb-unread { background: var(--tb-unread) !important; box-shadow: 0 1px 4px rgba(0,0,0,.3); animation: tb-unread-pulse 2s ease-in-out infinite; }
 @keyframes tb-unread-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
 /* A pulse that never stops is the kind a reader may have asked their system to spare them. The mark
    stays — it is the movement that goes, not the information. */
 @media (prefers-reduced-motion: reduce) {
-  .tb-badge.tb-unread, .tb-pin.tb-unread, .tb-docbar.tb-unread .tb-docbar-count { animation: none; }
+  .tb-badge.tb-unread, .tb-docbar.tb-unread .tb-docbar-count { animation: none; }
 }
 /* The document lane: the conversation about the document as a whole, composed from a bar across the
    bottom of the viewport rather than reached from a mark, because it is about no particular place.
@@ -172,7 +174,7 @@ const PANEL_CSS = `
 /* the save/send button greys out while the input is empty (no text AND no reaction) — a commit needs
    at least one, so an empty commit is never offered (REQ: Principal 2026-08-05). */
 .tb-save:disabled { background: #b9bcc0; color: #eef0f2; cursor: not-allowed; opacity: .65; }
-/* right-click context menu on an anchor (badge / region pin) → delete the whole anchor (REQ: Keisuke 2026-06-15). */
+/* right-click context menu on an anchor's badge → delete the whole anchor. */
 .tb-ctxmenu { position: fixed; z-index: 10001; background: var(--tb-pane-bg); color: var(--tb-pane-fg); border: 1px solid var(--tb-border); border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,.35); padding: 4px; font: 13px -apple-system, system-ui, sans-serif; min-width: 140px; }
 .tb-ctxmenu .tb-ctxitem { padding: 7px 10px; border-radius: 6px; cursor: pointer; }
 .tb-ctxmenu .tb-ctxitem:hover { background: var(--tb-mark-bg); }
@@ -548,7 +550,7 @@ export function attachPanel(core, options = {}) {
   // wins; otherwise a generic, deterministic per-identity hue disjoint from that map (actors.js).
   // Tackback bakes in no category semantics — 'ai'/'human'/etc. are meaningful only if mapped.
   const actorColorOf = (author) => resolveActorColor(author, actorColors, claimed);
-  // Paint an anchor node (badge / region pin) at its NORMAL color = the color of the LAST speaker in the
+  // Paint an anchor's badge at its NORMAL color = the color of the LAST speaker in the
   // thread (the most recent comment OR reply by timestamp) — so an anchor reads as "who touched it last".
   // A live ATTENTION flag on any comment in the group overrides this with the generic --tb-attention
   // tint (applied as a class so its !important beats the inline actor color). Both are pure rendering:
@@ -567,9 +569,9 @@ export function attachPanel(core, options = {}) {
     const markOrphan = (cs) => { for (const c of cs) { currentOrphans.add(c.id); if (!orphanedIds.has(c.id)) toOrphan.push(c); } };
     const clearOrphan = (cs) => { for (const c of cs) if (c.orphan) toResolve.push(c.id); };   // re-resolved → clear serialized orphan (REQ-004)
     regionOverlays = [];   // rebuilt below for handle hit-testing (REQ-008)
-    doc.querySelectorAll('.tb-badge,.tb-pin,.tb-region').forEach((e) => e.remove());
+    doc.querySelectorAll('.tb-badge,.tb-region').forEach((e) => e.remove());
     unmarkHosts();   // rebuilt below; releasing through the set keeps detached elements accounted for
-    ensurePositioned(root, own);                            // badges/pins are absolute within root (the document surface)
+    ensurePositioned(root, own);                            // badges are absolute within root (the document surface)
     const rootRect = root.getBoundingClientRect();
     // a visible fallback spot for an orphan with no live anchor point — top-left of the surface, so an
     // unresolvable anchor is isolated-but-VISIBLE, never silently hidden (REQ-004).
@@ -671,18 +673,21 @@ export function attachPanel(core, options = {}) {
       box.style.pointerEvents = 'auto';
       const grip = el(doc, 'span', 'tb-grip tb-grip-nw');   // top-left only; revealed on hover (CSS)
       box.appendChild(grip);
-      const pin = el(doc, 'span', 'tb-pin');   // the anchor icon — left-CLICK opens the thread, left-DRAG moves the region (REQ-008). The pin look is COMMON across surfaces (Keisuke 2026-06-16: distinguish by the region border only — the pin is too small to read); the binding is conveyed by the box border + this tooltip.
-      if (boundToSurface) pin.title = `bound to surface "${group.anchor.surfaceId}" — moves & scales with it`;
-      pin.textContent = '💬' + utteranceCount(group.comments);
-      paintAnchor(pin, group.comments);
-      pin.__tbComments = group.comments;   // for the right-click delete-anchor menu
-      Object.assign(pin.style, { left: (px.x + px.width) + 'px', top: (px.y + px.height) + 'px' });
+      // The same badge every other anchor gets, floating: left-CLICK opens the thread, left-DRAG moves
+      // the region (REQ-008). It looks the same on every surface — a badge is too small to carry the
+      // binding legibly, so the region border and this tooltip say it instead.
+      const badge = el(doc, 'span', 'tb-badge tb-floating');
+      if (boundToSurface) badge.title = `bound to surface "${group.anchor.surfaceId}" — moves & scales with it`;
+      badge.textContent = '💬' + utteranceCount(group.comments);
+      paintAnchor(badge, group.comments);
+      badge.__tbComments = group.comments;   // for the right-click delete-anchor menu
+      Object.assign(badge.style, { left: (px.x + px.width) + 'px', top: (px.y + px.height) + 'px' });
       // NOTE: opening the thread on a plain icon click is handled in endHandleDrag (a no-move pointerup),
-      // not via onclick — a left-down on the pin starts a (possible) move drag, and renderMarks would
+      // not via onclick — a left-down on the badge starts a (possible) move drag, and renderMarks would
       // otherwise destroy this element before its click event fired (the "icon click does nothing" bug).
       ensurePositioned(r.element, own);
-      r.element.append(box, pin);
-      regionOverlays.push({ box, pin, surfaceEl: r.element, comments: group.comments });
+      r.element.append(box, badge);
+      regionOverlays.push({ box, badge, surfaceEl: r.element, comments: group.comments });
     }
     countEl.textContent = t('panel.count', { n: utteranceCount(core.listComments()) });   // utterances, so the panel total agrees with the badges
     refreshLane();
@@ -1147,9 +1152,9 @@ export function attachPanel(core, options = {}) {
   };
   const onContext = (e) => {
     if (e.target.closest('.tb-pane,.tb-console,.tb-docbar')) return;
-    // right-click ON an anchor (badge / region pin) → the anchor context menu (Delete anchor), not a new
+    // right-click ON an anchor's badge → the anchor context menu (Delete anchor), not a new
     // comment gesture. The anchor carries its comments via `__tbComments` (set in renderMarks).
-    const anchorEl = e.target.closest('.tb-badge,.tb-pin');
+    const anchorEl = e.target.closest('.tb-badge');
     if (anchorEl && anchorEl.__tbComments) { e.preventDefault(); openAnchorMenu(anchorEl.__tbComments, e); return; }
     // suppress the native menu wherever a right-click could start commenting/region work (content root or
     // a registered surface), so the OS menu never fights the gesture. The pane itself opens on pointerup.
@@ -1180,7 +1185,7 @@ export function attachPanel(core, options = {}) {
   // Marks are rebuilt wholesale on every render rather than owned one by one, so they are swept.
   // `.tb-draw` is the draft rectangle of a gesture still in flight: it becomes a pending region only
   // on commit, so it is the one mark no surface owns yet.
-  own(() => doc.querySelectorAll('.tb-badge,.tb-pin,.tb-region,.tb-pending,.tb-ctxmenu,.tb-draw').forEach((e) => e.remove()));
+  own(() => doc.querySelectorAll('.tb-badge,.tb-region,.tb-pending,.tb-ctxmenu,.tb-draw').forEach((e) => e.remove()));
   /**
    * Mount a modal as the one modal. `activate` runs AFTER it is in the document: focusing or
    * selecting inside a detached node does nothing, which is how making modals owned quietly broke
@@ -1254,14 +1259,14 @@ export function attachPanel(core, options = {}) {
     return id;
   }
   // existing region overlays, registered by renderMarks, for handle hit-testing (REQ-008).
-  let regionOverlays = [];   // [{ box, pin, surfaceEl, comments }]
+  let regionOverlays = [];   // [{ box, badge, surfaceEl, comments }]
   let handleDrag = null;     // { ov, handle, startRect, surfaceEl, moved }
   const regionThreshold = options.regionThreshold ?? 8;   // px; right-drag past this = region (NFR-007)
   const moveThreshold = 3;   // px; below this an icon/grip press is a CLICK, not a move (avoids micro-move spam)
 
-  // A left pointerdown on a region's ANCHOR PIN starts a move; on its (hover-revealed) NW grip, a
+  // A left pointerdown on a region's BADGE starts a move; on its (hover-revealed) NW grip, a
   // resize (REQ-008). The box body is intentionally NOT a move target — that let drags select the
-  // underlying text and the pin lagged behind (Keisuke 2026-06-15). Topmost-first: last overlay wins.
+  // underlying text and the badge lagged behind. Topmost-first: last overlay wins.
   // Returns true (and suppresses the native text-selection) if a drag started.
   function startHandleDrag(e) {
     // while a comment pane is open, the region is LOCKED — no move/resize, and the anchor icon does not
@@ -1271,7 +1276,7 @@ export function attachPanel(core, options = {}) {
     for (let i = regionOverlays.length - 1; i >= 0; i--) {
       const ov = regionOverlays[i];
       let handle = null;
-      if (ov.pin && (e.target === ov.pin || ov.pin.contains?.(e.target))) handle = 'move';
+      if (ov.badge && (e.target === ov.badge || ov.badge.contains?.(e.target))) handle = 'move';
       else if ((e.target === ov.box || ov.box.contains?.(e.target)) && e.target.classList?.contains('tb-grip-nw')) handle = 'nw';
       if (!handle) continue;
       const r = ov.surfaceEl.getBoundingClientRect();
@@ -1293,8 +1298,8 @@ export function attachPanel(core, options = {}) {
     if (!next) return;   // below min-size → no preview update
     const W = hd.surfaceEl.clientWidth, H = hd.surfaceEl.clientHeight;
     Object.assign(hd.ov.box.style, { left: next.x * W + 'px', top: next.y * H + 'px', width: next.width * W + 'px', height: next.height * H + 'px' });
-    // keep the anchor pin pinned to the region's SE corner so it travels with the box (never lags).
-    if (hd.ov.pin) Object.assign(hd.ov.pin.style, { left: (next.x + next.width) * W + 'px', top: (next.y + next.height) * H + 'px' });
+    // keep the badge pinned to the region's SE corner so it travels with the box (never lags).
+    if (hd.ov.badge) Object.assign(hd.ov.badge.style, { left: (next.x + next.width) * W + 'px', top: (next.y + next.height) * H + 'px' });
     hd._next = next;
   }
   function endHandleDrag(e) {
@@ -1321,7 +1326,7 @@ export function attachPanel(core, options = {}) {
       return;
     }
     // no movement = a plain click: the anchor icon opens the thread (a grip click does nothing). We do
-    // it HERE rather than via pin.onclick because renderMarks on a real drag would destroy the pin
+    // it HERE rather than via the badge's onclick, because renderMarks on a real drag would destroy it
     // before its click event fired (the "icon click does nothing" regression, Keisuke 2026-06-15).
     if (hd.handle === 'move') openThread(hd.ov.comments, e);   // a grip click is a no-op
   }
@@ -1329,14 +1334,14 @@ export function attachPanel(core, options = {}) {
   const onPointerDown = (e) => {
     // never start a gesture on Tackback's own UI (pane/panel).
     if (e.target.closest('.tb-pane,.tb-console,.tb-docbar')) return;
-    // LEFT button on a region's anchor pin → move; on its hover-revealed NW grip → resize (REQ-008).
+    // LEFT button on a region's badge → move; on its hover-revealed NW grip → resize (REQ-008).
     // Right-drag is reserved for CREATING a region, so move/resize is left-only. A left-click that does
-    // NOT drag falls through to the pin/box onclick → open thread (a no-movement handleDrag is a no-op).
+    // NOT drag falls through to the badge/box onclick → open thread (a no-movement handleDrag is a no-op).
     if (e.button === 0) { startHandleDrag(e); return; }
     if (e.button !== 2) return;
-    // right-press ON an anchor (badge / region pin) is the delete-menu gesture (handled by onContext) —
+    // right-press ON an anchor's badge is the delete-menu gesture (handled by onContext) —
     // do NOT start a region draw from it.
-    if (e.target.closest('.tb-badge,.tb-pin')) return;
+    if (e.target.closest('.tb-badge')) return;
     // A region surface is a PDF page / marked element / figure, ELSE the document content root itself
     // (the default HTML surface) — so a right-drag over plain prose makes a cross-element document
     // region. Outside the content root (e.g. chrome appended elsewhere) it does not start a drag. A
@@ -1544,7 +1549,7 @@ export function attachPanel(core, options = {}) {
   // holding — so the flag is applied as a targeted toggle instead. The flag is re-read from the core
   // (not from the event) so the "any comment in the anchor" grouping matches the render path exactly.
   function syncAttention() {
-    doc.querySelectorAll('.tb-badge,.tb-pin').forEach((node) => {
+    doc.querySelectorAll('.tb-badge').forEach((node) => {
       const cs = node.__tbComments;
       if (cs) node.classList.toggle('tb-attn', cs.some((c) => core.hasAttention(c.id)));
     });
@@ -1561,7 +1566,7 @@ export function attachPanel(core, options = {}) {
    */
   function syncUnread() {
     const unread = new Set(core.unreadThreads().map((e) => e.threadKey));
-    doc.querySelectorAll('.tb-badge,.tb-pin').forEach((node) => {
+    doc.querySelectorAll('.tb-badge').forEach((node) => {
       const cs = node.__tbComments;
       if (cs && cs.length) node.classList.toggle('tb-unread', unread.has(threadKeyOf(cs[0])));
     });

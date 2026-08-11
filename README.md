@@ -138,7 +138,7 @@ const panel = attachPanel(tb, {
     { id: 'rework',  icon: '🔁', label: { en: 'Rework',  ja: '要再考' } },
     { id: 'blocker', icon: '🛑', label: { en: 'Blocker', ja: '障害'  } },
   ],
-  theme: { '--tb-accent': '#0f766e', '--tb-pin-bg': '#0f766e', '--tb-attention': '#b45309' },
+  theme: { '--tb-accent': '#0f766e', '--tb-badge-bg': '#0f766e', '--tb-attention': '#b45309' },
   actorColors: { reviewer: '#0f766e', assistant: '#b45309' },
 });
 panel.setReactions(otherSet);      // …or swap any of them at runtime

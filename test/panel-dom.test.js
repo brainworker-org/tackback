@@ -343,7 +343,7 @@ function mountPanel({ comments = [], controls, instrument = false, setup, noRaf 
   const laneHead = () => lane()?.querySelector('.tb-docbar-head') || null;
   const laneCount = () => lane()?.querySelector('.tb-docbar-count')?.textContent ?? null;
   const laneOpen = () => !!lane()?.classList.contains('tb-docbar-open');
-  const badges = () => doc.querySelectorAll('.tb-badge,.tb-pin');
+  const badges = () => doc.querySelectorAll('.tb-badge');
   /**
    * The acceptance invariant: after destroy, every count the environment can take is back where it
    * was before the panel attached. Measured from OUTSIDE the panel on purpose — asking the panel's
@@ -378,7 +378,7 @@ function mountPanel({ comments = [], controls, instrument = false, setup, noRaf 
 // Properties that must hold however you got here. Example tests can only encode the paths someone
 // thought of; these are checked at the end of the lifecycle tests, so a path nobody wrote a scenario
 // for still cannot leave the document holding the panel's leftovers.
-const PANEL_SELECTORS = '.tb-console,.tb-pane,.tb-docbar,.tb-ctxmenu,.tb-badge,.tb-pin,.tb-region,.tb-pending,.tb-draw';
+const PANEL_SELECTORS = '.tb-console,.tb-pane,.tb-docbar,.tb-ctxmenu,.tb-badge,.tb-region,.tb-pending,.tb-draw';
 
 /** After destroy the panel owns nothing: no node of its own, and no listener on the document. */
 function assertFullyGone(f, where) {
@@ -1705,7 +1705,7 @@ test('visibility: a thread that MOVES while open is reported at its new place', 
       anchor: { type: 'region', surfaceId: 'document', rect: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 } },
       body: 'over the diagram',
     });
-    const pin = f.doc.querySelectorAll('.tb-pin')[0];
+    const pin = f.doc.querySelectorAll('.tb-floating')[0];
     assert.ok(pin, 'the region drew a pin to open from');
     // A pin opens its thread on a pointerup that did not move — the same gesture that would otherwise
     // have dragged the region — so the thread is opened the way a reader opens it.
@@ -1735,7 +1735,7 @@ test('visibility: an open thread emptied after it moved is reported where it END
       anchor: { type: 'region', surfaceId: 'document', rect: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 } },
       body: 'over the diagram',
     });
-    const pin = f.doc.querySelectorAll('.tb-pin')[0];
+    const pin = f.doc.querySelectorAll('.tb-floating')[0];
     pin.dispatchEvent({ type: 'pointerdown', clientX: 5, clientY: 5, button: 0, pointerId: 1, preventDefault() {}, stopPropagation() {} });
     f.root.dispatchEvent({ type: 'pointerup', clientX: 5, clientY: 5, pointerId: 1, preventDefault() {}, stopPropagation() {} });
     f.core.recordRegionEvent(c.id, { rect: { x: 0.6, y: 0.6, width: 0.2, height: 0.2 } }, 'move');
@@ -2363,7 +2363,7 @@ test('S3-U1: the mark the panel writes for unread is a FILL, and the ring it rep
   const f = mountPanel({ instrument: true, setup: twoBlocks });
   try {
     const css = panelCSS(f);
-    for (const sel of ['.tb-badge.tb-unread', '.tb-pin.tb-unread']) {
+    for (const sel of ['.tb-badge.tb-unread']) {
       const rule = unreadRule(css, sel);
       assert.match(rule, /background:\s*var\(--tb-unread\)\s*!important/, `${sel}: filled`);
       assert.doesNotMatch(rule, /box-shadow:\s*0 0 0 2px var\(--tb-unread\)/, `${sel}: not also ringed`);
@@ -2377,7 +2377,7 @@ test('S3-U2: it breathes on the agreed cycle, and the cycle it names is defined'
   const f = mountPanel({ instrument: true, setup: twoBlocks });
   try {
     const css = panelCSS(f);
-    for (const sel of ['.tb-badge.tb-unread', '.tb-pin.tb-unread', '.tb-docbar.tb-unread .tb-docbar-count']) {
+    for (const sel of ['.tb-badge.tb-unread', '.tb-docbar.tb-unread .tb-docbar-count']) {
       assert.match(unreadRule(css, sel), /animation:\s*tb-unread-pulse\s+2s\b/, `${sel}: 2s pulse`);
     }
     assert.match(css, /@keyframes\s+tb-unread-pulse\s*\{/, 'and the cycle exists');
@@ -2416,7 +2416,7 @@ test('L3-1: changing what unread looks like moves nothing else', () => {
   try {
     const css = panelCSS(f);
     for (const [token, value] of [['--tb-accent', '#33aa77'], ['--tb-mark-outline', '#d9a400'],
-      ['--tb-pin-bg', '#d9a400'], ['--tb-attention', '#ef7f0e']]) {
+      ['--tb-badge-bg', '#d9a400'], ['--tb-attention', '#ef7f0e']]) {
       assert.match(css, new RegExp(`${token}:\\s*${value}`), `${token} is where it was`);
     }
   } finally { f.restore(); }
@@ -2462,7 +2462,7 @@ test('L3-5: hiding the marks takes the panel\'s own off the page and leaves the 
     const hidden = [...bare.matchAll(/([^{}]*\.tb-hide[^{}]*)\{[^}]*display:\s*none[^}]*\}/g)]
       .flatMap((m) => m[1].split(',').map((sel) => sel.trim().replace(/^\.tb-hide\s+/, '')))
       .filter(Boolean).sort();
-    assert.deepEqual(hidden, ['.tb-badge', '.tb-pin', '.tb-region'],
+    assert.deepEqual(hidden, ['.tb-badge', '.tb-region'],
       'these three the panel drew itself; anything else here is the host\'s and must not be hidden');
     const undressed = (/\.tb-hide\s+\.tb-commentable\s*\{[^}]*\}/.exec(css) || [''])[0];
     assert.match(undressed, /background:\s*none/, 'its tint comes off instead');
@@ -2540,7 +2540,7 @@ test('B4: an answer into an area thread marks it', () => {
   try {
     const id = anchorArrives(f, AREA, 'somebody else drew this');
     assert.equal(f.core.unreadCount(`region:${id}`), 1, 'it arrived from outside, so it is new');
-    const mark = f.doc.querySelector('.tb-pin');
+    const mark = f.doc.querySelector('.tb-floating');
     assert.ok(mark, 'an area carries a badge of its own');
     assert.ok(mark.classList.contains('tb-unread'), 'and it wears the mark');
   } finally { f.restore(); }
