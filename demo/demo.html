@@ -259,14 +259,19 @@
   };
   const ALT_THEME = {
     '--tb-accent': '#0f766e', '--tb-mark-bg': 'rgba(15,118,110,.18)', '--tb-mark-outline': '#0f766e',
-    '--tb-pin-bg': '#0f766e', '--tb-pin-fg': '#ffffff', '--tb-attention': '#b45309',
+    '--tb-pin-bg': '#0f766e', '--tb-pin-fg': '#ffffff', '--tb-unread': '#b45309',
   };
+  // ONE signal for the reader, and it is orange: where there is something new. Reading clears it,
+  // and nothing else on the page marks anything, so there is one colour to learn and one way for it
+  // to go. The library still ships blue as the default for this token; overriding it here is the
+  // vocabulary arriving ahead of the default, which changes in its own version.
+  const NEW_IS_ORANGE = { '--tb-unread': '#ef7f0e' };
   let altColors = false;
 
   function attach() {
     panel?.destroy();
     panel = Tackback.attachPanel(tb, {
-      theme: altColors ? ALT_THEME : 'auto',   // a token map layers over the OS light/dark base
+      theme: altColors ? { ...ALT_THEME, ...NEW_IS_ORANGE } : NEW_IS_ORANGE,   // a token map layers over the OS light/dark base
       locale,
       controls: { theme: showTheme },
       reactions: useCustomReactions ? REVIEW_REACTIONS.slice() : undefined,
@@ -341,7 +346,7 @@
     });
     // Nothing else to do. Whether this answer is new to the reader is not the demo's question any
     // more: if the thread's timeline is on screen the reply is read as it lands, and if it is not,
-    // Tackback rings the anchor until it is opened. The demo used to raise the attention flag here
+    // Tackback marks the anchor until it is opened. The demo used to raise a flag of its own here
     // and call it "unread", which marked threads the reader was looking at — the exact failure the
     // library now exists to remove.
   }
@@ -385,18 +390,6 @@
     b.textContent = 'Scenario: ' + (scenario === 'conversation' ? 'conversation (Send)' : 'local (Save)');
     b.classList.toggle('on', scenario === 'conversation');
     applyScenario();
-  });
-  // ATTENTION is driven from here and from nowhere else, because that is what it is: a flag an
-  // integrator raises for its own reason. It deliberately does NOT follow arrival — that was the
-  // wiring this demo had to remove. Raising it while something is also unread is the point of the
-  // button: attention FILLS, unread RINGS, and an anchor that is both wears both, so an integration
-  // still using attention for something of its own is never made to choose.
-  let attentionOn = false;
-  mkBtn('Attention: off', (b) => {
-    attentionOn = !attentionOn;
-    b.textContent = 'Attention: ' + (attentionOn ? 'on' : 'off');
-    b.classList.toggle('on', attentionOn);
-    for (const c of tb.listComments()) tb.setAnchorAttention(c.id, attentionOn);
   });
   document.body.appendChild(bar);
 
