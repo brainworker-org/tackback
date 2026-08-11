@@ -1952,6 +1952,35 @@ const twoBlocks = (doc, root) => {
   }
 };
 const badgeFor = (f, elementId) => f.badges().find((b) => b.__tbComments?.[0]?.anchor?.elementId === elementId);
+let arrivalSeq = 0;
+/**
+ * Something ARRIVING — from outside, which is the only way anything is new to this reader.
+ *
+ * `addComment` is the reader typing, and nobody needs telling about what they just typed, so a
+ * fixture that used it to stand for "something showed up" was staging the wrong event.
+ * @returns {string} the id that arrived
+ */
+const arrives = (f, elementId, body = 'from somewhere else') => {
+  const id = `arr-${arrivalSeq += 1}`;
+  const anchor = elementId === 'document' ? { type: 'document' } : { type: 'block', elementId };
+  f.core.importEnvelope({
+    schemaVersion: 1, generator: { name: 'tackback', version: 'x' }, document: { id: 'panel-fixture' },
+    comments: [{ id, anchor, body, createdAt: '2026-08-10T00:00:00.000Z', replies: [] }],
+  }, { mode: 'merge' });
+  f.env.drainMicrotasks();
+  return id;
+};
+/** A reply arriving from outside, under a comment that is already here. */
+const replyArrives = (f, commentId, body = 'answered') => {
+  const id = `rep-${arrivalSeq += 1}`;
+  const held = f.core.listComments().find((c) => c.id === commentId);
+  f.core.importEnvelope({
+    schemaVersion: 1, generator: { name: 'tackback', version: 'x' }, document: { id: 'panel-fixture' },
+    comments: [{ ...held, replies: [...(held.replies || []), { id, body, createdAt: '2026-08-10T00:00:00.000Z' }] }],
+  }, { mode: 'merge', onConflict: 'replace' });
+  f.env.drainMicrotasks();
+  return id;
+};
 const openPane = (f, node) => {
   node.dispatchEvent({ type: 'click', clientX: 5, clientY: 5, preventDefault() {}, stopPropagation() {} });
   f.env.flushTimers(); f.env.flushFrames(); f.env.drainMicrotasks();
@@ -1960,7 +1989,7 @@ const openPane = (f, node) => {
 test('T7: an unopened thread keeps its ring', () => {
   const f = mountPanel({ instrument: true, setup: twoBlocks });
   try {
-    f.core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'nobody has read this' });
+    arrives(f, 'p1', 'nobody has read this');
     f.env.drainMicrotasks();
     assert.equal(f.core.unreadCount('block:p1'), 1);
     assert.ok(badgeFor(f, 'p1').classList.contains('tb-unread'), 'and the reader can see where it is');
@@ -1970,8 +1999,8 @@ test('T7: an unopened thread keeps its ring', () => {
 test('T6/T12: opening a thread clears that one, and only that one', () => {
   const f = mountPanel({ instrument: true, setup: twoBlocks });
   try {
-    f.core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'here' });
-    f.core.addComment({ anchor: { type: 'block', elementId: 'p2' }, body: 'and here' });
+    arrives(f, 'p1', 'here');
+    arrives(f, 'p2', 'and here');
     f.env.drainMicrotasks();
     openPane(f, badgeFor(f, 'p2'));
 
@@ -2002,7 +2031,7 @@ test('T8/T9: a folded document lane is not read, and unfolding it reads it', () 
   // so "the host exists" cannot be the test — the thread area has to be open.
   const f = mountPanel({ instrument: true });
   try {
-    f.core.addComment({ anchor: { type: 'document' }, body: 'about the whole thing' });
+    arrives(f, 'document', 'about the whole thing');
     f.panel.toggleDocumentLane(false);
     f.env.drainMicrotasks();
     assert.equal(f.core.unreadCount('document'), 1, 'folded away is not read');
@@ -2018,7 +2047,7 @@ test('T8/T9: a folded document lane is not read, and unfolding it reads it', () 
 test('T10: with no lane, the document thread reads through an ordinary Pane', () => {
   const f = mountPanel({ controls: { docLane: false }, instrument: true });
   try {
-    f.core.addComment({ anchor: { type: 'document' }, body: 'about the whole thing' });
+    arrives(f, 'document', 'about the whole thing');
     f.env.drainMicrotasks();
     assert.equal(f.core.unreadCount('document'), 1);
     f.panel.openDocumentThread();
@@ -2033,7 +2062,7 @@ test('T26: attention and unread do not take each other\'s place', () => {
   // paint rather than by the state.
   const f = mountPanel({ instrument: true, setup: twoBlocks });
   try {
-    const c = f.core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'here' });
+    const c = { id: arrives(f, 'p1', 'here') };
     f.env.drainMicrotasks();
     const badge = () => badgeFor(f, 'p1');
     assert.ok(badge().classList.contains('tb-unread'));
@@ -2090,7 +2119,7 @@ test('a redraw that nothing else follows still leaves the rings on', () => {
   // exactly when the page moved, which is when a reader is most likely to be looking at it.
   const f = mountPanel({ instrument: true, setup: twoBlocks });
   try {
-    f.core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'nobody has read this' });
+    arrives(f, 'p1', 'nobody has read this');
     f.env.drainMicrotasks();
     assert.ok(badgeFor(f, 'p1').classList.contains('tb-unread'));
 
@@ -2133,7 +2162,7 @@ test('T49: shown-vs-hidden decides a reply the same way in all three thread host
   // own way would show up here and nowhere else.
   const cases = [
     ['ordinary Pane', {}, (f) => {
-      const c = f.core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'seed' });
+      const c = { id: arrives(f, 'p1', 'seed') };
       f.env.drainMicrotasks();
       return { id: c.id, key: 'block:p1',
         show: () => openPane(f, badgeFor(f, 'p1')),
@@ -2141,7 +2170,7 @@ test('T49: shown-vs-hidden decides a reply the same way in all three thread host
         marked: () => badgeFor(f, 'p1').classList.contains('tb-unread') };
     }],
     ['document lane', {}, (f) => {
-      const c = f.core.addComment({ anchor: { type: 'document' }, body: 'seed' });
+      const c = { id: arrives(f, 'document', 'seed') };
       f.env.drainMicrotasks();
       return { id: c.id, key: 'document',
         show: () => { f.panel.toggleDocumentLane(true); f.env.drainMicrotasks(); },
@@ -2149,7 +2178,7 @@ test('T49: shown-vs-hidden decides a reply the same way in all three thread host
         marked: () => f.lane().classList.contains('tb-unread') };
     }],
     ['document thread with no lane', { controls: { docLane: false } }, (f) => {
-      const c = f.core.addComment({ anchor: { type: 'document' }, body: 'seed' });
+      const c = { id: arrives(f, 'document', 'seed') };
       f.env.drainMicrotasks();
       return { id: c.id, key: 'document',
         show: () => { f.panel.openDocumentThread(); f.env.drainMicrotasks(); },
@@ -2164,13 +2193,13 @@ test('T49: shown-vs-hidden decides a reply the same way in all three thread host
       t.show();
       assert.equal(f.core.unreadCount(t.key), 0, `${name}: shown, so what is there is read`);
 
-      f.core.addReply(t.id, { body: 'answer, timeline shown' });
+      replyArrives(f, t.id, 'answer, timeline shown');
       f.env.drainMicrotasks();
       assert.equal(f.core.unreadCount(t.key), 0, `${name}: a reply into a SHOWN timeline arrives read`);
       assert.equal(t.marked(), false, `${name}: and nothing is marked`);
 
       t.hide();
-      f.core.addReply(t.id, { body: 'answer, timeline hidden' });
+      replyArrives(f, t.id, 'answer, timeline hidden');
       f.env.drainMicrotasks();
       assert.equal(f.core.unreadCount(t.key), 1, `${name}: a reply into a HIDDEN timeline is unread`);
 
@@ -2194,7 +2223,7 @@ test('T52: the reported conversation walk-through, end to end', () => {
     f.core.setTransport({ interactive: true });                       // (2) scenario: conversation
     f.env.drainMicrotasks();
 
-    f.core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'seed' });
+    arrives(f, 'p1', 'seed');
     f.env.drainMicrotasks();
     openPane(f, badgeFor(f, 'p1'));
     assert.ok(f.doc.querySelector('.tb-popup'), 'the Pane is on screen');
@@ -2210,7 +2239,7 @@ test('T52: the reported conversation walk-through, end to end', () => {
     assert.ok(f.doc.querySelector('.tb-popup'), '(3) a Send does NOT close a conversation — the Pane stays open');
     const c = f.core.listComments().find((x) => x.anchor.elementId === 'p1');
 
-    f.core.addReply(c.id, { body: 'the other participant answers' });  // (4) ~a beat later
+    replyArrives(f, c.id, 'the other participant answers');  // (4) ~a beat later
     f.env.drainMicrotasks();
     assert.ok(f.doc.querySelector('.tb-popup'), '(4) and it is still open when the answer lands');
     assert.equal(f.core.unreadCount('block:p1'), 0,
@@ -2222,7 +2251,7 @@ test('T52: the reported conversation walk-through, end to end', () => {
     f.env.drainMicrotasks();
     assert.equal(f.doc.querySelector('.tb-popup'), null, 'the reader closes it');
 
-    f.core.addReply(c.id, { body: 'answered while they were away' });
+    replyArrives(f, c.id, 'answered while they were away');
     f.env.drainMicrotasks();
     assert.equal(f.core.unreadCount('block:p1'), 1, 'hidden timeline: now it IS new');
     assert.ok(badgeFor(f, 'p1').classList.contains('tb-unread'), 'and the reader can see where');
@@ -2230,5 +2259,80 @@ test('T52: the reported conversation walk-through, end to end', () => {
     openPane(f, badgeFor(f, 'p1'));
     assert.equal(f.core.unreadCount('block:p1'), 0, 'reading it clears it');
     assert.ok(!badgeFor(f, 'p1').classList.contains('tb-unread'), 'the mark goes, which is the whole promise');
+  } finally { f.restore(); }
+});
+
+// ---- writing is not arriving, drawn ---------------------------------------------------------------
+//
+// The same seven rows as the core suite, through the real panel, so that what the reader actually
+// SEES is fixed and not only what the count says. Rows 1 and 2 are the regression: a person typing
+// into a folded lane, or sending from a Pane that shuts as it commits, was marked as having something
+// new — by themselves, about themselves.
+
+test('row 1 (drawn) — typing into a folded lane counts, and draws nothing', () => {
+  const f = mountPanel({ instrument: true, setup: twoBlocks });
+  try {
+    f.panel.toggleDocumentLane(false);
+    f.env.drainMicrotasks();
+    f.core.addComment({ anchor: { type: 'document' }, body: 'typed into the folded lane' });
+    f.env.drainMicrotasks();
+    assert.equal(f.core.unreadCount('document'), 0);
+    assert.ok(!f.lane().classList.contains('tb-unread'), 'the lane wears nothing');
+    assert.match(f.laneCount(), /1/, 'and the count still went up');
+  } finally { f.restore(); }
+});
+
+test('row 2 (drawn) — sending from a Pane that shuts marks nothing', () => {
+  const f = mountPanel({ instrument: true, setup: twoBlocks });
+  try {
+    arrives(f, 'p1', 'a thread to open');
+    openPane(f, badgeFor(f, 'p1'));
+    const pane = f.doc.querySelector('.tb-popup');
+    const ta = pane.querySelector('textarea');
+    ta.value = 'sent, and the Pane shuts'; ta.dispatchEvent({ type: 'input' });
+    pane.querySelector('.tb-save').click();
+    f.env.flushTimers(); f.env.drainMicrotasks();
+    assert.equal(f.doc.querySelector('.tb-popup'), null, 'no transport: it closes on commit');
+    assert.equal(f.core.unreadCount('block:p1'), 0, 'and what they sent is not new to them');
+    assert.ok(!badgeFor(f, 'p1').classList.contains('tb-unread'));
+  } finally { f.restore(); }
+});
+
+test('rows 4-6 (drawn) — an answer from outside marks only while it is out of sight', () => {
+  const f = mountPanel({ instrument: true, setup: twoBlocks });
+  try {
+    const id = arrives(f, 'p1', 'a thread');
+    openPane(f, badgeFor(f, 'p1'));
+    assert.equal(f.core.unreadCount('block:p1'), 0);
+
+    replyArrives(f, id, 'answered in front of them');          // row 6 — shown
+    assert.equal(f.core.unreadCount('block:p1'), 0, 'row 6: read as it lands');
+    assert.ok(!badgeFor(f, 'p1').classList.contains('tb-unread'));
+
+    f.doc.querySelector('.tb-popup').querySelector('.tb-cancel').click();
+    f.env.drainMicrotasks();
+    replyArrives(f, id, 'answered while they were away');      // row 5 — Pane shut
+    assert.equal(f.core.unreadCount('block:p1'), 1, 'row 5: out of sight, so new');
+    assert.ok(badgeFor(f, 'p1').classList.contains('tb-unread'), 'and the reader can see where');
+
+    openPane(f, badgeFor(f, 'p1'));
+    assert.equal(f.core.unreadCount('block:p1'), 0, 'opening it clears it');
+  } finally { f.restore(); }
+});
+
+test('row 7 (drawn) — typing does not take somebody else\'s mark down', () => {
+  const f = mountPanel({ instrument: true, setup: twoBlocks });
+  try {
+    const id = arrives(f, 'p1', 'a thread');
+    openPane(f, badgeFor(f, 'p1'));
+    f.doc.querySelector('.tb-popup').querySelector('.tb-cancel').click();
+    f.env.drainMicrotasks();
+    replyArrives(f, id, 'arrived, and never looked at');
+    assert.ok(badgeFor(f, 'p1').classList.contains('tb-unread'));
+
+    f.core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'and then I typed something' });
+    f.env.drainMicrotasks();
+    assert.equal(f.core.unreadCount('block:p1'), 1, 'still exactly one, and it is still theirs');
+    assert.ok(badgeFor(f, 'p1').classList.contains('tb-unread'), 'the mark is still up');
   } finally { f.restore(); }
 });

@@ -363,11 +363,25 @@
   // Send, which is the whole point of an interactive transport: you send, the Pane keeps the thread
   // open with a pending marker, and the answer lands in it without a reopen.
   function answerOn(commentId) {
-    if (!tb.getComment(commentId)) return;   // the thread was deleted while we waited
-    tb.addReply(commentId, {
+    const held = tb.getComment(commentId);
+    if (!held) return;   // the thread was deleted while we waited
+    // The answer ARRIVES rather than being added. That distinction is the library's: what you type
+    // here is yours and is never news to you, so an utterance handed in through `addComment` /
+    // `addReply` takes no arrival number and can never be unread. A second participant is not you —
+    // their answer has to come in the way one really does, from outside, through an envelope. A real
+    // integration does exactly this: its transport polls and imports. Simulating one with the local
+    // input path would have quietly made every answer read before it landed.
+    const reply = {
+      id: 'sim-' + (simSeq + 1) + '-' + commentId.slice(0, 8),
       body: SIM_LINES[simSeq++ % SIM_LINES.length],
       author: { id: 'Assistant', kind: 'ai' },   // a category the DEMO defines, mapped to blue above
-    });
+      createdAt: new Date().toISOString(),
+    };
+    tb.importEnvelope({
+      schemaVersion: 1, generator: { name: 'tackback', version: 'demo' },
+      document: { id: 'tackback-demo' },
+      comments: [{ ...held, replies: [...(held.replies || []), reply] }],
+    }, { mode: 'merge', onConflict: 'replace' });
     // Nothing else to do. Whether this answer is new to the reader is not the demo's question any
     // more: if the thread's timeline is on screen the reply is read as it lands, and if it is not,
     // Tackback marks the anchor until it is opened. The demo used to raise a flag of its own here
