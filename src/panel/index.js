@@ -37,7 +37,7 @@ const PANEL_CSS = `
 .tb-badge { position: absolute; z-index: 6; transform: translateY(-50%); }
 .tb-region { position: absolute; z-index: 5; border: 2px solid var(--tb-mark-outline); background: var(--tb-mark-bg); border-radius: 3px; pointer-events: none; cursor: default; }
 /* the resize handle is a top-left CORNER BRACKET (「), revealed only on hover; the box body is not a
-   move target so the anchor icon position stays fixed (Keisuke 2026-06-15). */
+   move target so the anchor icon position stays fixed. */
 .tb-grip { position: absolute; width: 13px; height: 13px; display: none; }
 .tb-region:hover .tb-grip { display: block; }
 .tb-grip-nw { left: -3px; top: -3px; border-top: 3px solid var(--tb-mark-outline); border-left: 3px solid var(--tb-mark-outline); cursor: nwse-resize; }
@@ -51,11 +51,11 @@ const PANEL_CSS = `
    border. The badge looks the SAME on both — the distinction lives in the border only, because a
    badge is too small to carry the signal legibly. */
 /* the double frame is drawn with an inset box-shadow (outer border + gap + inner line) rather than the
-   CSS double border-style, which renders unevenly at subpixel sizes / with border-radius (Keisuke
-   2026-06-16: the double line was not drawing stably). box-shadow rings are crisp and follow the radius. */
+   CSS double border-style, which renders unevenly at subpixel sizes / with border-radius — the double
+   line was not drawing stably. An inset shadow is crisp and follows the radius. */
 .tb-region.tb-on-surface { box-shadow: inset 0 0 0 2px var(--tb-bg, #fff), inset 0 0 0 4px var(--tb-mark-outline); }
 /* while a comment pane is open the region is locked (REQ-008): hide the hover resize grip and drop the
-   move cursor on the icon, so the UI never invites a move/resize that is disabled (Keisuke 2026-06-15). */
+   move cursor on the icon, so the UI never invites a move/resize that is disabled. */
 .tb-pane-open .tb-region:hover .tb-grip { display: none; }
 .tb-pane-open .tb-badge.tb-floating { cursor: default; }
 .tb-draw { position: absolute; z-index: 7; border: 2px dashed var(--tb-accent); background: rgba(51,170,119,.12); pointer-events: none; }
@@ -117,9 +117,9 @@ const PANEL_CSS = `
 .tb-docbar .tb-docbar-count { font-size: 11px; opacity: .75; }
 /* the shape a count takes once it carries a colour — the same pill the marks below use */
 .tb-docbar .tb-docbar-count.tb-tinted { border-radius: 9px; padding: 0 7px; opacity: 1; }
-/* The document thread has no mark on the page — the lane's own count IS its mark, so the ring goes
-   there. Padding and radius are repeated because the count is otherwise a bare number with nothing
-   for a ring to sit around. */
+/* The document thread has no mark on the page — the bar's own count IS its mark, so the fill goes
+   there. Padding and radius are repeated because the count is otherwise a bare number, with nothing
+   shaped for a fill to sit in. */
 .tb-docbar.tb-unread .tb-docbar-count { background: var(--tb-unread) !important; border-radius: 9px; padding: 0 7px; opacity: 1; animation: tb-unread-pulse 2s ease-in-out infinite; }
 .tb-docbar .tb-docbar-composer { margin-top: 8px; }
 /* Collapsed is not "closed": the composer stays, because the point of a lane rather than a button
@@ -131,7 +131,7 @@ const PANEL_CSS = `
 .tb-docbar textarea { width: 100%; box-sizing: border-box; min-height: 44px; font: inherit;
   border: 1px solid var(--tb-border); border-radius: 8px; padding: 7px; background: transparent; color: inherit;
   /* no resize grip: this bar has just measured its own place in the viewport, and a corner the
-     reader can drag is an invitation to fight that (Keisuke, hands-on 2026-08-06). */
+     reader can drag is an invitation to fight that. */
   resize: none; }
 .tb-docbar .tb-pane-label { display: none; }   /* the lane's own title already says what it is about */
 /* When there is not enough width to sit BESIDE the panel, the lane goes above it and takes the
@@ -162,7 +162,7 @@ const PANEL_CSS = `
 .tb-acts button { cursor: pointer; border: none; border-radius: 6px; padding: 6px 14px; }
 .tb-save { background: var(--tb-accent); color: #fff; } .tb-cancel { background: #bbb; color: #111; }
 /* the save/send button greys out while the input is empty (no text AND no reaction) — a commit needs
-   at least one, so an empty commit is never offered (REQ: Principal 2026-08-05). */
+   at least one, so an empty commit is never offered. */
 .tb-save:disabled { background: #b9bcc0; color: #eef0f2; cursor: not-allowed; opacity: .65; }
 /* right-click context menu on an anchor's badge → delete the whole anchor. */
 .tb-ctxmenu { position: fixed; z-index: 10001; background: var(--tb-pane-bg); color: var(--tb-pane-fg); border: 1px solid var(--tb-border); border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,.35); padding: 4px; font: 13px -apple-system, system-ui, sans-serif; min-width: 140px; }
@@ -367,7 +367,7 @@ export function attachPanel(core, options = {}) {
   // value is still 'auto' (live OS light/dark follow) — the toggle adds the named palettes on top.
   // `import` is OFF by default — it is the receiver / AI-participant path (STORY-02/04), which is
   // post-v1 scope; enable it explicitly with `controls: { import: true }`. Every control is config-
-  // toggleable here, so an integrator can show/hide any menu item (Keisuke 2026-06-15).
+  // toggleable here, so an integrator can show/hide any menu item.
   const CONTROL_DEFAULTS = { author: true, export: true, import: false, theme: true, marks: true, clear: true, docBar: true };
   const controls = { ...CONTROL_DEFAULTS, ...(options.controls || {}) };
 
@@ -525,9 +525,9 @@ export function attachPanel(core, options = {}) {
   // the document thread's comments, refreshed by every renderMarks. It has no mark on the page, so
   // the panel control is where its count is shown.
   let docComments = [];
-  const orphanedIds = new Set();   // range ids currently orphaned — emit anchor:orphaned only on transition (§6 R1 M5)
+  const orphanedIds = new Set();   // range ids currently orphaned — emit anchor:orphaned only on transition
   // place a badge on the document surface overlay (absolute within the positioned root) at the
-  // top-right of a target rect — NOT inserted into the DOM, so the page layout never shifts (W-DB5V).
+  // top-right of a target rect — NOT inserted into the DOM, so the page layout never shifts.
   function placeBadge(badge, rect, rootRect) {
     badge.style.left = (rect.right - rootRect.left) + 'px';
     badge.style.top = (rect.top - rootRect.top) + 'px';
@@ -548,7 +548,7 @@ export function attachPanel(core, options = {}) {
     const currentOrphans = new Set();
     // collect orphan/resolve decisions during the render and APPLY them after the pass — calling
     // core.reportOrphaned / core.markResolved mid-render would re-emit `change` and re-enter renderMarks
-    // while we iterate. Both are idempotent, so the single post-pass re-render converges. (§6 PR #132)
+    // while we iterate. Both are idempotent, so the single post-pass re-render converges.
     const toOrphan = [], toResolve = [];
     const markOrphan = (cs) => { for (const c of cs) { currentOrphans.add(c.id); if (!orphanedIds.has(c.id)) toOrphan.push(c); } };
     const clearOrphan = (cs) => { for (const c of cs) if (c.orphan) toResolve.push(c.id); };   // re-resolved → clear serialized orphan (REQ-004)
@@ -648,12 +648,12 @@ export function attachPanel(core, options = {}) {
       const px = r.rect;
       // A region bound to a sub-surface (an image/figure/canvas/PDF page that owns its own
       // coordinate space) is visually distinct from a free region on the document surface: the
-      // former moves & scales WITH its surface, the latter follows the document. (Keisuke 2026-06-16)
+      // former moves & scales WITH its surface, the latter follows the document.
       const boundToSurface = !!group.anchor.surfaceId && group.anchor.surfaceId !== DOCUMENT_SURFACE_ID;
       const box = el(doc, 'div', 'tb-region' + (boundToSurface ? ' tb-on-surface' : ''));
       Object.assign(box.style, { left: px.x + 'px', top: px.y + 'px', width: px.width + 'px', height: px.height + 'px' });
       // the box is hit-testable ONLY so a hover reveals the NW resize grip — clicking the body does
-      // nothing (the thread opens from the anchor icon, Keisuke 2026-06-15) and it is not a move target.
+      // nothing (the thread opens from the anchor icon) and it is not a move target.
       box.style.pointerEvents = 'auto';
       const grip = el(doc, 'span', 'tb-grip tb-grip-nw');   // top-left only; revealed on hover (CSS)
       box.appendChild(grip);
@@ -675,7 +675,7 @@ export function attachPanel(core, options = {}) {
     }
     countEl.textContent = t('panel.count', { n: utteranceCount(core.listComments()) });   // utterances, so the panel total agrees with the badges
     refreshLane();
-    // The badges were just rebuilt, so whatever ring they had went with them. Asked again rather than
+    // The badges were just rebuilt, so whatever fill they had went with them. Asked again rather than
     // carried over — the answer lives in one place and this is a redraw, not a second opinion. Once is
     // enough: the core settles arrival and observation together, so what it answers during a redraw is
     // the settled picture rather than the middle of a turn.
@@ -683,7 +683,7 @@ export function attachPanel(core, options = {}) {
     orphanedIds.clear(); for (const id of currentOrphans) orphanedIds.add(id);   // transition set for the next render (all kinds)
     // apply the collected orphan/resolve mutations AFTER the render pass (no mid-iteration re-entry).
     // reportOrphaned is idempotent + transition-guarded; markResolved is a no-op on a non-orphan — so the
-    // single `change`-driven re-render this triggers converges (REQ-004; §6 PR #132 gpt-5.5 finding).
+    // single `change`-driven re-render this triggers converges.
     for (const c of toOrphan) core.reportOrphaned(c);
     for (const id of toResolve) core.markResolved(id);
   }
@@ -723,7 +723,7 @@ export function attachPanel(core, options = {}) {
     return null;
   }
   // The pending region's lifetime IS the pane's: closing the pane (outside-click, Escape, Cancel,
-  // empty save) removes the dashed rect, so no orphaned region ever lingers (Keisuke 2026-06-15).
+  // empty save) removes the dashed rect, so no orphaned region ever lingers.
   function closePopup() {
     popupCleanup?.(); popupCleanup = null;
     releaseHost(popupHost); popupHost = null; popupConv = null; pane = null;
@@ -819,8 +819,8 @@ export function attachPanel(core, options = {}) {
   // Render the thread inline as ONE flat, TIME-ORDERED timeline (REQ-704): every utterance —
   // comment or reply — is its own row carrying its actor color + label, interleaved with the
   // region's move/resize history (REQ-009), which is an immutable record of how the anchor was
-  // repositioned (Keisuke 2026-06-15).
-  // NOTHING in the timeline is deletable from here (Keisuke 2026-08-05, hands-on): a per-row ✕ made
+  // repositioned.
+  // NOTHING in the timeline is deletable from here: a per-row ✕ made
   // "delete one utterance" look like the granularity of the model, when a reply belongs to its
   // comment and goes with it — so removing a comment silently took a whole side of the conversation
   // away. Deletion is an ANCHOR-level act: right-click the anchor → Delete anchor. The core
@@ -941,10 +941,10 @@ export function attachPanel(core, options = {}) {
     // an emptied thread means "remove everything", not "there is nothing to do"
     if (draw(timelineItems(group, evts))) exwrap.scrollTop = exwrap.scrollHeight;
   };
-  // NOTE: there is still no inline reply BOX (Keisuke 2026-06-15: "Reply はちょっと Too Much") — a
+  // NOTE: there is still no inline reply BOX ("Reply はちょっと Too Much") — a
   // reply enters through the seam (core.addReply), driven by the integrator. What changed in 0.9.1
   // is the DISPLAY: replies now render as flat, actor-labeled rows in this timeline (REQ-704), for
-  // the multi-party conversation the Interplay track drives.
+  // the multi-party conversation a downstream integration drives.
   const acts = el(doc, 'div', 'tb-acts');
   const cancel = btn(doc, t('pane.cancel'), 'tb-cancel');
   const save = btn(doc, commit.action === 'send' ? lbl('pane.send', 'Send') : t('pane.save'), 'tb-save');
@@ -1065,8 +1065,8 @@ export function attachPanel(core, options = {}) {
     conv.focus();
     // dismiss on click outside the pane or Escape. Block/range keep the unsaved draft (restorable on
     // reopen); a PENDING region is ephemeral — its rect is removed on close (REQ-012) and would never
-    // recur, so its draft is DISCARDED too, per REQ-703 (Keisuke: a dismissed uncommitted region keeps
-    // nothing). §6 PR #132 gpt-5.5 finding.
+    // recur, so its draft is DISCARDED too, per REQ-703: a dismissed uncommitted region keeps
+    // nothing.
     const dismissPreserve = () => { if (ephemeralDraft) conv.clearDraft(); else conv.preserveDraft(); closePopup(); };
     const onDocDown = (e) => { if (pane && !e.target.closest('.tb-pane')) dismissPreserve(); };
     const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); dismissPreserve(); } };
@@ -1116,7 +1116,7 @@ export function attachPanel(core, options = {}) {
   // ---- gestures --------------------------------------------------------------------------------
   // The block/range pane opens on right-button RELEASE (pointerup), NOT on `contextmenu`. On macOS the
   // `contextmenu` event fires on right-button DOWN — before a region drag can be recognized — so opening
-  // the pane there made it appear mid-drag and block the gesture (Keisuke 2026-06-15). The contextmenu
+  // the pane there made it appear mid-drag and block the gesture. The contextmenu
   // listener now only SUPPRESSES the native menu over content; onUp decides block/range vs region.
   const openCtxPopup = (e) => {
     if (e.target.closest('.tb-pane,.tb-console,.tb-docbar')) return;
@@ -1254,7 +1254,7 @@ export function attachPanel(core, options = {}) {
   // Returns true (and suppresses the native text-selection) if a drag started.
   function startHandleDrag(e) {
     // while a comment pane is open, the region is LOCKED — no move/resize, and the anchor icon does not
-    // re-trigger — so an in-progress comment is never disturbed (Keisuke 2026-06-15). Clicking elsewhere
+    // re-trigger — so an in-progress comment is never disturbed. Clicking elsewhere
     // dismisses the pane first (preserving the draft), then the region is interactive again.
     if (pane) return false;
     for (let i = regionOverlays.length - 1; i >= 0; i--) {
@@ -1294,7 +1294,7 @@ export function attachPanel(core, options = {}) {
       const capture = computeCapture(hd.surfaceEl, next);
       const after = { rect: next };
       if (capture.covered.length || capture.media.length) after.capture = capture;
-      // W-NWBW: re-anchor a moved/resized DOCUMENT region to its new content element — without this the
+      // Re-anchor a moved/resized DOCUMENT region to its new content element — without this the
       // fallback would be dropped (appendAnchorEvent deletes a missing one) and the region would drift
       // again on the next PDF zoom, or snap back to the stale anchor. Marked/PDF surfaces stay normalized.
       const movedAnchor = hd.ov.comments[0] && hd.ov.comments[0].anchor;
@@ -1311,7 +1311,7 @@ export function attachPanel(core, options = {}) {
     }
     // no movement = a plain click: the anchor icon opens the thread (a grip click does nothing). We do
     // it HERE rather than via the badge's onclick, because renderMarks on a real drag would destroy it
-    // before its click event fired (the "icon click does nothing" regression, Keisuke 2026-06-15).
+    // before its click event fired (the "icon click does nothing" regression).
     if (hd.handle === 'move') openThread(hd.ov.comments, e);   // a grip click is a no-op
   }
 
@@ -1339,10 +1339,10 @@ export function attachPanel(core, options = {}) {
     // right-click retargets the following `contextmenu` to the capture element, so e.target is no
     // longer the clicked block and the block/range pane never opens (the "can't comment" bug).
   };
-  // W-NWBW: anchor a DOCUMENT-surface region to the content element under its top-left, in ABSOLUTE px,
+  // Anchor a DOCUMENT-surface region to the content element under its top-left, in ABSOLUTE px,
   // so it tracks that content and is immune to TOTAL-page-size changes — an embedded PDF sub-surface
   // re-rendering taller on zoom must NOT move a document region (its binding is the right-drag origin's
-  // content, not the whole page; Keisuke 2026-06-16). Recomputed on create AND on every move/resize so a
+  // content, not the whole page). Recomputed on create AND on every move/resize so a
   // moved region re-anchors to wherever it now sits. Marked sub-surfaces (figure/panel) keep a stable
   // size and PDF pages scale uniformly, so they stay on the normalized rect (no fallback). Returns the
   // fallback {elementId,dx,dy,w,h} or null (region covers nothing identifiable → stays normalized).
@@ -1366,8 +1366,8 @@ export function attachPanel(core, options = {}) {
              w: rect.width * surf.clientWidth, h: rect.height * surf.clientHeight };
   }
   // Finalize a region draw `d` ending at (clientX,clientY): if past threshold, create the pending region
-  // and open its pane (CLAMPED into the viewport so it is visible even when the drag ended off-screen,
-  // Keisuke 2026-06-15). Returns true if a region was created, false otherwise (caller cleans up).
+  // and open its pane (CLAMPED into the viewport so it is visible even when the drag ended
+  // off-screen). Returns true if a region was created, false otherwise (caller cleans up).
   function finalizeRegion(d, clientX, clientY) {
     const r = d.surf.getBoundingClientRect();
     const dist = Math.max(Math.abs(clientX - r.left - d.x0), Math.abs(clientY - r.top - d.y0));
@@ -1380,7 +1380,7 @@ export function attachPanel(core, options = {}) {
     if (pageAttr != null) anchor.pageIndex = Number(pageAttr);
     const capture = computeCapture(d.surf, rect);
     if (capture.covered.length || capture.media.length) anchor.capture = capture;
-    // W-NWBW: anchor a DOCUMENT-surface region to its content element in absolute px (see computeDocFallback).
+    // Anchor a DOCUMENT-surface region to its content element in absolute px (see computeDocFallback).
     const docFb = surfaceId === DOCUMENT_SURFACE_ID ? computeDocFallback(d.surf, rect, capture) : null;
     if (docFb) anchor.fallback = docFb;
     const rectEl = drawEl; drawEl = null;
@@ -1440,8 +1440,8 @@ export function attachPanel(core, options = {}) {
   };
   // If the button is released OUTSIDE the window, pointerup may never be delivered — but the pointer
   // capture IS released, firing `lostpointercapture`. Finalize from the last in-window position so the
-  // pane appears at the clamped viewport edge immediately, WITHOUT waiting for the cursor to come back
-  // (Keisuke 2026-06-15). A window blur (focus left mid-drag) is a second fallback. Both are guarded by
+    // pane appears at the clamped viewport edge immediately, WITHOUT waiting for the cursor to come
+    // back. A window blur (focus left mid-drag) is a second fallback. Both are guarded by
   // `draw`, and are no-ops after a normal pointerup (which already set draw=null).
   const finalizeFromCaptureLoss = () => {
     if (handleDrag) { endHandleDrag({ pointerId: handleDrag.pointerId }); return; }   // a move/resize lost capture → commit what's recorded

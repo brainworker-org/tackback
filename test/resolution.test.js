@@ -52,7 +52,7 @@ function doc(root) {
 }
 
 // A small article: an H1 title, an H2 section, two paragraphs, a list item. (h1 IS annotatable now —
-// a reviewer can comment on the title; it is also the section context for what follows. PR #132 9a.)
+// a reviewer can comment on the title; it is also the section context for what follows.)
 function article() {
   return el('div', { children: [
     el('h1', { text: 'Doc Title' }),
@@ -119,7 +119,7 @@ test('indexAnnotatable keeps author-supplied ids (only id-less elements get a de
   assert.match(p1.id, /^tb-[0-9a-f]{8}$/, 'the id-less element gets a content-bound id');
 });
 
-test('content-bound ids survive insertion: a fresh-load import resolves to the SAME content or orphans (§6 R5 PR #132)', () => {
+test('content-bound ids survive insertion: a fresh-load import resolves to the SAME content or orphans', () => {
   // original doc, fresh load → an anchor is created against the "Bravo" paragraph
   const orig = el('div', { children: [el('p', { text: 'Alpha' }), el('p', { text: 'Bravo' }), el('p', { text: 'Charlie' })] });
   indexAnnotatable(orig);

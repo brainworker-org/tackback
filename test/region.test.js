@@ -102,7 +102,7 @@ test('markOrphan / clearOrphan toggle the serialized state', () => {
   assert.equal(clearOrphan(orphaned).orphan, undefined);
 });
 
-test('appendAnchorEvent deep-copies `after` — mutating the input cannot corrupt stored history (§6 PR #132)', () => {
+test('appendAnchorEvent deep-copies `after` — mutating the input cannot corrupt stored history', () => {
   const a0 = { type: 'region', surfaceId: 'document', rect: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 } };
   const after = { rect: { x: 0.3, y: 0.3, width: 0.2, height: 0.2 }, capture: { covered: [{ in: 'p1', text: 'orig' }], media: ['a.png'] } };
   const a1 = appendAnchorEvent(a0, 'move', after, 't1', 't0');
@@ -159,7 +159,7 @@ test('computeCapture lists covered text + media; raster-only region → media-on
   assert.deepEqual(cap2.media, ['pic.png']);
 });
 
-test('computeCapture includes the surface element itself when it IS media (stamped img/canvas) — §6 R4 PR #132', () => {
+test('computeCapture includes the surface element itself when it IS media (stamped img/canvas)', () => {
   const img = el('img', { id: 'fig', attrs: { src: 'pic.png' }, rect: { left: 0, top: 0, width: 500, height: 500 } });
   // a region drawn directly on an img-used-as-surface (querySelectorAll sees no descendants)
   const cap = computeCapture(img, { x: 0.1, y: 0.1, width: 0.5, height: 0.5 });
@@ -196,7 +196,7 @@ test('resolveRegionRect applies the fallback when its element resolves, else use
   assert.equal(resolveRegionRect(anchor, null, measure), null);
 });
 
-test('resolveRegionRect: an ABSOLUTE element-anchored fallback (fb.w set) is immune to surface TOTAL-size change (W-NWBW)', () => {
+test('resolveRegionRect: an ABSOLUTE element-anchored fallback (fb.w set) is immune to surface TOTAL-size change', () => {
   // A document region anchored to p2 in absolute px. p2 sits at top=400 and does NOT move.
   const make = (surfHeight) => {
     const surf = el('div', { rect: { left: 0, top: 0, width: 1000, height: surfHeight } });
@@ -224,7 +224,7 @@ test('resolveRegionRect: an ABSOLUTE element-anchored fallback (fb.w set) is imm
   assert.equal(+r3.rect.y.toFixed(3), 0.405, 'element gone → stored normalized rect stands');
 });
 
-test('resolveAnchorDom (region) is fallback-aware — the single path delegates to resolveRegionRect (§6 R3 PR #132)', () => {
+test('resolveAnchorDom (region) is fallback-aware — the single path delegates to resolveRegionRect', () => {
   const { surf, p2 } = captureFixture();
   surf.ownerDocument = { getElementById: (id) => (id === 'p2' ? p2 : null), querySelectorAll: () => [] };
   const surfaces = new Map([['document', { element: surf }]]);

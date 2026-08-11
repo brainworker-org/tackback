@@ -227,7 +227,7 @@ actually establish. What it deliberately does not claim:
 - it is **not** "a person read it" — only that it was displayed;
 - the viewport and your own CSS are not consulted, so a panel you have hidden still counts as showing;
 - there is **no** screen-reader text or sound for unread in this version — the distinction is carried
-  by colour *and* by shape (ring or no ring), and that is an accepted limit, not an oversight.
+  by colour *and* by movement (a fill that breathes), and that is an accepted limit, not an oversight.
 
 Both records belong to **this environment** — the browser profile, not the person and not the server.
 They go through the storage adapter you already provide, and they are **never** in the export

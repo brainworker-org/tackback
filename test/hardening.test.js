@@ -97,7 +97,7 @@ test('mutating the input object after add/import does not change stored state', 
   assert.equal(stored.anchor.elementId, 'p1', 'nested anchor not mutated through input ref');
 });
 
-// ---- region surface resolution never builds a selector from an untrusted surfaceId (PR #130 R1 H1) ----
+// ---- region surface resolution never builds a selector from an untrusted surfaceId ----
 
 test('resolveAnchorDom matches a region surface by exact attribute value, even with selector-breaking chars', () => {
   // surfaceId/pageIndex can arrive from an imported envelope; isValidAnchor permits any non-empty
@@ -119,7 +119,7 @@ test('resolveAnchorDom matches a region surface by exact attribute value, even w
   assert.equal(resolveAnchorDom(miss, doc, new Map()), null);
 });
 
-// ---- region surfaces re-resolve after reload via the element id (PR #130 R2) ----
+// ---- region surfaces re-resolve after reload via the element id ----
 
 test('resolveAnchorDom falls back to getElementById for el-<id> surfaceIds (reload persistence)', () => {
   // After reload the runtime data-tb-surface stamp is gone, but an id'd <figure> still has its id.
