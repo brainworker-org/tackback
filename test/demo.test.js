@@ -7,18 +7,20 @@
 // while it was being read — the exact failure the library now exists to remove, on the page a release
 // is accepted from.
 //
-// WHAT IS FORBIDDEN IS NARROW, AND HAS TO BE. Attention is a good thing for a demo to show: it is a
-// generic flag whose meaning belongs to whoever raises it, and seeing it sit beside unread — one
-// fills, the other rings — is how an integrator learns it does not have to choose. Both pages have a
-// control that raises it, deliberately. What no page may do is raise it BECAUSE SOMETHING ARRIVED,
-// because arrival is not the question. The question is what is on screen, and only the library can
-// see that.
+// The correction after that was to give attention a switch instead, and it made things worse rather
+// than better: a thread holding nothing but your own comments went orange and stayed orange however
+// often you read it, while something genuinely new was a different colour entirely. Two marks, two
+// colours, and only one of them answering to reading.
 //
-// WHAT THESE CAN AND CANNOT SEE. They read the pages as text. That catches the shape of the mistake
-// and nothing else: neither page is executed here, so a page that marks things some new way walks
-// straight past. The behaviour itself is fixed where it belongs, against the real panel — see
-// panel-dom.test T48/T49/T52. These are the guard that the demos do not go back to answering a
-// question the library now answers.
+// SO THE RULE IS ONE MARK. A demo page shows the reader exactly one thing — where there is something
+// new — and reading it is what clears it. Nothing else on the page marks anything, which is why
+// raising a flag of the demo's own is out entirely rather than out only on arrival: a second mark is
+// a second vocabulary, whatever moves it.
+//
+// WHAT THESE CAN AND CANNOT SEE. They read the pages as text. That catches a page taking a mark back
+// into its own hands, and nothing else: neither page is executed here, so a page that marks things
+// some new way walks straight past. The behaviour itself is fixed where it belongs, against the real
+// panel — see panel-dom.test T48/T49/T52.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -56,87 +58,93 @@ function blockAt(text, start) {
   return text.slice(from);
 }
 
-/**
- * Everything that runs BECAUSE something arrived: the simulated participant, and every handler the
- * page hangs off an event that carries an arrival. Brace-matched rather than "the next N characters",
- * so a handler that grows does not quietly walk out of what is being read.
- */
-function arrivalPaths(text) {
-  const paths = [];
-  const answer = text.indexOf('function answerOn');
-  if (answer >= 0) paths.push({ what: 'answerOn()', code: blockAt(text, answer) });
-  const ARRIVAL_EVENTS = ['comment:add', 'comment:update', 'change', 'submit:batch'];
-  for (const ev of ARRIVAL_EVENTS) {
-    const re = new RegExp(`\\.on\\(\\s*['"]${ev.replace(':', ':')}['"]`, 'g');
-    for (const m of text.matchAll(re)) paths.push({ what: `on('${ev}')`, code: blockAt(text, m.index) });
-  }
-  return paths;
-}
-
-const RAISES_ATTENTION = /setAnchorAttention\s*\([^)]*\)/g;
-/** A raise is anything that is not, plainly, a lowering. Uncertainty counts as a raise on purpose. */
-const isRaise = (call) => !/,\s*false\s*\)$/.test(call);
+/** A call that moves a flag — raising or lowering, since neither belongs to a demo any more. */
+const MOVES_A_FLAG = /setAnchorAttention\s*\([^)]*\)/g;
 
 test('the demo pages exist and are found, so an empty sweep cannot pass for a clean one', () => {
   const pages = demoPages();
   assert.ok(pages.some((p) => p.rel === 'demo/demo.html'), 'the bundled demo is in the sweep');
   assert.ok(pages.some((p) => p.rel === 'docs/index.html'), 'the hosted demo is in the sweep');
-  for (const p of pages) assert.ok(arrivalPaths(p.text).length > 0, `${p.rel}: its arrival path was found`);
+  for (const p of pages) assert.ok(p.text.length > 1000, `${p.rel}: was actually read`);
 });
 
-test('T50: no demo page raises a mark of its own because something arrived', () => {
+test('T50: no demo page carries a mark of its own — there is one mark, and the library owns it', () => {
+  // Not "does not mark ON ARRIVAL": does not mark at all. The switch that raised it by hand was the
+  // second attempt at this and produced a mark that could not be read away, which is the failure
+  // stated the other way round. What a page may still do is CHOOSE THE COLOUR — that is a token, and
+  // tokens are the customisation this library is built on.
   const offenders = [];
   for (const { rel, text } of demoPages()) {
-    for (const { what, code } of arrivalPaths(text)) {
-      for (const call of code.match(RAISES_ATTENTION) || []) {
-        if (isRaise(call)) offenders.push(`${rel} → ${what}: ${call}`);
-      }
-    }
+    for (const call of text.match(MOVES_A_FLAG) || []) offenders.push(`${rel}: ${call}`);
   }
   assert.deepEqual(offenders, [],
-    `a demo is marking on arrival again — arrival is not the question, what is on screen is:\n  ${offenders.join('\n  ')}`);
+    `a demo is keeping a mark of its own again — one mark, and reading clears it:\n  ${offenders.join('\n  ')}`);
 });
 
 test('T51: no demo page decides "read" from a click, either', () => {
-  // The other half, and the half that turned a redundancy into a bug. Clearing on a click only ever
-  // reaches a reader who was somewhere else; the reader watching the thread it lands in never clicks,
-  // so the mark stays up in front of them. A page-wide click handler that lowers a mark has rebuilt
-  // that trap. A CONTROL that toggles attention has not — it is a button, not a theory of reading.
+  // The half that turned a redundancy into a bug. Clearing on a click only ever reaches a reader who
+  // was somewhere else; the reader watching the thread it lands in never clicks, so the mark stays up
+  // in front of them. A page-wide click handler that moves a mark has rebuilt that trap.
   const offenders = [];
   for (const { rel, text } of demoPages()) {
     for (const m of text.matchAll(/addEventListener\s*\(\s*['"]click['"]/g)) {
       const code = blockAt(text, m.index);
-      if (/setAnchorAttention/.test(code)) offenders.push(`${rel}: a page-wide click handler moves an attention flag`);
+      if (/setAnchorAttention|tb-unread|classList\.(add|toggle)\s*\(\s*['"]tb-/.test(code)) {
+        offenders.push(`${rel}: a page-wide click handler moves a mark`);
+      }
     }
   }
-  assert.deepEqual(offenders, [],
-    `a demo is deciding "read" for itself again:\n  ${offenders.join('\n  ')}`);
+  assert.deepEqual(offenders, [], `a demo is deciding "read" for itself again:\n  ${offenders.join('\n  ')}`);
 });
 
-test('T50/T51: the sweep answers about real text, and is not just failing to match', () => {
+/** A page with its alternate palette removed — what the reader gets before touching anything. */
+const asDefaultView = (text) => {
+  const at = text.indexOf('ALT_THEME');
+  return at < 0 ? text : text.replace(blockAt(text, at), '');
+};
+const SETS_THE_MARK = /--tb-unread['"]?\s*:/;
+
+test('T53: every demo page chooses its one mark\'s colour for the view it opens in', () => {
+  // The vocabulary is "new is orange", and the library still ships blue as this token's default until
+  // that changes in its own version. So each page has to SET it — and set it where the reader will
+  // actually meet it. Reading the whole file would be satisfied by the alternate palette, which is
+  // behind a button nobody has pressed yet, so the alternate palette is taken out before looking.
+  const missing = [];
+  for (const { rel, text } of demoPages()) {
+    if (!SETS_THE_MARK.test(asDefaultView(text))) missing.push(rel);
+  }
+  assert.deepEqual(missing, [],
+    `these pages leave their opening view on the shipped default: ${missing.join(', ')}`);
+});
+
+test('T50/T51/T53: the sweep answers about real text, and is not just failing to match', () => {
   // The failure an absence check has: reading nothing, finding nothing, and reporting that as clean.
-  // So the same reading is pointed at the wiring that was actually removed, which it must catch, and
-  // at the control that replaced it, which it must not.
-  const wasWrong = `
+  // So the same readings are pointed at the wiring that was removed, which they must catch.
+  const onArrival = `
     function answerOn(commentId) {
       tb.addReply(commentId, { body: 'x' });
       tb.setAnchorAttention(commentId, true);
-    }
-    document.addEventListener('click', (e) => { tb.setAnchorAttention(e.id, false); }, true);
-  `;
-  const raisedOnArrival = arrivalPaths(wasWrong)
-    .flatMap(({ code }) => (code.match(RAISES_ATTENTION) || []).filter(isRaise));
-  assert.equal(raisedOnArrival.length, 1, 'the removed raise is found where it was');
+    }`;
+  assert.equal((onArrival.match(MOVES_A_FLAG) || []).length, 1, 'the first attempt is caught');
 
-  const clickHandler = blockAt(wasWrong, wasWrong.indexOf("addEventListener('click'"));
-  assert.match(clickHandler, /setAnchorAttention/, 'and the removed click-clear is found too');
-
-  const theControl = `
-    let attentionOn = false;
+  const bySwitch = `
     mkBtn('Attention: off', (b) => {
-      attentionOn = !attentionOn;
       for (const c of tb.listComments()) tb.setAnchorAttention(c.id, attentionOn);
-    });
+    });`;
+  assert.equal((bySwitch.match(MOVES_A_FLAG) || []).length, 1, 'and so is the second');
+
+  const clickClear = `document.addEventListener('click', (e) => { tb.setAnchorAttention(e.id, false); }, true);`;
+  assert.match(blockAt(clickClear, clickClear.indexOf("addEventListener('click'")), /setAnchorAttention/,
+    'and the click-clear is found where it was');
+
+  assert.doesNotMatch('const NOTHING = { "--tb-accent": "#000" };', SETS_THE_MARK,
+    'and a page that sets some other token is not mistaken for one that sets this one');
+
+  const onlyInTheAlternate = `
+    const ALT_THEME = { '--tb-accent': '#0f766e', '--tb-unread': '#b45309' };
+    let altColors = false;
   `;
-  assert.deepEqual(arrivalPaths(theControl), [], 'a button is not an arrival path, so the control is left alone');
+  assert.match(onlyInTheAlternate, SETS_THE_MARK, 'the token IS in that page, read whole…');
+  assert.doesNotMatch(asDefaultView(onlyInTheAlternate), SETS_THE_MARK,
+    '…and is gone once the palette nobody has opened yet is set aside, which is the point');
 });
