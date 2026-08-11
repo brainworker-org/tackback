@@ -51,9 +51,9 @@ test('host: one that cannot fold is open for as long as it exists', () => {
   assert.equal(host.timelineOpen(), true, 'attached and alive is all it takes');
 
   // The class this host does not use must not be able to speak for it.
-  el.classList.add('tb-open');
+  el.classList.add('tb-docbar-open');
   assert.equal(host.timelineOpen(), true);
-  el.classList.remove('tb-open');
+  el.classList.remove('tb-docbar-open');
   assert.equal(host.timelineOpen(), true, 'a Pane does not lack a thread area — it keeps its open');
 
   host.dispose();
@@ -66,12 +66,12 @@ test('host: one that can fold follows its class and nothing else', () => {
   host.attach(fakeConv('document'), el);
   assert.equal(host.timelineOpen(), false, 'folded away is not readable, even though it is present');
 
-  el.classList.add('tb-open');
+  el.classList.add('tb-docbar-open');
   assert.equal(host.timelineOpen(), true);
 
   host.dispose();
   assert.equal(host.timelineOpen(), false, 'and the class cannot outlive the host');
-  assert.equal(el.classList.contains('tb-open'), true, 'the class itself is the caller\'s to clean up');
+  assert.equal(el.classList.contains('tb-docbar-open'), true, 'the class itself is the caller\'s to clean up');
 });
 
 test('host: identity and anchor are the conversation\'s to answer, or nobody\'s', () => {
@@ -108,11 +108,11 @@ test('host: folding announces exactly once, and only where folding means somethi
 
   assert.equal(collapsible.setOpen(true), true);
   assert.equal(folding.length, 1, 'one announcement per change of what can be seen');
-  assert.equal(el.classList.contains('tb-open'), true);
+  assert.equal(el.classList.contains('tb-docbar-open'), true);
 
   assert.equal(collapsible.setOpen(), false, 'no argument means the other way');
   assert.equal(folding.length, 2);
-  assert.equal(el.classList.contains('tb-open'), false);
+  assert.equal(el.classList.contains('tb-docbar-open'), false);
 
   const fixed = [];
   const notCollapsible = createHost({ collapsible: false }, () => fixed.push(1));
@@ -120,7 +120,7 @@ test('host: folding announces exactly once, and only where folding means somethi
   notCollapsible.attach(fakeConv(), el2);
   assert.equal(notCollapsible.setOpen(false), true, 'it cannot be folded, so it reports what it is');
   assert.deepEqual(fixed, [], 'and says nothing, because nothing changed');
-  assert.equal(el2.classList.contains('tb-open'), false, 'nor did it touch the class');
+  assert.equal(el2.classList.contains('tb-docbar-open'), false, 'nor did it touch the class');
 });
 
 test('host: releasing hands the root back, disposes the conversation, and is idempotent', () => {

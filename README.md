@@ -51,7 +51,7 @@ import { attachPanel } from '@brainworker/tackback/panel';
 const tb = Tackback.mount({ document: { id: 'my-doc', title: 'Design notes' } });
 const panel = attachPanel(tb, {
   theme: 'auto', locale: 'en',        // theming / reactions / i18n are all customizable
-  controls: { docLane: true },        // pick which controls show; all but `import` are on by default
+  controls: { docBar: true },        // pick which controls show; all but `import` are on by default
 });
 
 panel.destroy();                      // hands back everything it took, except the ids below
@@ -93,11 +93,11 @@ yourself while the panel was alive, in which case your value stays.
 - **document** — the document *as a whole*, rather than any place inside it. It has no coordinates and
   no badge, because there is nowhere on the page that means "all of this". It lives in a **lane**: a bar
   across the bottom of the viewport with a composer you can type into without opening anything, which
-  expands to show the thread (`controls: { docLane }`, on by default; `panel.toggleDocumentLane()`).
+  expands to show the thread (`controls: { docBar }`, on by default; `panel.toggleDocumentBar()`).
   The lane floats — it never shifts the host's layout. It sits beside the panel when there is room to
   do so and still be worth typing into, and moving above it and taking the available width — up to its own
   maximum — when there is not. Which of the two applies is measured, not guessed at a breakpoint. A host with its own bottom chrome tells the lane where it
-  may sit with `--tb-lane-left` / `--tb-lane-right`, and can watch for the `tb-lane-stacked` class on
+  may sit with `--tb-docbar-left` / `--tb-docbar-right`, and can watch for the `tb-docbar-stacked` class on
   the root element to move out of the way. With the lane off, `panel.openDocumentThread()` opens the
   same thread as an ordinary Pane. One per instance.
 - **region** — a rectangle over any non-text surface (an image/diagram in a `<figure>`, a marked
@@ -117,8 +117,8 @@ re-skins and re-labels Tackback without forking it or overriding its CSS:
 - **Colors** — `--tb-*` theme tokens (a partial map layers over the OS light/dark base), plus
   `actorColors` for the participant tints.
 - **Language** — `setLocale()` at runtime; English and Japanese ship, bring your own bundle.
-- **Controls** — `controls: { author, export, import, theme, marks, clear, docLane }` chooses what
-  renders; every one except `import` is on by default. `docLane` is the document thread's own bar
+- **Controls** — `controls: { author, export, import, theme, marks, clear, docBar }` chooses what
+  renders; every one except `import` is on by default. `docBar` is the document thread's own bar
   across the bottom of the viewport, and doubles as its mark: the utterance count and the attention
   tint sit on its head, visible without expanding it.
 
@@ -126,7 +126,7 @@ Hiding a control does not hide the *data* behind it, but what remains reachable 
 
 | control | with the button hidden |
 |---|---|
-| `theme` / `marks` / `docLane` | `panel.setTheme()` / `panel.toggleMarks()` / `panel.openDocumentThread()` (a Pane when the lane is off) |
+| `theme` / `marks` / `docBar` | `panel.setTheme()` / `panel.toggleMarks()` / `panel.openDocumentThread()` (a Pane when the lane is off) |
 | `author` | `core.setAuthor()` — the same state the field edits |
 | `export` / `import` | `core.exportEnvelope()` / `core.importEnvelope()` — the data path; the paste-and-load *dialogs* are the panel's own and have no API form |
 | `clear` | no equivalent. The button is more than a loop over `deleteComment`: it confirms first, closes an open Pane and drops an uncommitted region rect. Drive `core.deleteComment()` yourself and decide those for your UI. |
@@ -408,7 +408,7 @@ omits, so there is nothing left for a tombstone to take.
 | import | responsibility |
 |---|---|
 | `@brainworker/tackback` | `Tackback.mount` → instance: CRUD, replies, typed events, import/export, media-adapter coordination, lifecycle, `anchor:orphaned`, session-only anchor attention |
-| `@brainworker/tackback/panel` | `attachPanel` — control panel (configurable via `controls`), anchored marks, comment popup with the flat multi-participant timeline, gesture capture (right-click block, select+right-click range, right-drag region), theming/reactions/actor colors/i18n |
+| `@brainworker/tackback/panel` | `attachPanel` — control panel (configurable via `controls`), anchored marks, comment pane with the flat multi-participant timeline, gesture capture (right-click block, select+right-click range, right-drag region), theming/reactions/actor colors/i18n |
 | `@brainworker/tackback/pdf` | `createPdfAdapter` — an **optional** PDF adapter (renders pages to surfaces; pdf.js is a peer the consumer provides). PDF/raster surfaces are a post-v1 sample, not a v1 focus. |
 
 The two real entry points are the **core** and the **panel**; the **pdf** adapter is optional. Everything a typical integrator needs — the storage adapters (`localStorageAdapter` / `memoryAdapter`), the envelope helpers (`buildEnvelope` / `parseEnvelope`), and the model/migration helpers — is **re-exported from the main `@brainworker/tackback`** entry, so there are no separate `/anchor`, `/model`, or `/storage` subpaths to learn.

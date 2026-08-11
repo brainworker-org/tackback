@@ -1,5 +1,5 @@
 // @tackback/panel — the default UI. `attachPanel(core, options)` consumes a headless core instance
-// and adds: a control panel, place-anchored marks, a comment popup, gesture capture (right-click a
+// and adds: a control panel, place-anchored marks, a comment pane, gesture capture (right-click a
 // block, right-drag a PDF region), plus the three customization axes (theming / reactions / i18n).
 // It NEVER reaches into core internals — it drives the public API and re-renders on `change`.
 
@@ -18,15 +18,15 @@ import { selectionOffsetsWithin, offsetsToRange, paintHighlights, clearHighlight
 
 const PANEL_CSS = `
 [data-tb-root] { }
-.tb-panel { position: fixed; right: 16px; bottom: 16px; z-index: 9999; background: #222; color: #fff;
+.tb-console { position: fixed; right: 16px; bottom: 16px; z-index: 9999; background: #222; color: #fff;
   border-radius: 10px; padding: 10px 12px; font: 13px -apple-system, system-ui, sans-serif;
   box-shadow: 0 4px 16px rgba(0,0,0,.35); display: flex; flex-direction: column; gap: 6px; min-width: 200px; }
-.tb-panel button { font: inherit; cursor: pointer; border: none; border-radius: 6px; padding: 6px 8px; background: var(--tb-accent); color: #fff; }
-.tb-panel button.tb-sec { background: #555; }
-.tb-panel input { font: inherit; border: 1px solid #555; border-radius: 6px; padding: 5px 8px; background: #333; color: #fff; }
-.tb-count { font-weight: 700; }
-.tb-hint { font-size: 11px; color: #bbb; line-height: 1.45; }
-.tb-mark { background: var(--tb-mark-bg) !important; outline: 1px dashed var(--tb-mark-outline); outline-offset: 1px; }
+.tb-console button { font: inherit; cursor: pointer; border: none; border-radius: 6px; padding: 6px 8px; background: var(--tb-accent); color: #fff; }
+.tb-console button.tb-sec { background: #555; }
+.tb-console input { font: inherit; border: 1px solid #555; border-radius: 6px; padding: 5px 8px; background: #333; color: #fff; }
+.tb-console-count { font-weight: 700; }
+.tb-console-hint { font-size: 11px; color: #bbb; line-height: 1.45; }
+.tb-commentable { background: var(--tb-mark-bg) !important; outline: 1px dashed var(--tb-mark-outline); outline-offset: 1px; }
 /* line-height is set EXPLICITLY: the badge/pin is appended inside the surface element, so it would
    otherwise INHERIT the host's line-height — a surface with line-height:0 (e.g. a figure wrapping an
    image/SVG) collapses the pill to 0px tall, leaving only the bare glyph ("white & small"). An explicit
@@ -51,14 +51,14 @@ const PANEL_CSS = `
    CSS double border-style, which renders unevenly at subpixel sizes / with border-radius (Keisuke
    2026-06-16: the double line was not drawing stably). box-shadow rings are crisp and follow the radius. */
 .tb-region.tb-on-surface { box-shadow: inset 0 0 0 2px var(--tb-bg, #fff), inset 0 0 0 4px var(--tb-mark-outline); }
-/* while a comment popup is open the region is locked (REQ-008): hide the hover resize grip and drop the
+/* while a comment pane is open the region is locked (REQ-008): hide the hover resize grip and drop the
    move cursor on the icon, so the UI never invites a move/resize that is disabled (Keisuke 2026-06-15). */
-.tb-popup-open .tb-region:hover .tb-grip { display: none; }
-.tb-popup-open .tb-pin { cursor: default; }
+.tb-pane-open .tb-region:hover .tb-grip { display: none; }
+.tb-pane-open .tb-pin { cursor: default; }
 .tb-draw { position: absolute; z-index: 7; border: 2px dashed var(--tb-accent); background: rgba(51,170,119,.12); pointer-events: none; }
 .tb-pending { position: absolute; z-index: 6; border: 2px dashed var(--tb-mark-outline); background: var(--tb-mark-bg); border-radius: 3px; pointer-events: none; }
 /* Marks OFF hides what the panel PUT ON the page — the badges, and the boxes it drew over an area.
-   What it does NOT do is hide the page: tb-mark sits on the host's OWN paragraph, so hiding
+   What it does NOT do is hide the page: tb-commentable sits on the host's OWN paragraph, so hiding
    elements wearing it takes the document's text with it. What that class contributes is a tint and a
    dashed outline, and those are what come off. The distinction is the whole of this rule: a class the
    panel OWNS may be hidden, a class the panel BORROWED may only be undressed.
@@ -66,7 +66,7 @@ const PANEL_CSS = `
    It does not change what is unread either: the state goes on being kept while it is out of sight,
    and turning marks back on shows whatever arrived meanwhile. */
 .tb-hide .tb-badge, .tb-hide .tb-pin, .tb-hide .tb-region { display: none; }
-.tb-hide .tb-mark { background: none !important; outline: none !important; }
+.tb-hide .tb-commentable { background: none !important; outline: none !important; }
 :root.tb-hide ::highlight(tb-range) { background: transparent; text-decoration: none; }
 ::highlight(tb-range) { background: var(--tb-mark-bg); color: inherit; text-decoration: underline dotted var(--tb-mark-outline); }
 .tb-badge.tb-orphan { opacity: .7; }
@@ -90,13 +90,13 @@ const PANEL_CSS = `
 /* A pulse that never stops is the kind a reader may have asked their system to spare them. The mark
    stays — it is the movement that goes, not the information. */
 @media (prefers-reduced-motion: reduce) {
-  .tb-badge.tb-unread, .tb-pin.tb-unread, .tb-lane.tb-unread .tb-lane-count { animation: none; }
+  .tb-badge.tb-unread, .tb-pin.tb-unread, .tb-docbar.tb-unread .tb-docbar-count { animation: none; }
 }
 /* The document lane: the conversation about the document as a whole, composed from a bar across the
    bottom of the viewport rather than reached from a mark, because it is about no particular place.
    It FLOATS — the library never shifts the host's layout (same reason badges are overlay-positioned)
    — and it is centred with a max-width so the panel (bottom-right) and any host chrome in the other
-   corner keep their space. Its z-index sits below the popup so an anchored thread still wins.
+   corner keep their space. Its z-index sits below the pane so an anchored thread still wins.
    env(safe-area-inset-bottom) and the visualViewport listener keep it off the home indicator and
    above a software keyboard; both are cheap now and awkward to retrofit. */
 /* Geometry, since this bar is now permanent chrome rather than something you summon. The panel
@@ -105,67 +105,67 @@ const PANEL_CSS = `
    the corners instead of competing for them: it is centred within the space that remains, and on
    narrow viewports it moves ABOVE the panel rather than under it.
    Tackback can only reserve space for chrome it knows about — its own panel. A host with chrome of
-   its own at the bottom sets --tb-lane-left / --tb-lane-right to tell the lane where it may sit. */
-.tb-lane { position: fixed; z-index: 9998;
-  left: var(--tb-lane-left, 16px);
+   its own at the bottom sets --tb-docbar-left / --tb-docbar-right to tell the lane where it may sit. */
+.tb-docbar { position: fixed; z-index: 9998;
+  left: var(--tb-docbar-left, 16px);
   /* two reservations, added: the HOST's (public, declared on the root) and the panel's (private,
      measured in placeLane). Writing the measurement into the public one would silently override
      anything a host declared. */
-  right: calc(var(--tb-lane-right, 16px) + var(--tb-panel-reserve, 0px));
+  right: calc(var(--tb-docbar-right, 16px) + var(--tb-console-reserve, 0px));
   bottom: calc(16px + env(safe-area-inset-bottom, 0px));
   margin-inline: auto; max-width: 680px;
   box-sizing: border-box;
-  background: var(--tb-popup-bg); color: var(--tb-popup-fg);
+  background: var(--tb-pane-bg); color: var(--tb-pane-fg);
   border: 1px solid var(--tb-border); border-radius: 14px; box-shadow: 0 6px 24px rgba(0,0,0,.18);
   font: 13px -apple-system, system-ui, sans-serif; padding: 8px 10px; }
-.tb-lane .tb-lane-head { display: flex; align-items: center; gap: 8px; cursor: pointer; width: 100%;
+.tb-docbar .tb-docbar-head { display: flex; align-items: center; gap: 8px; cursor: pointer; width: 100%;
   font: inherit; color: inherit; background: none; border: 0; padding: 0; text-align: left; }
-.tb-lane .tb-lane-title { font-weight: 600; flex: 1; }
-.tb-lane .tb-lane-count { font-size: 11px; opacity: .75; }
+.tb-docbar .tb-docbar-title { font-weight: 600; flex: 1; }
+.tb-docbar .tb-docbar-count { font-size: 11px; opacity: .75; }
 /* the shape a count takes once it carries a colour — the same pill the marks below use */
-.tb-lane .tb-lane-count.tb-tinted { border-radius: 9px; padding: 0 7px; opacity: 1; }
-.tb-lane.tb-attn .tb-lane-count { background: var(--tb-attention); color: #fff; border-radius: 9px; padding: 0 7px; opacity: 1; }
+.tb-docbar .tb-docbar-count.tb-tinted { border-radius: 9px; padding: 0 7px; opacity: 1; }
+.tb-docbar.tb-attn .tb-docbar-count { background: var(--tb-attention); color: #fff; border-radius: 9px; padding: 0 7px; opacity: 1; }
 /* The document thread has no mark on the page — the lane's own count IS its mark, so the ring goes
    there. Padding and radius are repeated because the count is otherwise a bare number with nothing
    for a ring to sit around. */
-.tb-lane.tb-unread .tb-lane-count { background: var(--tb-unread) !important; border-radius: 9px; padding: 0 7px; opacity: 1; animation: tb-unread-pulse 2s ease-in-out infinite; }
-.tb-lane .tb-lane-composer { margin-top: 8px; }
+.tb-docbar.tb-unread .tb-docbar-count { background: var(--tb-unread) !important; border-radius: 9px; padding: 0 7px; opacity: 1; animation: tb-unread-pulse 2s ease-in-out infinite; }
+.tb-docbar .tb-docbar-composer { margin-top: 8px; }
 /* Collapsed is not "closed": the composer stays, because the point of a lane rather than a button
    is that you can type into it without opening anything. Expanding adds the history above it. */
-.tb-lane .tb-lane-body { display: none; margin-top: 8px; }
-.tb-lane.tb-open .tb-lane-body { display: block; }
-/* the lane hosts the same conversation the Pane does, so its rows reuse the popup's own styles */
-.tb-lane .tb-existing { max-height: 40vh; overscroll-behavior: contain; }
-.tb-lane textarea { width: 100%; box-sizing: border-box; min-height: 44px; font: inherit;
+.tb-docbar .tb-docbar-body { display: none; margin-top: 8px; }
+.tb-docbar.tb-docbar-open .tb-docbar-body { display: block; }
+/* the lane hosts the same conversation the Pane does, so its rows reuse the pane's own styles */
+.tb-docbar .tb-timeline { max-height: 40vh; overscroll-behavior: contain; }
+.tb-docbar textarea { width: 100%; box-sizing: border-box; min-height: 44px; font: inherit;
   border: 1px solid var(--tb-border); border-radius: 8px; padding: 7px; background: transparent; color: inherit;
   /* no resize grip: this bar has just measured its own place in the viewport, and a corner the
      reader can drag is an invitation to fight that (Keisuke, hands-on 2026-08-06). */
   resize: none; }
-.tb-lane .tb-anchor { display: none; }   /* the lane's own title already says what it is about */
+.tb-docbar .tb-pane-label { display: none; }   /* the lane's own title already says what it is about */
 /* When there is not enough width to sit BESIDE the panel, the lane goes above it and takes the
    available width, up to its own maximum. Which of the two applies is decided by measurement in placeLane, not by a guessed
    breakpoint — the panel's width follows its labels, so no fixed number is right for long. A host
-   with its own bottom chrome can watch for the tb-lane-stacked class on the root element. */
-.tb-lane.tb-stacked { left: var(--tb-lane-left, 16px); right: var(--tb-lane-right, 16px); --tb-panel-reserve: 0px; }
-.tb-popup { position: fixed; z-index: 10000; width: 320px; background: var(--tb-popup-bg); color: var(--tb-popup-fg);
+   with its own bottom chrome can watch for the tb-docbar-stacked class on the root element. */
+.tb-docbar.tb-stacked { left: var(--tb-docbar-left, 16px); right: var(--tb-docbar-right, 16px); --tb-console-reserve: 0px; }
+.tb-pane { position: fixed; z-index: 10000; width: 320px; background: var(--tb-pane-bg); color: var(--tb-pane-fg);
   border: 1px solid var(--tb-border); border-radius: 10px; box-shadow: 0 8px 28px rgba(0,0,0,.35); padding: 11px; font: 13px -apple-system, system-ui, sans-serif; }
-.tb-popup .tb-anchor { font-size: 11px; color: var(--tb-muted); margin-bottom: 4px; }
-.tb-popup textarea { width: 100%; box-sizing: border-box; min-height: 52px; font: inherit; border: 1px solid var(--tb-border); border-radius: 6px; padding: 6px; background: transparent; color: inherit; }
+.tb-pane .tb-pane-label { font-size: 11px; color: var(--tb-muted); margin-bottom: 4px; }
+.tb-pane textarea { width: 100%; box-sizing: border-box; min-height: 52px; font: inherit; border: 1px solid var(--tb-border); border-radius: 6px; padding: 6px; background: transparent; color: inherit; }
 .tb-reactions { display: flex; flex-wrap: wrap; gap: 4px; margin: 7px 0; }
 .tb-reactions button { cursor: pointer; border: 1px solid var(--tb-border); background: transparent; color: inherit; border-radius: 14px; padding: 3px 9px; font: 12px system-ui; }
 .tb-reactions button.on { background: var(--tb-mark-bg); border-color: var(--tb-mark-outline); font-weight: 700; }
-.tb-existing { margin-top: 7px; border-top: 1px solid var(--tb-border); padding-top: 5px; max-height: 130px; overflow: auto; font-size: 12px; }
-.tb-existing .tb-c { padding: 4px 0; border-bottom: 1px dotted var(--tb-border); }
+.tb-timeline { margin-top: 7px; border-top: 1px solid var(--tb-border); padding-top: 5px; max-height: 130px; overflow: auto; font-size: 12px; }
+.tb-timeline .tb-c { padding: 4px 0; border-bottom: 1px dotted var(--tb-border); }
 /* a reply renders as its OWN flat row in the timeline — NOT nested/indented under its comment (REQ-704):
    every utterance (comment or reply) is one row appended in chronological order, each carrying its own
    actor color + label so who-said-what stays legible without an indent tree. */
-.tb-existing .tb-c-reply { padding: 4px 0; border-bottom: 1px dotted var(--tb-border); font-size: 12px; }
-.tb-existing .tb-who { font-weight: 700; margin-right: 2px; }
+.tb-timeline .tb-c-reply { padding: 4px 0; border-bottom: 1px dotted var(--tb-border); font-size: 12px; }
+.tb-timeline .tb-who { font-weight: 700; margin-right: 2px; }
 /* a region's move/resize history rendered inline in the thread, alongside comments but NOT deletable (REQ-704/009). */
-.tb-existing .tb-ev { padding: 3px 0; border-bottom: 1px dotted var(--tb-border); color: var(--tb-muted); font-size: 11px; }
+.tb-timeline .tb-ev { padding: 3px 0; border-bottom: 1px dotted var(--tb-border); color: var(--tb-muted); font-size: 11px; }
 /* the marker under a sent-but-unresolved utterance in a conversation (interactive transport, REQ-702):
    the integrator resolves it via its own UI/events — the library never invents an ack. */
-.tb-existing .tb-pending-note { padding: 2px 0 5px; color: var(--tb-muted); font-size: 11px; font-style: italic; }
+.tb-timeline .tb-pending-note { padding: 2px 0 5px; color: var(--tb-muted); font-size: 11px; font-style: italic; }
 .tb-acts { display: flex; gap: 6px; justify-content: flex-end; margin-top: 7px; }
 .tb-acts button { cursor: pointer; border: none; border-radius: 6px; padding: 6px 14px; }
 .tb-save { background: var(--tb-accent); color: #fff; } .tb-cancel { background: #bbb; color: #111; }
@@ -173,7 +173,7 @@ const PANEL_CSS = `
    at least one, so an empty commit is never offered (REQ: Principal 2026-08-05). */
 .tb-save:disabled { background: #b9bcc0; color: #eef0f2; cursor: not-allowed; opacity: .65; }
 /* right-click context menu on an anchor (badge / region pin) → delete the whole anchor (REQ: Keisuke 2026-06-15). */
-.tb-ctxmenu { position: fixed; z-index: 10001; background: var(--tb-popup-bg); color: var(--tb-popup-fg); border: 1px solid var(--tb-border); border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,.35); padding: 4px; font: 13px -apple-system, system-ui, sans-serif; min-width: 140px; }
+.tb-ctxmenu { position: fixed; z-index: 10001; background: var(--tb-pane-bg); color: var(--tb-pane-fg); border: 1px solid var(--tb-border); border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,.35); padding: 4px; font: 13px -apple-system, system-ui, sans-serif; min-width: 140px; }
 .tb-ctxmenu .tb-ctxitem { padding: 7px 10px; border-radius: 6px; cursor: pointer; }
 .tb-ctxmenu .tb-ctxitem:hover { background: var(--tb-mark-bg); }
 `;
@@ -185,8 +185,8 @@ const PANEL_CSS = `
  *   `{ ai: '#2563eb', human: '#db2777' }`; an anchor is tinted by its last speaker's category. With
  *   no map, authors fall back to a generic per-identity hue. Tackback ships no categories or colors.
  *   `controls` selects which panel buttons are shown (the rest still work via the API). Defaults:
- *   `{ author: true, export: true, import: false, theme: true, marks: true, clear: true, docLane: true }`.
- *   `docLane` is the conversation about the document AS A WHOLE, composed from a bar across the
+ *   `{ author: true, export: true, import: false, theme: true, marks: true, clear: true, docBar: true }`.
+ *   `docBar` is the conversation about the document AS A WHOLE, composed from a bar across the
  *   bottom of the viewport — it is about no particular place, so it has no mark to hang on. With the
  *   lane off, `panel.openDocumentThread()` opens that same thread as an ordinary Pane. (`clear` is
  *   the one control with no API equivalent — see the README.)
@@ -295,7 +295,7 @@ export function attachPanel(core, options = {}) {
       }
     }
   });
-  // `.tb-mark` is a class on the HOST's own elements — the teardown sweep could never remove those
+  // `.tb-commentable` is a class on the HOST's own elements — the teardown sweep could never remove those
   // nodes, and did not think to remove the class either. renderMarks clears them each pass; this is
   // the last one.
   // Released through the ELEMENTS, not through a search of the document. A host that detaches a
@@ -303,11 +303,11 @@ export function attachPanel(core, options = {}) {
   // element later would bring the panel's class back with it — the same shape the indexing marks
   // needed, and one the outside census cannot see, because the element has left the subtree it walks.
   const marked = new Set();
-  const markHost = (element) => { element.classList.add('tb-mark'); marked.add(element); };
-  const unmarkHosts = () => { for (const e of marked) e.classList.remove('tb-mark'); marked.clear(); };
+  const markHost = (element) => { element.classList.add('tb-commentable'); marked.add(element); };
+  const unmarkHosts = () => { for (const e of marked) e.classList.remove('tb-commentable'); marked.clear(); };
   own(unmarkHosts);
   // State this panel writes onto the document root, as a namespace rather than as a list of three
-  // classes to remember: `tb-hide`, `tb-popup-open`, `tb-lane-stacked` are all toggled from several
+  // classes to remember: `tb-hide`, `tb-pane-open`, `tb-docbar-stacked` are all toggled from several
   // places, and one of them survived teardown because the removal was a hand-written line rather
   // than a consequence of having set it. The `tb-` namespace on the root belongs to this library.
   own(() => {
@@ -367,7 +367,7 @@ export function attachPanel(core, options = {}) {
 
   // ---- panel chrome ----------------------------------------------------------------------------
   // `controls` chooses which buttons appear. Hiding a button never hides the DATA behind it, but the substitute differs by control:
-  // theme/marks/docLane have PanelInstance methods; author/export/import have core equivalents
+  // theme/marks/docBar have PanelInstance methods; author/export/import have core equivalents
   // (setAuthor / exportEnvelope / importEnvelope — the dialogs themselves are the panel's own); and
   // `clear` has none, because the button also confirms, closes an open Pane and drops an uncommitted
   // region rect. See the README table.
@@ -376,7 +376,7 @@ export function attachPanel(core, options = {}) {
   // `import` is OFF by default — it is the receiver / AI-participant path (STORY-02/04), which is
   // post-v1 scope; enable it explicitly with `controls: { import: true }`. Every control is config-
   // toggleable here, so an integrator can show/hide any menu item (Keisuke 2026-06-15).
-  const CONTROL_DEFAULTS = { author: true, export: true, import: false, theme: true, marks: true, clear: true, docLane: true };
+  const CONTROL_DEFAULTS = { author: true, export: true, import: false, theme: true, marks: true, clear: true, docBar: true };
   const controls = { ...CONTROL_DEFAULTS, ...(options.controls || {}) };
 
   // The theme switch (when shown) cycles named "play" themes: default (OS auto) → ocean → passion.
@@ -390,8 +390,8 @@ export function attachPanel(core, options = {}) {
   let themeIdx = 0;
   const themeLabel = () => t('panel.theme', { mode: t(`theme.${THEME_CYCLE[themeIdx].key}`) });
 
-  const panel = el(doc, 'div', 'tb-panel');
-  const countEl = el(doc, 'div', 'tb-count');
+  const panel = el(doc, 'div', 'tb-console');
+  const countEl = el(doc, 'div', 'tb-console-count');
   panel.appendChild(countEl);
 
   let authorInput = null;
@@ -449,7 +449,7 @@ export function attachPanel(core, options = {}) {
     };
     panel.appendChild(clearBtn);
   }
-  const hintEl = el(doc, 'div', 'tb-hint');
+  const hintEl = el(doc, 'div', 'tb-console-hint');
   hintEl.textContent = t('hint.html');
   panel.appendChild(hintEl);
   target.appendChild(ownNode(panel));
@@ -460,18 +460,18 @@ export function attachPanel(core, options = {}) {
   // its mark: the count and the attention tint live on the head, visible without opening anything.
   let lane = null, laneHead = null, laneTitle = null, laneCount = null, laneBody = null, laneComposer = null, laneConv = null;
   let laneHost = null;
-  if (controls.docLane) {
-    lane = el(doc, 'div', 'tb-lane');
+  if (controls.docBar) {
+    lane = el(doc, 'div', 'tb-docbar');
     // a real <button>: the thing it replaced was one, and focusability, Enter/Space and the
     // announced expanded state come with the element rather than having to be re-created on a div.
-    laneHead = el(doc, 'button', 'tb-lane-head');
+    laneHead = el(doc, 'button', 'tb-docbar-head');
     laneHead.setAttribute('type', 'button');
     laneHead.setAttribute('aria-expanded', 'false');
-    laneTitle = el(doc, 'span', 'tb-lane-title'); laneTitle.textContent = t('panel.docLane');
-    laneCount = el(doc, 'span', 'tb-lane-count');
+    laneTitle = el(doc, 'span', 'tb-docbar-title'); laneTitle.textContent = t('panel.docBar');
+    laneCount = el(doc, 'span', 'tb-docbar-count');
     laneHead.append(laneTitle, laneCount);
-    laneBody = el(doc, 'div', 'tb-lane-body');           // the thread, revealed on expand
-    laneComposer = el(doc, 'div', 'tb-lane-composer');   // …and the input, which never hides
+    laneBody = el(doc, 'div', 'tb-docbar-body');           // the thread, revealed on expand
+    laneComposer = el(doc, 'div', 'tb-docbar-composer');   // …and the input, which never hides
     laneHead.onclick = () => toggleLane();
     lane.append(laneHead, laneBody, laneComposer);
     target.appendChild(ownNode(lane));
@@ -488,7 +488,7 @@ export function attachPanel(core, options = {}) {
       draftKey: anchorKey({ type: 'document' }),
       threadKey: 'document',
       anchor: { type: 'document' },
-      // the lane is not a popup: committing never dismisses it, so "close" is a no-op here
+      // the lane is not a pane: committing never dismisses it, so "close" is a no-op here
       onClose: () => {},
       onSave: (body, reaction) => core.addComment({ anchor: { type: 'document' }, body, reaction }),
     });
@@ -699,7 +699,7 @@ export function attachPanel(core, options = {}) {
     for (const id of toResolve) core.markResolved(id);
   }
 
-  // ---- popup -----------------------------------------------------------------------------------
+  // ---- pane -----------------------------------------------------------------------------------
   // Everything a thread is currently shown in. One question — timelineOpen() — is asked of each,
   // rather than each kind of host being asked in its own way somewhere else.
   const hosts = new Set();
@@ -714,7 +714,7 @@ export function attachPanel(core, options = {}) {
     hosts.delete(host);
     el?.remove();
   }
-  let popup = null;
+  let pane = null;
   let popupCleanup = null;
   let popupHost = null;    // the host wrapping the open Pane, if any
   let popupConv = null;    // the conversation the open Pane hosts, if any
@@ -733,13 +733,13 @@ export function attachPanel(core, options = {}) {
     if (a.type === 'block') return `block:${a.elementId}`;
     return null;
   }
-  // The pending region's lifetime IS the popup's: closing the popup (outside-click, Escape, Cancel,
+  // The pending region's lifetime IS the pane's: closing the pane (outside-click, Escape, Cancel,
   // empty save) removes the dashed rect, so no orphaned region ever lingers (Keisuke 2026-06-15).
   function closePopup() {
     popupCleanup?.(); popupCleanup = null;
-    releaseHost(popupHost); popupHost = null; popupConv = null; popup = null;
+    releaseHost(popupHost); popupHost = null; popupConv = null; pane = null;
     if (pendingRegionEl) { pendingRegionEl.remove(); pendingRegionEl = null; }
-    doc.documentElement.classList.remove('tb-popup-open');   // region affordances (resize grip / move cursor) re-enabled
+    doc.documentElement.classList.remove('tb-pane-open');   // region affordances (resize grip / move cursor) re-enabled
     core.reportThreadVisibility();
   }
 
@@ -794,7 +794,7 @@ export function attachPanel(core, options = {}) {
   // ---- the conversation view --------------------------------------------------------------------
   // One thread, rendered and composed: the timeline rows, the input, the reactions, the commit
   // button, the send/pending state machine, and the reconciliation that keeps an OPEN thread up to
-  // date. It lives here rather than inside the popup because a thread is not a popup — the document
+  // date. It lives here rather than inside the pane because a thread is not a pane — the document
   // thread gets a second surface, and both host the same conversation.
   //
   // The host supplies only what is genuinely its own: how to close, and what to clean up after a
@@ -813,8 +813,8 @@ export function attachPanel(core, options = {}) {
   let lastAuthoritative = null;   // where the store last said this thread points, for when it empties
   const draft = (draftKey != null && drafts.get(draftKey)) || null;
   let reactionId = draft?.reaction || '';
-  const anchorEl = el(doc, 'div', 'tb-anchor'); anchorEl.textContent = '📍 ' + anchorLabel;
-  const ta = doc.createElement('textarea'); ta.placeholder = t('popup.placeholder');
+  const anchorEl = el(doc, 'div', 'tb-pane-label'); anchorEl.textContent = '📍 ' + anchorLabel;
+  const ta = doc.createElement('textarea'); ta.placeholder = t('pane.placeholder');
   if (draft?.body) ta.value = draft.body;          // restore preserved input
   const rwrap = el(doc, 'div', 'tb-reactions');
   for (const def of reactions) {
@@ -826,7 +826,7 @@ export function attachPanel(core, options = {}) {
     rwrap.appendChild(b);
   }
   let commit = popupCommit(core.getTransport());   // save vs send + close vs stay-open (REQ-702/703)
-  const exwrap = el(doc, 'div', 'tb-existing');
+  const exwrap = el(doc, 'div', 'tb-timeline');
   // Render the thread inline as ONE flat, TIME-ORDERED timeline (REQ-704): every utterance —
   // comment or reply — is its own row carrying its actor color + label, interleaved with the
   // region's move/resize history (REQ-009), which is an immutable record of how the anchor was
@@ -836,7 +836,7 @@ export function attachPanel(core, options = {}) {
   // comment and goes with it — so removing a comment silently took a whole side of the conversation
   // away. Deletion is an ANCHOR-level act: right-click the anchor → Delete anchor. The core
   // deleteComment API is untouched; it is simply not an affordance the Pane offers.
-  // rows re-tint live when the injected category map changes (setActorColors), so an open popup
+  // rows re-tint live when the injected category map changes (setActorColors), so an open pane
   // never keeps showing colors from the previous map.
   const tinted = [];
   const applyTint = (r) => {
@@ -857,7 +857,7 @@ export function attachPanel(core, options = {}) {
     const { icon } = c.reaction ? resolveReaction(reactions, c.reaction, i18n.active) : { icon: '' };
     const wl = whoLabel(c.author);
     if (wl) row.appendChild(wl);
-    row.append(doc.createTextNode(`${icon ? icon + ' ' : ''}${c.body || t('popup.emojiOnly')}`));
+    row.append(doc.createTextNode(`${icon ? icon + ' ' : ''}${c.body || t('pane.emojiOnly')}`));
     tintRow(row, wl, c.author);
     return row;
   };
@@ -895,7 +895,7 @@ export function attachPanel(core, options = {}) {
   const markSent = () => {
     pendingNote?.remove();
     pendingNote = el(doc, 'div', 'tb-pending-note');
-    pendingNote.textContent = lbl('popup.pending', 'sent — awaiting reply…');
+    pendingNote.textContent = lbl('pane.pending', 'sent — awaiting reply…');
     exwrap.appendChild(pendingNote);
     sendState = 'pending';
   };
@@ -905,7 +905,7 @@ export function attachPanel(core, options = {}) {
     if (sendState === 'ok') { pendingNote?.remove(); pendingNote = null; sendState = null; }
   };
   // Rows for utterances that are no longer in the thread have to GO. Reconciliation was
-  // insertion-only, which the popup survived because both destructive paths close it first; a
+  // insertion-only, which the pane survived because both destructive paths close it first; a
   // host that persists would have shown a deleted comment forever.
   const prune = (items) => {
     const live = new Set(items.map((i) => i.key));
@@ -957,8 +957,8 @@ export function attachPanel(core, options = {}) {
   // is the DISPLAY: replies now render as flat, actor-labeled rows in this timeline (REQ-704), for
   // the multi-party conversation the Interplay track drives.
   const acts = el(doc, 'div', 'tb-acts');
-  const cancel = btn(doc, t('popup.cancel'), 'tb-cancel');
-  const save = btn(doc, commit.action === 'send' ? lbl('popup.send', 'Send') : t('popup.save'), 'tb-save');
+  const cancel = btn(doc, t('pane.cancel'), 'tb-cancel');
+  const save = btn(doc, commit.action === 'send' ? lbl('pane.send', 'Send') : t('pane.save'), 'tb-save');
   // The commit button greys out (disabled) whenever the input is empty — no body text AND no reaction
   // — and re-enables the instant either is present. A commit needs at least one, so an empty commit is
   // never offered (pure UX; no domain meaning). Hoisted so the reaction handlers above can call it.
@@ -1023,9 +1023,9 @@ export function attachPanel(core, options = {}) {
     // re-derive rather than reuse what was captured at open: the transport can change under an
     // open Pane, and then Save/Send and close-vs-stay-open must both follow it.
     commit = popupCommit(core.getTransport());
-    ta.placeholder = t('popup.placeholder');
-    cancel.textContent = t('popup.cancel');
-    save.textContent = commit.action === 'send' ? lbl('popup.send', 'Send') : t('popup.save');
+    ta.placeholder = t('pane.placeholder');
+    cancel.textContent = t('pane.cancel');
+    save.textContent = commit.action === 'send' ? lbl('pane.send', 'Send') : t('pane.save');
     [...rwrap.children].forEach((b, idx) => {
       const def = reactions[idx]; if (!def) return;
       const { icon, label } = resolveReaction(reactions, def.id, i18n.active);
@@ -1054,9 +1054,9 @@ export function attachPanel(core, options = {}) {
 
   function openPopup({ anchorLabel, existing, onSave, draftKey, threadKey: initialThreadKey = null, anchor = null, ephemeralDraft }, ev) {
     closePopup();
-    popup = el(doc, 'div', 'tb-popup');
-    const mine = popup;   // identity, so a Pane that replaces this one cannot be mistaken for it
-    doc.documentElement.classList.add('tb-popup-open');   // lock region affordances while editing (REQ-008): no resize grip on hover, no move cursor
+    pane = el(doc, 'div', 'tb-pane');
+    const mine = pane;   // identity, so a Pane that replaces this one cannot be mistaken for it
+    doc.documentElement.classList.add('tb-pane-open');   // lock region affordances while editing (REQ-008): no resize grip on hover, no move cursor
     const conv = createConversation({
       anchorLabel, existing, onSave, draftKey, threadKey: initialThreadKey, anchor,
       onClose: closePopup,
@@ -1065,28 +1065,28 @@ export function attachPanel(core, options = {}) {
     });
     popupConv = conv;
     popupHost = createHost({ collapsible: false }, () => core.reportThreadVisibility());
-    popupHost.attach(conv, popup);
+    popupHost.attach(conv, pane);
     hosts.add(popupHost);
-    popup.append(...conv.nodes);
-    doc.body.appendChild(popup);
+    pane.append(...conv.nodes);
+    doc.body.appendChild(pane);
     core.reportThreadVisibility();
     const vw = globalThis.innerWidth || 1024, vh = globalThis.innerHeight || 768;
-    const pos = clampToViewport(ev?.clientX ?? 120, ev?.clientY ?? 120, popup.offsetWidth, popup.offsetHeight, vw, vh);
-    Object.assign(popup.style, { left: pos.x + 'px', top: pos.y + 'px' });
+    const pos = clampToViewport(ev?.clientX ?? 120, ev?.clientY ?? 120, pane.offsetWidth, pane.offsetHeight, vw, vh);
+    Object.assign(pane.style, { left: pos.x + 'px', top: pos.y + 'px' });
     conv.focus();
-    // dismiss on click outside the popup or Escape. Block/range keep the unsaved draft (restorable on
+    // dismiss on click outside the pane or Escape. Block/range keep the unsaved draft (restorable on
     // reopen); a PENDING region is ephemeral — its rect is removed on close (REQ-012) and would never
     // recur, so its draft is DISCARDED too, per REQ-703 (Keisuke: a dismissed uncommitted region keeps
     // nothing). §6 PR #132 gpt-5.5 finding.
     const dismissPreserve = () => { if (ephemeralDraft) conv.clearDraft(); else conv.preserveDraft(); closePopup(); };
-    const onDocDown = (e) => { if (popup && !e.target.closest('.tb-popup')) dismissPreserve(); };
+    const onDocDown = (e) => { if (pane && !e.target.closest('.tb-pane')) dismissPreserve(); };
     const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); dismissPreserve(); } };
     // The same deferred-ownership shape the anchor menu has, and the reason it needs identity rather
     // than existence: `popupCleanup` holds exactly one remover, so if this Pane has been closed — or
     // REPLACED, which "is there a Pane?" cannot tell apart — by the time the deferred callback runs, whichever
     // set of listeners loses that race can never be taken off the document again.
     const register = () => {
-      if (popup !== mine) return;
+      if (pane !== mine) return;
       doc.addEventListener('mousedown', onDocDown, true); doc.addEventListener('keydown', onKey, true);
     };
     const cancelRegister = later(register);   // deferred so the opening event doesn't self-dismiss
@@ -1125,12 +1125,12 @@ export function attachPanel(core, options = {}) {
   }
 
   // ---- gestures --------------------------------------------------------------------------------
-  // The block/range popup opens on right-button RELEASE (pointerup), NOT on `contextmenu`. On macOS the
+  // The block/range pane opens on right-button RELEASE (pointerup), NOT on `contextmenu`. On macOS the
   // `contextmenu` event fires on right-button DOWN — before a region drag can be recognized — so opening
-  // the popup there made it appear mid-drag and block the gesture (Keisuke 2026-06-15). The contextmenu
+  // the pane there made it appear mid-drag and block the gesture (Keisuke 2026-06-15). The contextmenu
   // listener now only SUPPRESSES the native menu over content; onUp decides block/range vs region.
   const openCtxPopup = (e) => {
-    if (e.target.closest('.tb-popup,.tb-panel,.tb-lane')) return;
+    if (e.target.closest('.tb-pane,.tb-console,.tb-docbar')) return;
     const elx = e.target.closest('[data-tb-anchor]');
     if (!elx) return;
     // text selected within this element → pin the phrase (range); else comment the block.
@@ -1146,13 +1146,13 @@ export function attachPanel(core, options = {}) {
     openPopup({ anchorLabel: anchorLabelOf(anchor), existing: [], draftKey: anchorKey(anchor), threadKey: threadKeyOf({ anchor }), anchor, onSave: (body, reaction) => core.addComment({ anchor, body, reaction, snapshot }) }, e);
   };
   const onContext = (e) => {
-    if (e.target.closest('.tb-popup,.tb-panel,.tb-lane')) return;
+    if (e.target.closest('.tb-pane,.tb-console,.tb-docbar')) return;
     // right-click ON an anchor (badge / region pin) → the anchor context menu (Delete anchor), not a new
     // comment gesture. The anchor carries its comments via `__tbComments` (set in renderMarks).
     const anchorEl = e.target.closest('.tb-badge,.tb-pin');
     if (anchorEl && anchorEl.__tbComments) { e.preventDefault(); openAnchorMenu(anchorEl.__tbComments, e); return; }
     // suppress the native menu wherever a right-click could start commenting/region work (content root or
-    // a registered surface), so the OS menu never fights the gesture. The popup itself opens on pointerup.
+    // a registered surface), so the OS menu never fights the gesture. The pane itself opens on pointerup.
     if (e.target.closest('[data-tb-anchor]') || e.target.closest(regionSel) || (root.contains && root.contains(e.target))) e.preventDefault();
   };
   onDoc('contextmenu', onContext);
@@ -1234,7 +1234,7 @@ export function attachPanel(core, options = {}) {
   // right-drag a rectangle over a "surface" to make a region anchor. A surface is a PDF page (from
   // the pdf adapter) OR any non-text element — images, figures, svg, or anything matching the
   // configurable `regionSurfaces` selector (so you can comment on a chart/diagram/image, not just a
-  // PDF). The dragged rect stays on screen as a PENDING preview while the popup is open, so you can
+  // PDF). The dragged rect stays on screen as a PENDING preview while the pane is open, so you can
   // see what you selected; it becomes the saved region on save (ported from the region proto).
   // A surface must be able to host an absolutely-positioned overlay, so it's a CONTAINER element
   // (PDF page, a marked element, or a <figure> wrapping an image/diagram) — not a bare <img> (a void
@@ -1264,10 +1264,10 @@ export function attachPanel(core, options = {}) {
   // underlying text and the pin lagged behind (Keisuke 2026-06-15). Topmost-first: last overlay wins.
   // Returns true (and suppresses the native text-selection) if a drag started.
   function startHandleDrag(e) {
-    // while a comment popup is open, the region is LOCKED — no move/resize, and the anchor icon does not
+    // while a comment pane is open, the region is LOCKED — no move/resize, and the anchor icon does not
     // re-trigger — so an in-progress comment is never disturbed (Keisuke 2026-06-15). Clicking elsewhere
-    // dismisses the popup first (preserving the draft), then the region is interactive again.
-    if (popup) return false;
+    // dismisses the pane first (preserving the draft), then the region is interactive again.
+    if (pane) return false;
     for (let i = regionOverlays.length - 1; i >= 0; i--) {
       const ov = regionOverlays[i];
       let handle = null;
@@ -1327,8 +1327,8 @@ export function attachPanel(core, options = {}) {
   }
 
   const onPointerDown = (e) => {
-    // never start a gesture on Tackback's own UI (popup/panel).
-    if (e.target.closest('.tb-popup,.tb-panel,.tb-lane')) return;
+    // never start a gesture on Tackback's own UI (pane/panel).
+    if (e.target.closest('.tb-pane,.tb-console,.tb-docbar')) return;
     // LEFT button on a region's anchor pin → move; on its hover-revealed NW grip → resize (REQ-008).
     // Right-drag is reserved for CREATING a region, so move/resize is left-only. A left-click that does
     // NOT drag falls through to the pin/box onclick → open thread (a no-movement handleDrag is a no-op).
@@ -1348,7 +1348,7 @@ export function attachPanel(core, options = {}) {
     draw = { surf, x0: e.clientX - r.left, y0: e.clientY - r.top, moved: false, pointerId: e.pointerId };
     // NOTE: capture is taken in onMove once a DRAG is confirmed — NOT here. Capturing on a plain
     // right-click retargets the following `contextmenu` to the capture element, so e.target is no
-    // longer the clicked block and the block/range popup never opens (the "can't comment" bug).
+    // longer the clicked block and the block/range pane never opens (the "can't comment" bug).
   };
   // W-NWBW: anchor a DOCUMENT-surface region to the content element under its top-left, in ABSOLUTE px,
   // so it tracks that content and is immune to TOTAL-page-size changes — an embedded PDF sub-surface
@@ -1365,11 +1365,11 @@ export function attachPanel(core, options = {}) {
     const firstCovered = (capture.covered || []).find((c) => c.in);
     let aEl = (firstCovered && doc.getElementById(firstCovered.in)) || null;
     if (!aEl || !aEl.id) {
-      // elementFromPoint can land on Tackback's own fixed chrome (panel, popup, lane) rather than on
+      // elementFromPoint can land on Tackback's own fixed chrome (panel, pane, lane) rather than on
       // the content the region is over; anchoring a region to the chrome would be nonsense.
       const p = doc.elementFromPoint(Math.max(0, Math.min(ctlx, (doc.documentElement.clientWidth || ctlx) - 1)),
                                      Math.max(0, Math.min(ctly, (doc.documentElement.clientHeight || ctly) - 1)));
-      aEl = (p && !p.closest('.tb-panel,.tb-popup,.tb-lane') && p.closest('[id]')) || aEl;
+      aEl = (p && !p.closest('.tb-console,.tb-pane,.tb-docbar') && p.closest('[id]')) || aEl;
     }
     if (!aEl || !aEl.id) return null;
     const eR = aEl.getBoundingClientRect();
@@ -1377,7 +1377,7 @@ export function attachPanel(core, options = {}) {
              w: rect.width * surf.clientWidth, h: rect.height * surf.clientHeight };
   }
   // Finalize a region draw `d` ending at (clientX,clientY): if past threshold, create the pending region
-  // and open its popup (CLAMPED into the viewport so it is visible even when the drag ended off-screen,
+  // and open its pane (CLAMPED into the viewport so it is visible even when the drag ended off-screen,
   // Keisuke 2026-06-15). Returns true if a region was created, false otherwise (caller cleans up).
   function finalizeRegion(d, clientX, clientY) {
     const r = d.surf.getBoundingClientRect();
@@ -1397,7 +1397,7 @@ export function attachPanel(core, options = {}) {
     const rectEl = drawEl; drawEl = null;
     rectEl.className = 'tb-pending';
     // openPopup clamps {clientX,clientY} into the viewport — a drag that ended below/above the visible
-    // area still pops up at the nearest edge (never an invisible popup + a lingering dashed region).
+    // area still pops up at the nearest edge (never an invisible pane + a lingering dashed region).
     openPopup({ anchorLabel: anchorLabelOf(anchor), existing: [], draftKey: anchorKey(anchor), anchor, ephemeralDraft: true, onSave: (body, reaction) => core.addComment({ anchor, body, reaction }) }, { clientX, clientY });
     pendingRegionEl = rectEl;
     return true;
@@ -1409,7 +1409,7 @@ export function attachPanel(core, options = {}) {
     }
     if (!draw) return;
     // right button no longer down but we never got pointerup (released OUTSIDE the window) — finalize now
-    // using the last in-window position, so a drag off the edge still opens the popup (no stuck dashed rect).
+    // using the last in-window position, so a drag off the edge still opens the pane (no stuck dashed rect).
     if (!(e.buttons & 2)) {
       const d = draw; draw = null;
       try { doc.documentElement?.releasePointerCapture?.(d.pointerId); } catch { /* ignore */ }
@@ -1425,7 +1425,7 @@ export function attachPanel(core, options = {}) {
       drawEl = el(doc, 'div', 'tb-draw'); ensurePositioned(draw.surf, own); draw.surf.appendChild(drawEl);
       // capture NOW (drag confirmed) so the rect tracks even if the pointer leaves the surface
       // (N1, NFR-005/007). Doing it here — not on pointerdown — keeps a plain right-click's
-      // contextmenu on its real target so the block/range popup still opens.
+      // contextmenu on its real target so the block/range pane still opens.
       try { (doc.documentElement || draw.surf).setPointerCapture?.(draw.pointerId); } catch { /* ignore */ }
     }
     Object.assign(drawEl.style, { left: Math.min(x, draw.x0) + 'px', top: Math.min(y, draw.y0) + 'px', width: Math.abs(x - draw.x0) + 'px', height: Math.abs(y - draw.y0) + 'px' });
@@ -1435,13 +1435,13 @@ export function attachPanel(core, options = {}) {
     if (e.button !== 2 || !draw) return;
     const d = draw; draw = null;
     try { doc.documentElement?.releasePointerCapture?.(e.pointerId); } catch { /* ignore */ }
-    // a right-drag past the threshold = region (finalizeRegion creates it + opens the clamped popup);
-    // below threshold = a plain right-click → open the block/range popup NOW (on release), not on the
+    // a right-drag past the threshold = region (finalizeRegion creates it + opens the clamped pane);
+    // below threshold = a plain right-click → open the block/range pane NOW (on release), not on the
     // contextmenu-down (which fired before this).
     if (!finalizeRegion(d, e.clientX, e.clientY)) { drawEl?.remove(); drawEl = null; openCtxPopup(e); }
   };
   // if the gesture is cancelled (e.g. capture lost), still finalize from the last in-window position so
-  // we never leave a stuck dashed rect with no popup.
+  // we never leave a stuck dashed rect with no pane.
   const onCancel = (e) => {
     if (handleDrag) { handleDrag = null; return; }
     if (!draw) return;
@@ -1451,7 +1451,7 @@ export function attachPanel(core, options = {}) {
   };
   // If the button is released OUTSIDE the window, pointerup may never be delivered — but the pointer
   // capture IS released, firing `lostpointercapture`. Finalize from the last in-window position so the
-  // popup appears at the clamped viewport edge immediately, WITHOUT waiting for the cursor to come back
+  // pane appears at the clamped viewport edge immediately, WITHOUT waiting for the cursor to come back
   // (Keisuke 2026-06-15). A window blur (focus left mid-drag) is a second fallback. Both are guarded by
   // `draw`, and are no-ops after a normal pointerup (which already set draw=null).
   const finalizeFromCaptureLoss = () => {
@@ -1493,34 +1493,34 @@ export function attachPanel(core, options = {}) {
     // MEASURE the panel rather than guessing at it: its width follows its labels, so a fixed
     // reservation is wrong the moment the locale changes or a control is toggled. The panel is
     // Tackback's own chrome, so measuring it is fair game; anything the HOST puts down there is the
-    // host's to declare, via --tb-lane-left / --tb-lane-right.
+    // host's to declare, via --tb-docbar-left / --tb-docbar-right.
     const panelBox = panel.getBoundingClientRect();
     const panelW = Math.ceil(panelBox.width) || 200;
     // Would sitting beside the panel leave a lane worth typing into? Don't compute it — the host's
-    // own reservation (--tb-lane-left) is part of the answer and this code cannot know it. Lay it
+    // own reservation (--tb-docbar-left) is part of the answer and this code cannot know it. Lay it
     // out beside, MEASURE, and step above only if what came back is too narrow to use. A 22px
     // composer is not a smaller version of the feature; it is a broken one.
-    lane.style.setProperty('--tb-panel-reserve', `${panelW + 16}px`);
+    lane.style.setProperty('--tb-console-reserve', `${panelW + 16}px`);
     const { stacked } = resolveLaneLayout((tryStacked) => {
       lane.classList.toggle('tb-stacked', tryStacked);
-      doc.documentElement.classList.toggle('tb-lane-stacked', tryStacked);
+      doc.documentElement.classList.toggle('tb-docbar-stacked', tryStacked);
       return lane.getBoundingClientRect().width;
     });
     lane.classList.toggle('tb-stacked', stacked);
-    doc.documentElement.classList.toggle('tb-lane-stacked', stacked);
+    doc.documentElement.classList.toggle('tb-docbar-stacked', stacked);
     if (stacked) {
       // clear OUR chrome by measuring it; anything the host puts down there is the host's to move,
       // which the root class above lets it notice.
       const lift = Math.ceil((globalThis.innerHeight || 768) - panelBox.top) + 8;
-      lane.style.setProperty('--tb-lane-lift', `${Math.max(0, lift)}px`);
+      lane.style.setProperty('--tb-docbar-lift', `${Math.max(0, lift)}px`);
     } else {
-      lane.style.setProperty('--tb-lane-lift', '0px');
+      lane.style.setProperty('--tb-docbar-lift', '0px');
     }
-    doc.documentElement.classList.toggle('tb-lane-stacked', stacked);
-    if (!vv) { lane.style.bottom = `calc(16px + env(safe-area-inset-bottom, 0px) + var(--tb-lane-lift, 0px))`; return; }
+    doc.documentElement.classList.toggle('tb-docbar-stacked', stacked);
+    if (!vv) { lane.style.bottom = `calc(16px + env(safe-area-inset-bottom, 0px) + var(--tb-docbar-lift, 0px))`; return; }
     // a software keyboard shrinks the visual viewport without moving the layout viewport
     const hidden = Math.max(0, (globalThis.innerHeight || 0) - (vv.height + vv.offsetTop));
-    lane.style.bottom = `calc(16px + env(safe-area-inset-bottom, 0px) + var(--tb-lane-lift, 0px) + ${Math.round(hidden)}px)`;
+    lane.style.bottom = `calc(16px + env(safe-area-inset-bottom, 0px) + var(--tb-docbar-lift, 0px) + ${Math.round(hidden)}px)`;
   };
   if (vv) {
     for (const [type, fn] of [['resize', queueRecalc], ['scroll', queueRecalc], ['resize', placeLane], ['scroll', placeLane]]) {
@@ -1590,7 +1590,7 @@ export function attachPanel(core, options = {}) {
     /** Open the conversation about the document as a whole — the lane when it is on, else a Pane. */
     openDocumentThread() { if (destroyed) return; openDocumentThread(); },
     /** Expand or collapse the document lane. Returns its resulting state (false when it is off). */
-    toggleDocumentLane(force) { return destroyed ? false : toggleLane(force); },
+    toggleDocumentBar(force) { return destroyed ? false : toggleLane(force); },
     destroy() {
       if (destroyed) return;   // idempotent: a second teardown must not re-run releases
       destroyed = true;
@@ -1605,7 +1605,7 @@ export function attachPanel(core, options = {}) {
     if (exportBtn) exportBtn.textContent = t('panel.export');
     if (marksBtn) marksBtn.textContent = t('panel.toggleMarks');
     if (clearBtn) clearBtn.textContent = t('panel.clearAll');
-    if (laneTitle) laneTitle.textContent = t('panel.docLane');
+    if (laneTitle) laneTitle.textContent = t('panel.docBar');
     placeLane();   // labels changed width, so the reservation did too
     refreshLane();
     if (themeBtn) themeBtn.textContent = themeLabel();
@@ -1638,11 +1638,11 @@ function ensurePositioned(elx, own) {
 function importModal(doc, core, t) {
   let close = () => {};
   const m = el(doc, 'div'); Object.assign(m.style, { position: 'fixed', inset: '0', zIndex: 10001, background: 'rgba(0,0,0,.55)', display: 'flex', alignItems: 'center', justifyContent: 'center' });
-  const box = el(doc, 'div'); Object.assign(box.style, { background: 'var(--tb-popup-bg,#fff)', color: 'var(--tb-popup-fg,#111)', borderRadius: '10px', padding: '16px', width: 'min(720px,92vw)', font: '13px system-ui' });
+  const box = el(doc, 'div'); Object.assign(box.style, { background: 'var(--tb-pane-bg,#fff)', color: 'var(--tb-pane-fg,#111)', borderRadius: '10px', padding: '16px', width: 'min(720px,92vw)', font: '13px system-ui' });
   const ta = doc.createElement('textarea'); ta.placeholder = t('import.placeholder'); Object.assign(ta.style, { width: '100%', height: '52vh', boxSizing: 'border-box', font: '12px ui-monospace,monospace' });
   const msg = el(doc, 'div'); Object.assign(msg.style, { font: '12px system-ui', minHeight: '16px', color: 'var(--tb-accent,#06c)' });
   const load = btn(doc, t('import.load'));
-  const cancel = btn(doc, t('popup.cancel') || 'Cancel', 'tb-sec');
+  const cancel = btn(doc, t('pane.cancel') || 'Cancel', 'tb-sec');
   cancel.onclick = () => close();
   load.onclick = () => {
     let env;
@@ -1664,7 +1664,7 @@ function exportModal(doc, envelope) {
   const json = JSON.stringify(envelope, null, 2);
   globalThis.navigator?.clipboard?.writeText?.(json).catch(() => {});
   const m = el(doc, 'div'); Object.assign(m.style, { position: 'fixed', inset: '0', zIndex: 10001, background: 'rgba(0,0,0,.55)', display: 'flex', alignItems: 'center', justifyContent: 'center' });
-  const box = el(doc, 'div'); Object.assign(box.style, { background: 'var(--tb-popup-bg,#fff)', color: 'var(--tb-popup-fg,#111)', borderRadius: '10px', padding: '16px', width: 'min(720px,92vw)', font: '13px system-ui' });
+  const box = el(doc, 'div'); Object.assign(box.style, { background: 'var(--tb-pane-bg,#fff)', color: 'var(--tb-pane-fg,#111)', borderRadius: '10px', padding: '16px', width: 'min(720px,92vw)', font: '13px system-ui' });
   const ta = doc.createElement('textarea'); ta.readOnly = true; ta.value = json; Object.assign(ta.style, { width: '100%', height: '52vh', boxSizing: 'border-box', font: '12px ui-monospace,monospace' });
   const closeBtn = btn(doc, 'Close'); closeBtn.onclick = () => close();
   const bar = el(doc, 'div'); bar.style.textAlign = 'right'; bar.style.marginTop = '8px'; bar.appendChild(closeBtn);

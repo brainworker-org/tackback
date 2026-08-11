@@ -8,7 +8,7 @@
 export const TOKENS = [
   '--tb-bg', '--tb-fg', '--tb-accent', '--tb-border',
   '--tb-mark-bg', '--tb-mark-outline', '--tb-pin-bg', '--tb-pin-fg',
-  '--tb-popup-bg', '--tb-popup-fg', '--tb-muted', '--tb-danger',
+  '--tb-pane-bg', '--tb-pane-fg', '--tb-muted', '--tb-danger',
   // `--tb-attention` is the highlight an anchor wears while it carries an ATTENTION flag
   // (setAnchorAttention). It is a generic "needs-notice" tint — the *meaning* of the flag (e.g.
   // "unread") is the integrator's, never Tackback's. Override it like any other token.
@@ -27,7 +27,7 @@ export const LIGHT = {
   '--tb-bg': '#ffffff', '--tb-fg': '#1c1e21', '--tb-accent': '#33aa77', '--tb-border': '#cccccc',
   '--tb-mark-bg': 'rgba(255,210,0,.20)', '--tb-mark-outline': '#d9a400',
   '--tb-pin-bg': '#d9a400', '--tb-pin-fg': '#000000',
-  '--tb-popup-bg': '#ffffff', '--tb-popup-fg': '#111111', '--tb-muted': '#777777', '--tb-danger': '#cc3333',
+  '--tb-pane-bg': '#ffffff', '--tb-pane-fg': '#111111', '--tb-muted': '#777777', '--tb-danger': '#cc3333',
   '--tb-attention': '#ef7f0e', '--tb-unread': '#ef7f0e',
 };
 
@@ -35,7 +35,7 @@ export const DARK = {
   '--tb-bg': '#1b1c1d', '--tb-fg': '#e6e6e6', '--tb-accent': '#5aa', '--tb-border': '#555555',
   '--tb-mark-bg': 'rgba(255,210,0,.16)', '--tb-mark-outline': '#d9a400',
   '--tb-pin-bg': '#d9a400', '--tb-pin-fg': '#000000',
-  '--tb-popup-bg': '#2a2c2e', '--tb-popup-fg': '#eeeeee', '--tb-muted': '#aaaaaa', '--tb-danger': '#e06666',
+  '--tb-pane-bg': '#2a2c2e', '--tb-pane-fg': '#eeeeee', '--tb-muted': '#aaaaaa', '--tb-danger': '#e06666',
   '--tb-attention': '#f59331', '--tb-unread': '#f59331',
 };
 
@@ -88,5 +88,5 @@ export function buildUnreadInkCSS(theme, prefersDark, selector = '[data-tb-root]
   const dark = theme === 'dark' || (theme !== 'light' && prefersDark);
   const ink = dark ? '#000000' : '#ffffff';
   return `${selector} .tb-badge.tb-unread,\n${selector} .tb-pin.tb-unread,\n`
-    + `${selector} .tb-lane.tb-unread .tb-lane-count { color: ${ink} !important; }`;
+    + `${selector} .tb-docbar.tb-unread .tb-docbar-count { color: ${ink} !important; }`;
 }

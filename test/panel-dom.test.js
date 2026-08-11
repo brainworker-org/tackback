@@ -339,10 +339,10 @@ function mountPanel({ comments = [], controls, instrument = false, setup, noRaf 
       throw new Error(`a subscriber threw and the emitter swallowed it, unnoticed by this test — ${cause?.message || cause}`, { cause });
     }
   };
-  const lane = () => doc.querySelector('.tb-lane');
-  const laneHead = () => lane()?.querySelector('.tb-lane-head') || null;
-  const laneCount = () => lane()?.querySelector('.tb-lane-count')?.textContent ?? null;
-  const laneOpen = () => !!lane()?.classList.contains('tb-open');
+  const lane = () => doc.querySelector('.tb-docbar');
+  const laneHead = () => lane()?.querySelector('.tb-docbar-head') || null;
+  const laneCount = () => lane()?.querySelector('.tb-docbar-count')?.textContent ?? null;
+  const laneOpen = () => !!lane()?.classList.contains('tb-docbar-open');
   const badges = () => doc.querySelectorAll('.tb-badge,.tb-pin');
   /**
    * The acceptance invariant: after destroy, every count the environment can take is back where it
@@ -378,7 +378,7 @@ function mountPanel({ comments = [], controls, instrument = false, setup, noRaf 
 // Properties that must hold however you got here. Example tests can only encode the paths someone
 // thought of; these are checked at the end of the lifecycle tests, so a path nobody wrote a scenario
 // for still cannot leave the document holding the panel's leftovers.
-const PANEL_SELECTORS = '.tb-panel,.tb-popup,.tb-lane,.tb-ctxmenu,.tb-badge,.tb-pin,.tb-region,.tb-pending,.tb-draw';
+const PANEL_SELECTORS = '.tb-console,.tb-pane,.tb-docbar,.tb-ctxmenu,.tb-badge,.tb-pin,.tb-region,.tb-pending,.tb-draw';
 
 /** After destroy the panel owns nothing: no node of its own, and no listener on the document. */
 function assertFullyGone(f, where) {
@@ -391,7 +391,7 @@ function assertFullyGone(f, where) {
 
 /** At most one of each singleton surface, ever. */
 function assertAtMostOne(f, where) {
-  for (const sel of ['.tb-popup', '.tb-ctxmenu', '.tb-lane', '.tb-panel']) {
+  for (const sel of ['.tb-pane', '.tb-ctxmenu', '.tb-docbar', '.tb-console']) {
     assert.ok(f.doc.querySelectorAll(sel).length <= 1, `${where}: more than one ${sel} on screen`);
   }
 }
@@ -479,7 +479,7 @@ test('panel: the document lane is present by default and expands to the thread',
   } finally { f.restore(); }
 });
 
-test('panel: the lane composes into the document thread, no popup involved', () => {
+test('panel: the lane composes into the document thread, no pane involved', () => {
   const f = mountPanel();
   try {
     f.laneHead().click();
@@ -488,20 +488,20 @@ test('panel: the lane composes into the document thread, no popup involved', () 
     f.lane().querySelector('.tb-save').click();
     assert.equal(f.core.listComments().length, 1);
     assert.equal(f.core.listComments()[0].anchor.type, 'document');
-    assert.equal(f.doc.querySelector('.tb-popup'), null, 'the lane is its own surface');
+    assert.equal(f.doc.querySelector('.tb-pane'), null, 'the lane is its own surface');
     assert.equal(f.laneOpen(), true, 'and committing does not dismiss it');
   } finally { f.restore(); }
 });
 
 test('panel: with the lane off the thread is still reachable, as a Pane', () => {
-  const f = mountPanel({ controls: { docLane: false } });
+  const f = mountPanel({ controls: { docBar: false } });
   try {
     assert.equal(f.lane(), null, 'the lane is gone');
     f.core.addComment({ anchor: { type: 'document' }, body: 'still reachable' });
     f.panel.openDocumentThread();
-    const popup = f.doc.querySelector('.tb-popup');
-    assert.ok(popup, 'openDocumentThread() falls back to an ordinary Pane');
-    assert.equal(popup.querySelectorAll('.tb-c').length, 1);
+    const pane = f.doc.querySelector('.tb-pane');
+    assert.ok(pane, 'openDocumentThread() falls back to an ordinary Pane');
+    assert.equal(pane.querySelectorAll('.tb-c').length, 1);
   } finally { f.restore(); }
 });
 
@@ -540,7 +540,7 @@ test('panel: a right-DRAG beginning on the lane starts no gesture', () => {
     fire('pointermove', f.doc.body, 90, 70, 2);     // well past the drag threshold
     fire('pointerup', f.doc.body, 90, 70, 0);
     assert.equal(f.doc.querySelectorAll('.tb-draw').length, 0, 'no draft rectangle');
-    assert.equal(f.doc.querySelector('.tb-popup'), null, 'and no popup was opened either');
+    assert.equal(f.doc.querySelector('.tb-pane'), null, 'and no pane was opened either');
     assert.equal(f.core.listComments().length, 0, 'and nothing was committed');
   } finally { f.restore(); }
 });
@@ -610,7 +610,7 @@ test('panel: a control click reaches a page-level listener, so a clear-on-open p
     f.core.setAnchorAttention(c.id, true);
     let sawControlClick = false;
     f.doc.addEventListener('click', (e) => {
-      if (e.target.closest?.('.tb-lane')) {
+      if (e.target.closest?.('.tb-docbar')) {
         sawControlClick = true;
         f.core.listComments().forEach((x) => { if (x.anchor.type === 'document') f.core.setAnchorAttention(x.id, false); });
       }
@@ -623,7 +623,7 @@ test('panel: a control click reaches a page-level listener, so a clear-on-open p
 });
 
 test('panel: an open Pane follows the transport when it changes underneath it', () => {
-  const f = mountPanel({ controls: { docLane: false } });
+  const f = mountPanel({ controls: { docBar: false } });
   try {
     f.core.addComment({ anchor: { type: 'document' }, body: 'q' });
     f.panel.openDocumentThread();
@@ -639,31 +639,31 @@ test('panel: an open Pane follows the transport when it changes underneath it', 
 test('panel: a transport change moves close-vs-stay-open too, not just the label', () => {
   // relabelling alone would pass the test above while the commit still closed a conversation, or
   // left a note-taking Pane open — the label is the visible half of one policy.
-  const f = mountPanel({ controls: { docLane: false } });
+  const f = mountPanel({ controls: { docBar: false } });
   try {
     f.core.addComment({ anchor: { type: 'document' }, body: 'seed' });
     f.panel.openDocumentThread();                        // opened with NO transport → Save + close
     f.core.setTransport({ interactive: true });          // …now a conversation
-    const ta = f.doc.querySelector('.tb-popup').querySelector('textarea');
+    const ta = f.doc.querySelector('.tb-pane').querySelector('textarea');
     ta.value = 'first'; ta.dispatchEvent({ type: 'input' });
     f.doc.querySelector('.tb-save').click();
-    assert.ok(f.doc.querySelector('.tb-popup'), 'commit now STAYS open, following the new descriptor');
+    assert.ok(f.doc.querySelector('.tb-pane'), 'commit now STAYS open, following the new descriptor');
     // and back the other way
     f.core.setTransport(null);
-    const ta2 = f.doc.querySelector('.tb-popup').querySelector('textarea');
+    const ta2 = f.doc.querySelector('.tb-pane').querySelector('textarea');
     ta2.value = 'second'; ta2.dispatchEvent({ type: 'input' });
     f.doc.querySelector('.tb-save').click();
-    assert.equal(f.doc.querySelector('.tb-popup'), null, 'and closes again once the transport is gone');
+    assert.equal(f.doc.querySelector('.tb-pane'), null, 'and closes again once the transport is gone');
   } finally { f.restore(); }
 });
 
 test('panel: Cmd/Ctrl+Enter commits, and only when the button would', () => {
   // this binding was silently dropped during the conversation-view extraction and no test noticed,
   // which is the whole argument for pinning it here.
-  const f = mountPanel({ controls: { docLane: false } });
+  const f = mountPanel({ controls: { docBar: false } });
   try {
     f.panel.openDocumentThread();
-    const ta = f.doc.querySelector('.tb-popup').querySelector('textarea');   // the fixture matches simple selectors only
+    const ta = f.doc.querySelector('.tb-pane').querySelector('textarea');   // the fixture matches simple selectors only
     const send = (mods) => ta.dispatchEvent({ type: 'keydown', key: 'Enter', ...mods });
     send({ metaKey: true });
     assert.equal(f.core.listComments().length, 0, 'an empty box commits nothing');
@@ -676,10 +676,10 @@ test('panel: Cmd/Ctrl+Enter commits, and only when the button would', () => {
   } finally { f.restore(); }
 });
 
-// --- what a host that never dies needs, and the popup never did ---------------------------------
+// --- what a host that never dies needs, and the pane never did ---------------------------------
 
 test('lane: a local Save clears the composer instead of leaving it loaded', () => {
-  // the popup got away with skipping the reset because it was about to be destroyed. A host that
+  // the pane got away with skipping the reset because it was about to be destroyed. A host that
   // stays kept the committed text in an enabled box, ready to be sent a second time.
   const f = mountPanel();
   try {
@@ -696,7 +696,7 @@ test('lane: a local Save clears the composer instead of leaving it loaded', () =
 });
 
 test('lane: a deleted comment loses its row, not just its place in the count', () => {
-  // reconciliation was insertion-only. The popup survived that because every destructive path
+  // reconciliation was insertion-only. The pane survived that because every destructive path
   // closes it first; a persistent host would have shown the comment forever.
   const f = mountPanel();
   try {
@@ -710,14 +710,14 @@ test('lane: a deleted comment loses its row, not just its place in the count', (
 });
 
 test('lane: it follows a transport change, like any other conversation on screen', () => {
-  // the panel used to fan out to a single slot that only an open popup ever filled, so a second
+  // the panel used to fan out to a single slot that only an open pane ever filled, so a second
   // host silently kept whatever policy it was built with.
   const f = mountPanel();
   try {
     const save = () => f.lane().querySelector('.tb-save');
     assert.equal(save().textContent, 'Save');
     f.core.setTransport({ interactive: true });
-    assert.equal(save().textContent, 'Send', 'the lane relabels too, not just a popup');
+    assert.equal(save().textContent, 'Send', 'the lane relabels too, not just a pane');
     f.core.setTransport(null);
     assert.equal(save().textContent, 'Save');
   } finally { f.restore(); }
@@ -758,8 +758,8 @@ test('lane: a host\'s own right-side reservation is not overwritten by the panel
   const f = mountPanel();
   try {
     const style = f.lane().style;
-    assert.ok(style['--tb-panel-reserve'], 'the panel measurement is published…');
-    assert.equal(style['--tb-lane-right'], undefined, '…and never as the host-facing property');
+    assert.ok(style['--tb-console-reserve'], 'the panel measurement is published…');
+    assert.equal(style['--tb-docbar-right'], undefined, '…and never as the host-facing property');
   } finally { f.restore(); }
 });
 
@@ -831,7 +831,7 @@ test('panel: destroy leaves nothing behind, and is idempotent', async () => {
     f.root.appendChild(p);
     f.core.addComment({ anchor: { type: 'block', elementId: 'para-life' }, body: 'here' });
     f.core.addComment({ anchor: { type: 'document' }, body: 'about it all' });
-    f.panel.toggleDocumentLane(true);
+    f.panel.toggleDocumentBar(true);
     f.badges()[0].dispatchEvent({ type: 'contextmenu', clientX: 5, clientY: 5, preventDefault() {} });
     assert.ok(f.doc.querySelector('.tb-ctxmenu'), 'a menu is open when destroy runs');
 
@@ -840,7 +840,7 @@ test('panel: destroy leaves nothing behind, and is idempotent', async () => {
     assertFullyGone(f, 'after destroy');
     // asserted HERE, where the lane exists: with the lane off, toggling answers false whether or not
     // the panel is destroyed, so the guard would be invisible.
-    assert.equal(f.panel.toggleDocumentLane(true), false, 'a destroyed lane cannot be re-expanded');
+    assert.equal(f.panel.toggleDocumentBar(true), false, 'a destroyed lane cannot be re-expanded');
     assertFullyGone(f, 'after trying to re-expand the lane');
     f.panel.destroy();                            // twice must not throw or resurrect anything
     assertFullyGone(f, 'after a second destroy');
@@ -855,12 +855,12 @@ test('panel: no public method revives a destroyed panel', async () => {
   // The lane is OFF on purpose: with it on, `openDocumentThread` expands the (already detached) lane
   // and adds no node, so the guard would be invisible to this test. Off, it builds a Pane — which is
   // the thing that must not appear.
-  const f = mountPanel({ controls: { docLane: false } });
+  const f = mountPanel({ controls: { docBar: false } });
   try {
     f.core.addComment({ anchor: { type: 'document' }, body: 'q' });
     f.panel.destroy();
     f.panel.openDocumentThread();
-    assert.equal(f.panel.toggleDocumentLane(true), false, 'and it says it did nothing');
+    assert.equal(f.panel.toggleDocumentBar(true), false, 'and it says it did nothing');
     f.panel.setTheme('dark');
     f.panel.setActorColors({ ai: '#123456' });
     f.panel.setReactions([{ id: 'x', icon: '?' }]);
@@ -944,7 +944,7 @@ test('panel: destroy gives the environment back, whatever was in flight', async 
   try {
     const p = f.doc.getElementById('own');
     f.core.addComment({ anchor: { type: 'block', elementId: 'own' }, body: 'x' });
-    f.panel.toggleDocumentLane(true);
+    f.panel.toggleDocumentBar(true);
     f.badges()[0].dispatchEvent({ type: 'contextmenu', clientX: 5, clientY: 5, preventDefault() {} });
     const fire = (t, x, y, b) => p.dispatchEvent({ type: t, button: 2, buttons: b, clientX: x, clientY: y, pointerId: 41 });
     fire('pointerdown', 10, 10, 2); fire('pointermove', 90, 70, 2);   // a gesture holding capture
@@ -958,7 +958,7 @@ test('panel: a Pane replaced before its deferred callback fires leaves no listen
   // The deferred-ownership shape, on the Pane this time. `popupCleanup` holds one remover, so if the
   // Pane that scheduled the registration has been replaced by the time the deferred callback runs, the loser's
   // listeners can never come off. Asking whether SOME Pane exists cannot tell replaced from closed.
-  const f = mountPanel({ instrument: true, controls: { docLane: false } });
+  const f = mountPanel({ instrument: true, controls: { docBar: false } });
   try {
     f.core.addComment({ anchor: { type: 'document' }, body: 'q' });
     f.panel.openDocumentThread();
@@ -1043,7 +1043,7 @@ test('panel: destroy with a Pane open gives everything back', async () => {
   // release is verified in a real browser instead.
   const f = mountPanel({
     instrument: true,
-    controls: { docLane: false },
+    controls: { docBar: false },
     setup: (doc, root) => {
       const p = doc.createElement('p'); p.id = 'phrase';
       p.textContent = 'a sentence with a quotable phrase inside it';
@@ -1054,7 +1054,7 @@ test('panel: destroy with a Pane open gives everything back', async () => {
   try {
     f.core.addComment({ anchor: { type: 'document' }, body: 'about it all' });
     f.panel.openDocumentThread();
-    assert.ok(f.doc.querySelector('.tb-popup'), 'a Pane is open when destroy runs');
+    assert.ok(f.doc.querySelector('.tb-pane'), 'a Pane is open when destroy runs');
     f.panel.destroy();
     f.assertEnvironmentRestored('destroy with a Pane open');
   } finally { f.restore(); }
@@ -1135,10 +1135,10 @@ test('panel: a marked block detached before teardown still gets its class back',
   try {
     const p = f.doc.getElementById('detached');
     f.core.addComment({ anchor: { type: 'block', elementId: 'detached' }, body: 'x' });
-    assert.equal(p.classList.contains('tb-mark'), true, 'the block is marked while the panel is alive');
+    assert.equal(p.classList.contains('tb-commentable'), true, 'the block is marked while the panel is alive');
     p.remove();                     // the host takes it out of the document…
     f.panel.destroy();
-    assert.equal(p.classList.contains('tb-mark'), false,
+    assert.equal(p.classList.contains('tb-commentable'), false,
       'and it comes back without the panel\'s class on it');
   } finally { f.restore(); }
 });
@@ -1191,7 +1191,7 @@ const keysOf = (entries) => entries.map((e) => e.threadKey).sort();
 const exhaustSelfRetries = (env) => { for (let i = 0; i < 6; i += 1) { env.flushTimers(); env.drainMicrotasks(); } };
 
 test('visibility: opening a thread is announced at the boundary, not from inside the opening', () => {
-  const f = mountPanel({ controls: { docLane: false }, instrument: true });
+  const f = mountPanel({ controls: { docBar: false }, instrument: true });
   try {
     f.core.addComment({ anchor: { type: 'document' }, body: 'readable' });
     const seen = recordVisibility(f.core);
@@ -1207,7 +1207,7 @@ test('visibility: opening a thread is announced at the boundary, not from inside
 });
 
 test('visibility: the pull accessor answers the same question without waiting', () => {
-  const f = mountPanel({ controls: { docLane: false }, instrument: true });
+  const f = mountPanel({ controls: { docBar: false }, instrument: true });
   try {
     assert.deepEqual(f.core.visibleThreads(), [], 'nothing is open yet');
     f.core.addComment({ anchor: { type: 'document' }, body: 'readable' });
@@ -1233,7 +1233,7 @@ test('visibility: destroying the panel with a thread open reports the EMPTY snap
   // The decisive case for where this contract lives. A consumer that raised its update rate while a
   // thread was open must be told the thread is gone, and the panel's own destruction is precisely
   // when it cannot tell them itself.
-  const f = mountPanel({ controls: { docLane: false }, instrument: true });
+  const f = mountPanel({ controls: { docBar: false }, instrument: true });
   try {
     f.core.addComment({ anchor: { type: 'document' }, body: 'readable' });
     f.panel.openDocumentThread();
@@ -1256,10 +1256,10 @@ test('visibility: a COLLAPSED lane is not visible, though its conversation is re
   const f = mountPanel({ instrument: true });
   try {
     f.core.addComment({ anchor: { type: 'document' }, body: 'in the lane' });
-    f.panel.toggleDocumentLane(false);
+    f.panel.toggleDocumentBar(false);
     f.env.drainMicrotasks();
     assert.deepEqual(f.core.visibleThreads(), [], 'folded away is not readable');
-    f.panel.toggleDocumentLane(true);
+    f.panel.toggleDocumentBar(true);
     f.env.drainMicrotasks();
     assert.deepEqual(keysOf(f.core.visibleThreads()), ['document'], 'expanded is');
   } finally { f.restore(); }
@@ -1269,7 +1269,7 @@ test('visibility: a comment arriving in an OPEN thread is reported, though membe
   // The gap this contract exists to close. The reader is looking at the thread while it grows; the
   // set of open threads never changes, so a membership-only contract says nothing and whatever the
   // consumer drives from it — an unread marker, a read cursor — stays wrong in front of them.
-  const f = mountPanel({ controls: { docLane: false }, instrument: true });
+  const f = mountPanel({ controls: { docBar: false }, instrument: true });
   try {
     f.core.addComment({ anchor: { type: 'document' }, body: 'first' });
     f.panel.openDocumentThread();
@@ -1291,7 +1291,7 @@ test('visibility: the ids a thread reports are every utterance in it, replies in
   // report naming only root ids would leave every reply permanently unaccounted for, and the shortfall
   // hides well: each id it DOES carry is correct, and the reader sees the replies either way. One
   // naming an id from a thread that is not open would clear a mark nobody looked at.
-  const f = mountPanel({ controls: { docLane: false }, instrument: true });
+  const f = mountPanel({ controls: { docBar: false }, instrument: true });
   try {
     const root = f.core.addComment({ anchor: { type: 'document' }, body: 'root' });
     const second = f.core.addComment({ anchor: { type: 'document' }, body: 'a second root' });
@@ -1318,7 +1318,7 @@ test('visibility: the ids a thread reports are every utterance in it, replies in
 });
 
 test('visibility: a report identical to the last one is not sent again', () => {
-  const f = mountPanel({ controls: { docLane: false }, instrument: true });
+  const f = mountPanel({ controls: { docBar: false }, instrument: true });
   try {
     const first = f.core.addComment({ anchor: { type: 'document' }, body: 'first' });
     f.panel.openDocumentThread();
@@ -1335,7 +1335,7 @@ test('visibility: a report identical to the last one is not sent again', () => {
 });
 
 test('visibility: opening and closing within one turn settles to nothing, and says nothing', () => {
-  const f = mountPanel({ controls: { docLane: false }, instrument: true });
+  const f = mountPanel({ controls: { docBar: false }, instrument: true });
   try {
     f.core.addComment({ anchor: { type: 'document' }, body: 'brief' });
     const seen = recordVisibility(f.core);
@@ -1364,7 +1364,7 @@ test('visibility: a handler that closes during the flush is diffed against what 
   // schedules the next flush onto the queue rather than running one, so the frame that wrote a stale
   // baseline would always be the same frame that delivered it. The order is kept as written anyway:
   // it costs nothing, and it is the order that stays correct if a synchronous path is ever added.
-  const f = mountPanel({ controls: { docLane: false }, instrument: true });
+  const f = mountPanel({ controls: { docBar: false }, instrument: true });
   try {
     f.core.addComment({ anchor: { type: 'document' }, body: 'readable' });
     const seen = [];
@@ -1395,7 +1395,7 @@ test('visibility: a destroyed panel is no longer asked what is readable', () => 
   const f = mountPanel({ instrument: true });
   try {
     f.core.addComment({ anchor: { type: 'document' }, body: 'in the lane' });
-    f.panel.toggleDocumentLane(true);
+    f.panel.toggleDocumentBar(true);
     f.env.drainMicrotasks();
     assert.deepEqual(f.core.visibleThreads().map((e) => e.threadKey), ['document'], 'open before teardown');
 
@@ -1417,7 +1417,7 @@ test('visibility: a second display replaces the first rather than joining it', (
   const f = mountPanel({ instrument: true });
   try {
     f.core.addComment({ anchor: { type: 'document' }, body: 'in the lane' });
-    f.panel.toggleDocumentLane(true);
+    f.panel.toggleDocumentBar(true);
     f.env.drainMicrotasks();
     assert.deepEqual(f.core.visibleThreads().map((e) => e.threadKey), ['document'], 'the panel is the display');
 
@@ -1448,7 +1448,7 @@ test('visibility: a thread with nothing written in it yet is still readable', ()
   // Being open and holding a comment are different facts. A thread the reader has just opened has
   // never been written in, and answering "not readable" while they are looking straight at it makes
   // the report describe the store rather than the reader.
-  const f = mountPanel({ controls: { docLane: false }, instrument: true });
+  const f = mountPanel({ controls: { docBar: false }, instrument: true });
   try {
     f.panel.openDocumentThread();
     f.env.drainMicrotasks();
@@ -1466,7 +1466,7 @@ test('visibility: emptying an open thread is not the same as closing it', () => 
   const f = mountPanel({ instrument: true });
   try {
     const c = f.core.addComment({ anchor: { type: 'document' }, body: 'the only one' });
-    f.panel.toggleDocumentLane(true);
+    f.panel.toggleDocumentBar(true);
     f.env.drainMicrotasks();
     const seen = recordVisibility(f.core);
 
@@ -1486,7 +1486,7 @@ test('visibility: what a subscriber is handed cannot rewrite what the core belie
   const f = mountPanel({ instrument: true });
   try {
     const c = f.core.addComment({ anchor: { type: 'document' }, body: 'held' });
-    f.panel.toggleDocumentLane(true);
+    f.panel.toggleDocumentBar(true);
     let vandalised = false;
     f.core.on('thread:visibility', (p) => {
       if (vandalised || !p.visible.length) return;
@@ -1503,7 +1503,7 @@ test('visibility: what a subscriber is handed cannot rewrite what the core belie
     assert.equal(f.core.getComment(c.id).anchor.type, 'document', 'the stored comment kept its own anchor');
 
     const seen = recordVisibility(f.core);
-    f.panel.toggleDocumentLane(false);
+    f.panel.toggleDocumentBar(false);
     f.env.drainMicrotasks();
     assert.deepEqual(seen[0].closed.map((e) => e.threadKey), ['document'], 'the close names the real thread');
     assert.equal(seen[0].closed[0].anchor.type, 'document');
@@ -1859,10 +1859,10 @@ test('visibility: every part of a report is the subscriber\'s own, not just the 
   const f = mountPanel({ instrument: true });
   try {
     f.core.addComment({ anchor: { type: 'document' }, body: 'held' });
-    f.panel.toggleDocumentLane(true);
+    f.panel.toggleDocumentBar(true);
     f.env.drainMicrotasks();
     const seen = recordVisibility(f.core);
-    f.panel.toggleDocumentLane(false);
+    f.panel.toggleDocumentBar(false);
     f.env.drainMicrotasks();
 
     const report = seen[0];
@@ -1871,7 +1871,7 @@ test('visibility: every part of a report is the subscriber\'s own, not just the 
     report.closed[0].comments.push('invented');
     report.closed[0].anchor.type = 'rewritten';
 
-    f.panel.toggleDocumentLane(true);
+    f.panel.toggleDocumentBar(true);
     f.env.drainMicrotasks();
     const reopened = seen.at(-1);
     assert.deepEqual(reopened.opened.map((e) => e.threadKey), ['document'], 'the reopen names the real thread');
@@ -1915,7 +1915,7 @@ test('panel: every way a thread host ends goes through the one release path', ()
   try {
     f.core.addComment({ anchor: { type: 'block', elementId: 'para-host' }, body: 'here' });
     f.core.addComment({ anchor: { type: 'document' }, body: 'and here' });
-    f.panel.toggleDocumentLane(true);
+    f.panel.toggleDocumentBar(true);
     f.env.drainMicrotasks();
 
     // Open a Pane, then close it the way a reader does.
@@ -2032,12 +2032,12 @@ test('T8/T9: a folded document lane is not read, and unfolding it reads it', () 
   const f = mountPanel({ instrument: true });
   try {
     arrives(f, 'document', 'about the whole thing');
-    f.panel.toggleDocumentLane(false);
+    f.panel.toggleDocumentBar(false);
     f.env.drainMicrotasks();
     assert.equal(f.core.unreadCount('document'), 1, 'folded away is not read');
     assert.ok(f.lane().classList.contains('tb-unread'), 'and the lane says so, having no badge of its own');
 
-    f.panel.toggleDocumentLane(true);
+    f.panel.toggleDocumentBar(true);
     f.env.drainMicrotasks();
     assert.equal(f.core.unreadCount('document'), 0);
     assert.ok(!f.lane().classList.contains('tb-unread'), 'the mark goes when it is opened');
@@ -2045,7 +2045,7 @@ test('T8/T9: a folded document lane is not read, and unfolding it reads it', () 
 });
 
 test('T10: with no lane, the document thread reads through an ordinary Pane', () => {
-  const f = mountPanel({ controls: { docLane: false }, instrument: true });
+  const f = mountPanel({ controls: { docBar: false }, instrument: true });
   try {
     arrives(f, 'document', 'about the whole thing');
     f.env.drainMicrotasks();
@@ -2167,23 +2167,23 @@ test('T49: shown-vs-hidden decides a reply the same way in all three thread host
       f.env.drainMicrotasks();
       return { id: c.id, key: 'block:p1',
         show: () => openPane(f, badgeFor(f, 'p1')),
-        hide: () => { f.doc.querySelector('.tb-popup').querySelector('.tb-cancel').click(); f.env.drainMicrotasks(); },
+        hide: () => { f.doc.querySelector('.tb-pane').querySelector('.tb-cancel').click(); f.env.drainMicrotasks(); },
         marked: () => badgeFor(f, 'p1').classList.contains('tb-unread') };
     }],
     ['document lane', {}, (f) => {
       const c = { id: arrives(f, 'document', 'seed') };
       f.env.drainMicrotasks();
       return { id: c.id, key: 'document',
-        show: () => { f.panel.toggleDocumentLane(true); f.env.drainMicrotasks(); },
-        hide: () => { f.panel.toggleDocumentLane(false); f.env.drainMicrotasks(); },
+        show: () => { f.panel.toggleDocumentBar(true); f.env.drainMicrotasks(); },
+        hide: () => { f.panel.toggleDocumentBar(false); f.env.drainMicrotasks(); },
         marked: () => f.lane().classList.contains('tb-unread') };
     }],
-    ['document thread with no lane', { controls: { docLane: false } }, (f) => {
+    ['document thread with no lane', { controls: { docBar: false } }, (f) => {
       const c = { id: arrives(f, 'document', 'seed') };
       f.env.drainMicrotasks();
       return { id: c.id, key: 'document',
         show: () => { f.panel.openDocumentThread(); f.env.drainMicrotasks(); },
-        hide: () => { f.doc.querySelector('.tb-popup').querySelector('.tb-cancel').click(); f.env.drainMicrotasks(); },
+        hide: () => { f.doc.querySelector('.tb-pane').querySelector('.tb-cancel').click(); f.env.drainMicrotasks(); },
         marked: () => false };   // no badge and no lane: the mark has nowhere to be, so the count is the oracle
     }],
   ];
@@ -2227,30 +2227,30 @@ test('T52: the reported conversation walk-through, end to end', () => {
     arrives(f, 'p1', 'seed');
     f.env.drainMicrotasks();
     openPane(f, badgeFor(f, 'p1'));
-    assert.ok(f.doc.querySelector('.tb-popup'), 'the Pane is on screen');
+    assert.ok(f.doc.querySelector('.tb-pane'), 'the Pane is on screen');
 
     // (3) the Send itself — typed and committed, so `closeOnCommit` is actually exercised. Asserting
     // on a Pane that was merely opened would leave this step measuring nothing.
-    const pane = f.doc.querySelector('.tb-popup');
+    const pane = f.doc.querySelector('.tb-pane');
     assert.equal(pane.querySelector('.tb-save').textContent, 'Send', '(2) the transport made it a Send');
     const ta = pane.querySelector('textarea');
     ta.value = 'my message'; ta.dispatchEvent({ type: 'input' });
     pane.querySelector('.tb-save').click();
     f.env.drainMicrotasks();
-    assert.ok(f.doc.querySelector('.tb-popup'), '(3) a Send does NOT close a conversation — the Pane stays open');
+    assert.ok(f.doc.querySelector('.tb-pane'), '(3) a Send does NOT close a conversation — the Pane stays open');
     const c = f.core.listComments().find((x) => x.anchor.elementId === 'p1');
 
     replyArrives(f, c.id, 'the other participant answers');  // (4) ~a beat later
     f.env.drainMicrotasks();
-    assert.ok(f.doc.querySelector('.tb-popup'), '(4) and it is still open when the answer lands');
+    assert.ok(f.doc.querySelector('.tb-pane'), '(4) and it is still open when the answer lands');
     assert.equal(f.core.unreadCount('block:p1'), 0,
       '(4/5) the answer landed in a shown timeline, so it is read on arrival and no mark goes up');
     assert.ok(!badgeFor(f, 'p1').classList.contains('tb-unread'));
 
     // …and the other half of the same principle: hide the timeline, and the next answer is unread.
-    f.doc.querySelector('.tb-popup').querySelector('.tb-cancel').click();
+    f.doc.querySelector('.tb-pane').querySelector('.tb-cancel').click();
     f.env.drainMicrotasks();
-    assert.equal(f.doc.querySelector('.tb-popup'), null, 'the reader closes it');
+    assert.equal(f.doc.querySelector('.tb-pane'), null, 'the reader closes it');
 
     replyArrives(f, c.id, 'answered while they were away');
     f.env.drainMicrotasks();
@@ -2273,7 +2273,7 @@ test('T52: the reported conversation walk-through, end to end', () => {
 test('row 1 (drawn) — typing into a folded lane counts, and draws nothing', () => {
   const f = mountPanel({ instrument: true, setup: twoBlocks });
   try {
-    f.panel.toggleDocumentLane(false);
+    f.panel.toggleDocumentBar(false);
     f.env.drainMicrotasks();
     f.core.addComment({ anchor: { type: 'document' }, body: 'typed into the folded lane' });
     f.env.drainMicrotasks();
@@ -2288,12 +2288,12 @@ test('row 2 (drawn) — sending from a Pane that shuts marks nothing', () => {
   try {
     arrives(f, 'p1', 'a thread to open');
     openPane(f, badgeFor(f, 'p1'));
-    const pane = f.doc.querySelector('.tb-popup');
+    const pane = f.doc.querySelector('.tb-pane');
     const ta = pane.querySelector('textarea');
     ta.value = 'sent, and the Pane shuts'; ta.dispatchEvent({ type: 'input' });
     pane.querySelector('.tb-save').click();
     f.env.flushTimers(); f.env.drainMicrotasks();
-    assert.equal(f.doc.querySelector('.tb-popup'), null, 'no transport: it closes on commit');
+    assert.equal(f.doc.querySelector('.tb-pane'), null, 'no transport: it closes on commit');
     assert.equal(f.core.unreadCount('block:p1'), 0, 'and what they sent is not new to them');
     assert.ok(!badgeFor(f, 'p1').classList.contains('tb-unread'));
   } finally { f.restore(); }
@@ -2310,7 +2310,7 @@ test('rows 4-6 (drawn) — an answer from outside marks only while it is out of 
     assert.equal(f.core.unreadCount('block:p1'), 0, 'row 6: read as it lands');
     assert.ok(!badgeFor(f, 'p1').classList.contains('tb-unread'));
 
-    f.doc.querySelector('.tb-popup').querySelector('.tb-cancel').click();
+    f.doc.querySelector('.tb-pane').querySelector('.tb-cancel').click();
     f.env.drainMicrotasks();
     replyArrives(f, id, 'answered while they were away');      // row 5 — Pane shut
     assert.equal(f.core.unreadCount('block:p1'), 1, 'row 5: out of sight, so new');
@@ -2326,7 +2326,7 @@ test('row 7 (drawn) — typing does not take somebody else\'s mark down', () => 
   try {
     const id = arrives(f, 'p1', 'a thread');
     openPane(f, badgeFor(f, 'p1'));
-    f.doc.querySelector('.tb-popup').querySelector('.tb-cancel').click();
+    f.doc.querySelector('.tb-pane').querySelector('.tb-cancel').click();
     f.env.drainMicrotasks();
     replyArrives(f, id, 'arrived, and never looked at');
     assert.ok(badgeFor(f, 'p1').classList.contains('tb-unread'));
@@ -2368,7 +2368,7 @@ test('S3-U1: the mark the panel writes for unread is a FILL, and the ring it rep
       assert.match(rule, /background:\s*var\(--tb-unread\)\s*!important/, `${sel}: filled`);
       assert.doesNotMatch(rule, /box-shadow:\s*0 0 0 2px var\(--tb-unread\)/, `${sel}: not also ringed`);
     }
-    const lane = unreadRule(css, '.tb-lane.tb-unread .tb-lane-count');
+    const lane = unreadRule(css, '.tb-docbar.tb-unread .tb-docbar-count');
     assert.match(lane, /background:\s*var\(--tb-unread\)\s*!important/, 'the lane count too');
   } finally { f.restore(); }
 });
@@ -2377,7 +2377,7 @@ test('S3-U2: it breathes on the agreed cycle, and the cycle it names is defined'
   const f = mountPanel({ instrument: true, setup: twoBlocks });
   try {
     const css = panelCSS(f);
-    for (const sel of ['.tb-badge.tb-unread', '.tb-pin.tb-unread', '.tb-lane.tb-unread .tb-lane-count']) {
+    for (const sel of ['.tb-badge.tb-unread', '.tb-pin.tb-unread', '.tb-docbar.tb-unread .tb-docbar-count']) {
       assert.match(unreadRule(css, sel), /animation:\s*tb-unread-pulse\s+2s\b/, `${sel}: 2s pulse`);
     }
     assert.match(css, /@keyframes\s+tb-unread-pulse\s*\{/, 'and the cycle exists');
@@ -2449,7 +2449,7 @@ test('L3-4: only what is unread breathes', () => {
 
 test('L3-5: hiding the marks takes the panel\'s own off the page and leaves the page alone', () => {
   // The distinction this fixes, and the one the first version of it missed: a class the panel OWNS
-  // may be hidden; a class the panel BORROWED may only be undressed. `tb-mark` is borrowed — it goes
+  // may be hidden; a class the panel BORROWED may only be undressed. `tb-commentable` is borrowed — it goes
   // on the host's own paragraph — so hiding elements wearing it hid the document's text. A reader
   // placed a comment, turned the marks off, and the paragraph they had just commented on vanished.
   const f = mountPanel({ instrument: true, setup: twoBlocks });
@@ -2464,7 +2464,7 @@ test('L3-5: hiding the marks takes the panel\'s own off the page and leaves the 
       .filter(Boolean).sort();
     assert.deepEqual(hidden, ['.tb-badge', '.tb-pin', '.tb-region'],
       'these three the panel drew itself; anything else here is the host\'s and must not be hidden');
-    const undressed = (/\.tb-hide\s+\.tb-mark\s*\{[^}]*\}/.exec(css) || [''])[0];
+    const undressed = (/\.tb-hide\s+\.tb-commentable\s*\{[^}]*\}/.exec(css) || [''])[0];
     assert.match(undressed, /background:\s*none/, 'its tint comes off instead');
     assert.match(undressed, /outline:\s*none/, 'and its outline with it');
     assert.match(css, /tb-hide\s+::highlight\(tb-range\)/, 'and so does a highlighted quote');
@@ -2486,18 +2486,18 @@ test('L3-6: the lane count wears the speaker\'s colour, and unread still outweig
   const f = mountPanel({ instrument: true });
   try {
     f.panel.setActorColors({ human: '#db2777' });
-    f.panel.toggleDocumentLane(true);
+    f.panel.toggleDocumentBar(true);
     f.core.addComment({ anchor: { type: 'document' }, body: 'mine', author: { id: 'me', kind: 'human' } });
     f.env.drainMicrotasks();
-    const count = () => f.lane().querySelector('.tb-lane-count');
+    const count = () => f.lane().querySelector('.tb-docbar-count');
     assert.ok(count().classList.contains('tb-tinted'), 'read: it carries a colour at all');
     assert.equal(count().style.background, '#db2777', 'and it is the colour of whoever spoke last');
 
-    f.panel.toggleDocumentLane(false);
+    f.panel.toggleDocumentBar(false);
     f.env.drainMicrotasks();
     arrives(f, 'document', 'theirs, while it is folded');
     assert.ok(f.lane().classList.contains('tb-unread'));
-    assert.match(unreadRule(panelCSS(f), '.tb-lane.tb-unread .tb-lane-count'),
+    assert.match(unreadRule(panelCSS(f), '.tb-docbar.tb-unread .tb-docbar-count'),
       /background:\s*var\(--tb-unread\)\s*!important/, 'unread is written to outweigh the inline tint');
   } finally { f.restore(); }
 });
@@ -2563,9 +2563,9 @@ test('deleting the whole anchor takes its mark and its unread with it', () => {
 });
 
 test('D4: with no lane, the document thread is an ordinary Pane and behaves like one', () => {
-  // `docLane: false` does not remove the thread — it stops giving it a bar of its own, so it opens
+  // `docBar: false` does not remove the thread — it stops giving it a bar of its own, so it opens
   // the way every other thread does.
-  const f = mountPanel({ controls: { docLane: false }, instrument: true, setup: twoBlocks });
+  const f = mountPanel({ controls: { docBar: false }, instrument: true, setup: twoBlocks });
   try {
     assert.equal(f.lane(), null, 'no bar');
     anchorArrives(f, { type: 'document' }, 'theirs, about the whole thing');

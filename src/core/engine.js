@@ -317,7 +317,7 @@ class TackbackInstance {
   /**
    * Record a transport DESCRIPTOR for the panel's benefit (REQ-701/205). The core never performs
    * the network/storage transport itself and never calls this object — it only emits typed events
-   * the integrator listens to. The descriptor tells the panel how to label the popup (save when none
+   * the integrator listens to. The descriptor tells the panel how to label the pane (save when none
    * is attached, send when one is) and whether to stay open after a commit (`interactive:true`).
    * @param {{ interactive?: boolean, label?: string } | null} transport
    */

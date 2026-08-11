@@ -48,7 +48,7 @@ export function createHost(config, onVisibilityChange) {
      */
     timelineOpen() {
       if (!alive || !conv) return false;
-      return config.collapsible ? !!rootEl?.classList.contains('tb-open') : true;
+      return config.collapsible ? !!rootEl?.classList.contains('tb-docbar-open') : true;
     },
     identity() { return conv ? conv.identity() : null; },
     anchorOf() { return conv ? conv.anchorOf() : null; },
@@ -56,8 +56,8 @@ export function createHost(config, onVisibilityChange) {
     /** Fold or unfold. A host that cannot fold has nothing to do here and says so by staying put. */
     setOpen(force) {
       if (!alive || !config.collapsible || !rootEl) return this.timelineOpen();
-      const open = force === undefined ? !rootEl.classList.contains('tb-open') : !!force;
-      rootEl.classList.toggle('tb-open', open);
+      const open = force === undefined ? !rootEl.classList.contains('tb-docbar-open') : !!force;
+      rootEl.classList.toggle('tb-docbar-open', open);
       changed();
       return open;
     },

@@ -1,5 +1,5 @@
 // @brainworker/tackback/panel — actor rendering logic (DOM-free), so "who gets which color" is
-// headlessly testable, like the gesture/popup decisions in interaction.js.
+// headlessly testable, like the gesture/pane decisions in interaction.js.
 //
 // Tackback ships NO actor categories and NO category colors. An author may carry an opaque `kind`
 // string; the INTEGRATOR maps kinds to colors (`attachPanel({ actorColors })`). Nothing here knows

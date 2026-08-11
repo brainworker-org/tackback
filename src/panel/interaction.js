@@ -1,4 +1,4 @@
-// @brainworker/tackback/panel — pure interaction logic (DOM-free), so the gesture/handle/popup
+// @brainworker/tackback/panel — pure interaction logic (DOM-free), so the gesture/handle/pane
 // DECISIONS are headlessly testable (REQ-006/008/702/703). The DOM WIRING (PointerEvent listeners,
 // rendering) lives in panel/index.js and calls these; only the real-pointer reliability (NFR-005)
 // and the visual reposition budget (NFR-009) are the manual-gate residue. Keeping the decisions pure
@@ -18,9 +18,9 @@ export function classifyGesture({ button, dragDist, threshold, hasSelection, onS
 }
 
 /**
- * The popup's commit behavior for the current transport descriptor (REQ-702/703). With no transport
- * the action is *save* and the popup closes on commit; with a transport it is *send*; an
- * `interactive:true` transport keeps the popup open as a conversation (then shows pending → failed),
+ * The pane's commit behavior for the current transport descriptor (REQ-702/703). With no transport
+ * the action is *save* and the pane closes on commit; with a transport it is *send*; an
+ * `interactive:true` transport keeps the pane open as a conversation (then shows pending → failed),
  * a fire-and-forget transport closes. These are SEMANTIC actions (localized by the caller).
  * @param {{ interactive?: boolean } | null | undefined} transport
  * @returns {{ action:'save'|'send', closeOnCommit:boolean, conversation:boolean }}
@@ -32,7 +32,7 @@ export function popupCommit(transport) {
 }
 
 /**
- * Whether the popup's commit button is enabled: a commit needs SOMETHING — body text or a reaction —
+ * Whether the pane's commit button is enabled: a commit needs SOMETHING — body text or a reaction —
  * so an empty commit is never offered. Whitespace-only text does not count. Pure UX, no domain
  * meaning. The same rule re-runs after an interactive (stay-open) commit clears the inputs, so the
  * button cannot stay enabled over an empty conversation box.
