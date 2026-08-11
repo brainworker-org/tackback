@@ -117,7 +117,25 @@ test('T53: every demo page chooses its one mark\'s colour for the view it opens 
     `these pages leave their opening view on the shipped default: ${missing.join(', ')}`);
 });
 
-test('T50/T51/T53: the sweep answers about real text, and is not just failing to match', () => {
+test('T54: every demo page draws its one mark as a fill that breathes, not as the ring it replaces', () => {
+  // The look was chosen rather than inherited: while a thread holds something new the whole badge is
+  // orange and pulses on a two-second cycle, and reading it puts the speaker's colour back. The
+  // library draws this state as a ring, so a page that only sets the token would show the ring — the
+  // fill has to be stated, and the ring has to be cleared, or the reader gets both at once.
+  const missing = [];
+  for (const { rel, text } of demoPages()) {
+    const view = asDefaultView(text);
+    const rule = /\.tb-badge\.tb-unread[^{]*\{[^}]*\}/.exec(view)?.[0] || '';
+    if (!/background\s*:[^;]*!important/.test(rule)) missing.push(`${rel}: the mark is not filled`);
+    if (!/box-shadow\s*:\s*none\s*!important/.test(rule)) missing.push(`${rel}: the ring it replaces is still drawn`);
+    if (!/animation\s*:[^;]*\b2s\b/.test(rule)) missing.push(`${rel}: the mark does not breathe on the agreed cycle`);
+    if (!/@keyframes\s+tb-unread-pulse/.test(view)) missing.push(`${rel}: the cycle it names is not defined`);
+    if (!/prefers-reduced-motion/.test(view)) missing.push(`${rel}: a pulse that never stops is not offered a way out`);
+  }
+  assert.deepEqual(missing, [], `the one mark is not drawn as agreed:\n  ${missing.join('\n  ')}`);
+});
+
+test('T50/T51/T53/T54: the sweep answers about real text, and is not just failing to match', () => {
   // The failure an absence check has: reading nothing, finding nothing, and reporting that as clean.
   // So the same readings are pointed at the wiring that was removed, which they must catch.
   const onArrival = `

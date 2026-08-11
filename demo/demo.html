@@ -80,6 +80,30 @@
      way — a fixed breakpoint of our own would disagree with the lane's measurement. */
   :root.tb-lane-stacked { --tb-lane-left: 16px; }
   :root.tb-lane-stacked .trybar { bottom: auto; top: 16px; max-width: calc(100vw - 32px); width: auto; }
+
+  /* ── the one mark ────────────────────────────────────────────────────────────────────────────
+     While a thread holds something the reader has not got to, its badge is FILLED orange and
+     breathes on a two-second cycle. Reading it drops the state and the badge goes back to the
+     speaker's colour, which the panel writes as an inline style — so a fill of this weight is what
+     it takes to sit on top of it, and letting go is what takes it off again.
+
+     The library draws this state as a RING. These rules REPLACE that rather than adding to it, which
+     is why the shadow is cleared alongside: two marks for one state is the thing being avoided. Its
+     stylesheet is appended to <head> after this one and re-appended whenever the panel is rebuilt,
+     so weight rather than order is what makes these hold. */
+  .tb-badge.tb-unread, .tb-pin.tb-unread, .tb-lane.tb-unread .tb-lane-count {
+    background: var(--tb-unread, #ef7f0e) !important;
+    color: #fff !important;
+    box-shadow: none !important;
+    animation: tb-unread-pulse 2s ease-in-out infinite;
+  }
+  .tb-pin.tb-unread { box-shadow: 0 1px 4px rgba(0,0,0,.3) !important; }   /* the pin keeps its lift off the page */
+  @keyframes tb-unread-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+  /* A pulse that never stops is exactly the kind a reader may have asked their system to spare them.
+     The mark itself stays — it is the movement that goes, not the information. */
+  @media (prefers-reduced-motion: reduce) {
+    .tb-badge.tb-unread, .tb-pin.tb-unread, .tb-lane.tb-unread .tb-lane-count { animation: none; }
+  }
 </style>
 </head>
 <body>
