@@ -64,6 +64,22 @@ const STAYS = [
   ['tb-pane-label', 'what the tb-anchor class became'],
 ];
 
+// ============================================================================================
+// STAGE10-TEMP: docs/ is held at 0.9.8-compatible names until the CDN pin is updated (stage 10).
+//               REMOVING THIS EXCLUSION IS A REQUIRED ITEM OF STAGE 10.
+//
+// The hosted demo loads Tackback from a CDN at a pinned version, and GitHub Pages redeploys the
+// moment anything lands on main. So renaming that page and updating its pin cannot happen in the
+// same change: between the two there is a published page written in names the published bundle has
+// never heard of. That is not a hypothetical — it went live, and this is the restore.
+//
+// The page therefore stays on the old names, matching the 0.9.8 bundle it loads, and this check
+// looks away from it. Once 0.9.9 is on npm, stage 10 moves the pin, restores the renamed page (it
+// is in the history — see the commit this reverted), and DELETES this block. Until then the file
+// below is the one place in the repo where an old name is correct.
+// ============================================================================================
+const STAGE10_TEMP = ['docs/index.html'];
+
 // What ships, plus the tests that describe it. CHANGELOG is excluded on purpose: its migration guide
 // lists every old name, which is the point of it. docs/_samples holds dated records of decisions —
 // they say what was true when they were written and must not be rewritten to say something else.
@@ -72,6 +88,7 @@ const files = execFileSync('git', ['ls-files'], { encoding: 'utf8' })
   .filter((f) => /^(src|test|docs|demo)\/|^README\.md$/.test(f))
   .filter((f) => /\.(js|mjs|ts|md|html)$/.test(f))
   .filter((f) => !f.startsWith('docs/_samples/'))
+  .filter((f) => !STAGE10_TEMP.includes(f))
   .concat(execFileSync('sh', ['-c', 'ls types/**/*.d.ts types/*.d.ts 2>/dev/null || true'], { encoding: 'utf8' })
     .split('\n').filter(Boolean));
 
@@ -89,6 +106,31 @@ const hits = (needle) => {
 };
 
 const problems = [];
+
+// The hosted demo is checked differently, and it is checked BECAUSE it is excluded above. Looking
+// away from a file is how this broke: the page was renamed, its pin was not, nothing said so, and
+// GitHub Pages published the pair. What matters about that page is not which vocabulary it uses but
+// whether its vocabulary agrees with the bundle it loads. So that is what is asked.
+const OLD_NAMES = /tb-pin|tb-popup|tb-lane|tb-panel|tb-existing|tb-attn|docLane|--tb-attention/;
+const NEW_NAMES = /tb-floating|tb-pane|tb-docbar|tb-console|tb-timeline|tb-commentable|docBar/;
+const atLeast099 = (v) => {
+  const [maj, min, pat] = v.split('.').map(Number);
+  return maj > 0 || min > 9 || (min === 9 && pat >= 9);
+};
+for (const file of STAGE10_TEMP) {
+  const text = readFileSync(file, 'utf8');
+  const pin = (text.match(/tackback@([0-9]+\.[0-9]+\.[0-9]+)/) || [])[1];
+  if (!pin) continue;                                  // a local build — nothing to disagree with
+  const wantsNew = atLeast099(pin);
+  const speaksWrong = wantsNew ? OLD_NAMES.exec(text) : NEW_NAMES.exec(text);
+  if (speaksWrong) {
+    problems.push(
+      `${file} loads tackback@${pin} but says "${speaksWrong[0]}", which is a ` +
+      `${wantsNew ? 'name that version no longer has' : 'name that version has never heard of'}.\n` +
+      `    Pages serves this pair the moment it lands on main. Move the pin and the page together.`);
+  }
+}
+
 for (const [needle, why] of GONE) {
   const found = hits(needle);
   if (found.length) problems.push(`still here: ${needle}  — ${why}\n    ${found.slice(0, 6).join('\n    ')}` +
