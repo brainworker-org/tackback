@@ -1,6 +1,6 @@
 {
   "name": "@brainworker/tackback",
-  "version": "0.9.8",
+  "version": "0.9.9",
   "private": false,
   "description": "Anchored comments for any web page \u2014 attach to a block, a text phrase, or a region over images/diagrams and other non-text content; export as JSON or hook into a backend. Headless, zero runtime dependencies, offline.",
   "type": "module",
@@ -31,7 +31,8 @@
     "README.md"
   ],
   "scripts": {
-    "test": "node --test",
+    "check:names": "node scripts/check-names.mjs",
+    "test": "node scripts/check-names.mjs && node --test",
     "build": "node scripts/build.mjs",
     "types": "tsc -p tsconfig.json && tsc -p tsconfig.types-check.json",
     "prepublishOnly": "npm run build && npm run types && npm test"

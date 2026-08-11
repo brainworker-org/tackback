@@ -4,21 +4,124 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
 [Keep a Changelog](https://keepachangelog.com/), and the project uses [SemVer](https://semver.org/)
 (pre-1.0: the public **JavaScript** API may still change before 1.0).
 
-## [Unreleased]
+## [0.9.9] — 2026-08-11
+
+**Everything in this release is a rename or a removal.** No behaviour changed. If you have never
+written CSS against Tackback's classes, never overridden a token, and never called `setAnchorAttention`,
+there is nothing here for you to do.
+
+If you have, the tables below are the whole of it.
+
+### Removed
+
+`setAnchorAttention()`, `hasAttention()`, the `attention:change` event, the `--tb-attention` token and
+the `.tb-attn` class are gone.
+
+Attention was a flag with no meaning of its own: you raised it, Tackback painted the anchor orange, and
+what it meant was yours. In practice it meant one thing — unread — and since 0.9.7 unread has a real
+mechanism that answers to reading. Keeping both left two marks, two colours, and only one of them
+cleared by looking at the thread.
+
+**If you were using attention to mean unread**, you can delete your wiring: `unreadCount`,
+`unreadThreads` and `unread:change` already track and paint it, and the mark clears when the reader
+actually reads. **If you were using it to mean something else**, you now need your own class and your
+own colour — Tackback no longer offers a general-purpose "look at this" tint.
+
+### Renamed — API and settings
+
+| Before | After |
+|---|---|
+| `panel.toggleDocumentLane()` | `panel.toggleDocumentBar()` |
+| `controls.docLane` | `controls.docBar` |
+
+### Renamed — CSS tokens
+
+| Before | After |
+|---|---|
+| `--tb-pin-bg` / `--tb-pin-fg` | `--tb-badge-bg` / `--tb-badge-fg` |
+| `--tb-popup-bg` / `--tb-popup-fg` | `--tb-pane-bg` / `--tb-pane-fg` |
+| `--tb-lane-left` / `--tb-lane-right` / `--tb-lane-lift` | `--tb-docbar-left` / `--tb-docbar-right` / `--tb-docbar-lift` |
+| `--tb-panel-reserve` | `--tb-console-reserve` |
+| `--tb-attention` | *removed* |
+
+### Renamed — CSS classes
+
+| Before | After |
+|---|---|
+| `.tb-pin` | `.tb-badge.tb-floating` |
+| `.tb-popup` | `.tb-pane` |
+| `.tb-existing` | `.tb-timeline` |
+| `.tb-panel` | `.tb-console` |
+| `.tb-lane` | `.tb-docbar` |
+| `.tb-lane-head` / `-title` / `-count` / `-body` / `-composer` | `.tb-docbar-head` / `-title` / `-count` / `-body` / `-composer` |
+| `.tb-anchor` | `.tb-pane-label` |
+| `.tb-mark` | `.tb-commentable` |
+| `.tb-open` | `.tb-docbar-open` |
+| `.tb-count` / `.tb-hint` | `.tb-console-count` / `.tb-console-hint` |
+| `.tb-attn` | *removed* |
+
+`.tb-pin` is the one that is not a straight substitution. Region anchors and text anchors were doing
+the same job under two names; there is now one badge, and `.tb-floating` says which of them sits on a
+picture. **A rule you wrote for `.tb-pin` becomes a rule for `.tb-badge.tb-floating`** — dropping the
+`.tb-floating` half would reach every badge on the page.
+
+### Renamed — root signals and message keys
+
+| Before | After |
+|---|---|
+| `tb-popup-open` (on the root element) | `tb-pane-open` |
+| `tb-lane-stacked` (on the root element) | `tb-docbar-stacked` |
+| `popup.placeholder` / `.save` / `.cancel` / `.emojiOnly` / `.send` / `.pending` | `pane.*` |
+| `panel.docLane` | `panel.docBar` |
+
+**If you override message strings, check your keys.** An override under an old key is not an error —
+it simply stops applying, and the built-in English comes back.
+
+### Not renamed
+
+Listed because "everything moved" is the wrong impression to leave:
+
+| Unchanged | |
+|---|---|
+| `@brainworker/tackback/panel` | the npm subpath. Your imports are fine. |
+| `attachPanel()` | so is your call. |
+| `panel.*` message keys other than `docLane` | they belong to `attachPanel`, which kept its name |
+| `surfaceId`, `regionSurfaces`, `[data-tb-surface]` | the coordinate system |
+| `[data-tb-anchor]`, `[data-tb-section]` | attributes on your own elements |
+| `--tb-mark-bg`, `--tb-mark-outline` | they still paint what can be commented on |
+| `toggleMarks()` | the method kept its name; only the class it dresses moved |
+| `.tb-badge`, `.tb-region`, `.tb-unread`, `.tb-orphan`, `.tb-sec` | already said what they meant |
 
 ### Fixed
+
 - **Turning the marks off no longer takes the page with them.** Comment on a paragraph, press
   **Toggle marks**, and 0.9.8 hid the paragraph — not the badge on it, the paragraph itself.
 
-  `tb-mark` is a class the panel puts on **your** element, to tint it and outline it as somewhere a
-  comment can go. 0.9.8 added it to the list of things `toggleMarks()` hides, and hiding an element
-  wearing it hides the host's own content. Only what the panel drew is hidden now — the badges and the
-  boxes over an area — and what it borrowed is undressed instead: the tint and the outline come off,
-  the paragraph stays.
+  `tb-mark` — `.tb-commentable` as of this release — is a class the panel puts on **your** element, to
+  tint it and outline it as somewhere a comment can go. 0.9.8 added it to the list of things
+  `toggleMarks()` hides, and hiding an element wearing it hides the host's own content. Only what the
+  panel drew is hidden now — the badges and the boxes over an area — and what it borrowed is undressed
+  instead: the tint and the outline come off, the paragraph stays.
 
-  The distinction is now the rule rather than a list: a class the panel **owns** may be hidden, a
-  class it **borrowed** may only be undressed, and the set of hidden things is fixed exactly, so
-  adding a fourth asks the question again instead of passing quietly.
+  The distinction is now the rule rather than a list: a class the panel **owns** may be hidden, a class
+  it **borrowed** may only be undressed, and the set of hidden things is fixed exactly, so adding a
+  fourth asks the question again instead of passing quietly.
+
+  The rename in this release closes the same gap in the vocabulary: the class is called
+  `.tb-commentable` because that is what it marks, and `toggleMarks()` covers more than it.
+
+### Changed
+
+- The Pane's cancel button reads **閉じる** in Japanese, not 取消. It closes the Pane; an empty
+  composer was never a composition to undo.
+- Errors and import validation are now **written down** in the README, as `## Errors` and
+  `## What an import may not do`. Nothing about either changed — they had simply never been stated,
+  so the only way to learn them was to read the source or to be surprised. The import rules are given
+  as conditions rather than prose, because a validation contract you cannot check your envelope
+  against is not much of one.
+- Three of those statements had no test and now do: that `allowPartial` does not reach an identity
+  fault, that a tombstone is honoured in both `merge` and `replace`, and that a refused entry does not
+  consume its id.
 
 ## [0.9.8] — 2026-08-11
 
@@ -579,6 +682,7 @@ Initial public-prep release (staging). Standalone extraction of the Tackback lib
   including commercial, except to provide a product that competes with Tackback.
 
 [Unreleased]: https://github.com/brainworker-org/tackback/compare/v0.9.8...HEAD
+[0.9.9]: https://github.com/brainworker-org/tackback/releases/tag/v0.9.9
 [0.9.8]: https://github.com/brainworker-org/tackback/releases/tag/v0.9.8
 [0.9.7]: https://github.com/brainworker-org/tackback/releases/tag/v0.9.7
 [0.9.6]: https://github.com/brainworker-org/tackback/releases/tag/v0.9.6
