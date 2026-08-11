@@ -1,8 +1,8 @@
 {
   "name": "@brainworker/tackback",
-  "version": "0.9.7",
+  "version": "0.9.8",
   "private": false,
-  "description": "Anchored comments for any web page — attach to a block, a text phrase, or a region over images/diagrams and other non-text content; export as JSON or hook into a backend. Headless, zero runtime dependencies, offline.",
+  "description": "Anchored comments for any web page \u2014 attach to a block, a text phrase, or a region over images/diagrams and other non-text content; export as JSON or hook into a backend. Headless, zero runtime dependencies, offline.",
   "type": "module",
   "main": "./src/index.js",
   "types": "./types/index.d.ts",

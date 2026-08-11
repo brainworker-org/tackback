@@ -13,10 +13,13 @@ export const TOKENS = [
   // (setAnchorAttention). It is a generic "needs-notice" tint — the *meaning* of the flag (e.g.
   // "unread") is the integrator's, never Tackback's. Override it like any other token.
   '--tb-attention',
-  // `--tb-unread` rings an anchor holding something this reader has not got to yet. Deliberately a
-  // different channel from attention rather than a different value of the same one: attention fills,
-  // unread outlines, and an anchor that is both wears both. One tint doing two jobs is how "I read it
-  // and the mark is still there" comes back — the exact failure this version removes.
+  // `--tb-unread` FILLS a badge holding something this reader has not got to yet, and it breathes on
+  // a two-second cycle while it does. Reading the thread takes the fill away and the badge goes back
+  // to the colour of whoever spoke last, so the mark and its removal are one thing rather than two.
+  //
+  // The ink on top of that fill is not a token. It follows the light/dark base — white on the light
+  // orange, black on the lighter dark one — and a token would make that a promise callers could
+  // change independently of the fill, which is not a promise worth making.
   '--tb-unread',
 ];
 
@@ -25,7 +28,7 @@ export const LIGHT = {
   '--tb-mark-bg': 'rgba(255,210,0,.20)', '--tb-mark-outline': '#d9a400',
   '--tb-pin-bg': '#d9a400', '--tb-pin-fg': '#000000',
   '--tb-popup-bg': '#ffffff', '--tb-popup-fg': '#111111', '--tb-muted': '#777777', '--tb-danger': '#cc3333',
-  '--tb-attention': '#ef7f0e', '--tb-unread': '#2f6fed',
+  '--tb-attention': '#ef7f0e', '--tb-unread': '#ef7f0e',
 };
 
 export const DARK = {
@@ -33,7 +36,7 @@ export const DARK = {
   '--tb-mark-bg': 'rgba(255,210,0,.16)', '--tb-mark-outline': '#d9a400',
   '--tb-pin-bg': '#d9a400', '--tb-pin-fg': '#000000',
   '--tb-popup-bg': '#2a2c2e', '--tb-popup-fg': '#eeeeee', '--tb-muted': '#aaaaaa', '--tb-danger': '#e06666',
-  '--tb-attention': '#f59331', '--tb-unread': '#6ea8fe',
+  '--tb-attention': '#f59331', '--tb-unread': '#f59331',
 };
 
 /**
@@ -69,4 +72,21 @@ export function resolveTheme(theme, prefersDark) {
 export function buildThemeCSS(tokens, selector = '[data-tb-root]') {
   const body = Object.entries(tokens).map(([k, v]) => `  ${k}: ${v};`).join('\n');
   return `${selector} {\n${body}\n}`;
+}
+
+/**
+ * The ink a filled unread mark is written in — white on the light base, black on the dark one.
+ *
+ * Not a token, deliberately. It is not a colour anyone chooses; it is whatever stays legible on the
+ * fill beside it, so publishing it as a token would offer a promise that can only be used to break
+ * the pairing. It is emitted as a plain rule alongside the token map instead.
+ * @param {'auto'|'light'|'dark'|Record<string,string>} theme
+ * @param {boolean} prefersDark
+ * @returns {string}
+ */
+export function buildUnreadInkCSS(theme, prefersDark, selector = '[data-tb-root]') {
+  const dark = theme === 'dark' || (theme !== 'light' && prefersDark);
+  const ink = dark ? '#000000' : '#ffffff';
+  return `${selector} .tb-badge.tb-unread,\n${selector} .tb-pin.tb-unread,\n`
+    + `${selector} .tb-lane.tb-unread .tb-lane-count { color: ${ink} !important; }`;
 }

@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>0.9.8 段1 — 未読の見た目・未確認の面(選択用)</title>
+<style>
+  :root {
+    /* the product's own tokens, at their real values */
+    --pin-bg-light: #d9a400; --pin-fg-light: #000000;
+    --attn-light: #ef7f0e;   --unread-light: #2f6fed;
+    --attn-dark:  #f59331;   --unread-dark:  #6ea8fe;
+    --s3: #ef7f0e;                  /* S3 as applied in the demos today */
+    --actor-human: #db2777; --actor-ai: #2563eb;
+  }
+  body { font: 15px/1.8 -apple-system, system-ui, "Hiragino Sans", sans-serif;
+    max-width: 1000px; margin: 0 auto; padding: 2em 1.2em 6em; color: #1c1e21; background: #fbfbf7; }
+  h1 { font-size: 1.6rem; margin-bottom: .2em; }
+  h2 { font-size: 1.15rem; margin-top: 2.4em; border-bottom: 2px solid #d9d9d3; padding-bottom: .25em; }
+  .lead { color: #555; }
+  table { border-collapse: collapse; width: 100%; margin: 1em 0 2em; }
+  th, td { border: 1px solid #ccc; padding: .8em; vertical-align: middle; }
+  th { background: #f3f7f4; font-size: .9em; text-align: left; }
+  td.q { width: 15%; font-weight: 700; }
+  td.d { width: 26%; font-size: .88em; color: #555; }
+  .stage { padding: 1.1em; border-radius: 8px; }
+  .light { background: #ffffff; color: #1c1e21; }
+  .dark  { background: #1b1c1d; color: #e6e6e6; }
+  .note { font-size: .85em; color: #666; }
+  .open { background: #fff6e5; border-left: 4px solid #ef7f0e; padding: .8em 1em; margin: 1em 0; }
+
+  /* ── the real shapes, copied from the panel's own stylesheet ───────────────────── */
+  .badge, .pin { display: inline-block; cursor: pointer; font-size: 11px; line-height: 1.6;
+    font-weight: 700; border-radius: 10px; padding: 0 7px; white-space: nowrap; }
+  .pin { box-shadow: 0 1px 4px rgba(0,0,0,.3); }
+  /* the lane, and its count — plain text until a state makes it a pill */
+  .lane { display: flex; align-items: center; gap: .6em; border: 1px solid #cfcfcf;
+    border-radius: 10px; padding: .5em .8em; background: #fff; max-width: 460px; }
+  .dark .lane { background: #2a2c2e; border-color: #555; }
+  .lane-title { font-size: 12px; }
+  .lane-count { font-size: 11px; opacity: .75; }
+  .lane-count.pill { border-radius: 9px; padding: 0 7px; opacity: 1; }
+
+  /* states */
+  .ring-l  { box-shadow: 0 0 0 2px var(--unread-light); }
+  .ring-d  { box-shadow: 0 0 0 2px var(--unread-dark); }
+  .ring-pin-l { box-shadow: 0 0 0 2px var(--unread-light), 0 1px 4px rgba(0,0,0,.3); }
+  .fill-s3 { background: var(--s3) !important; color: #fff !important; box-shadow: none !important; }
+  .fill-pin-s3 { background: var(--s3) !important; color: #fff !important; box-shadow: 0 1px 4px rgba(0,0,0,.3) !important; }
+  .fill-dark-a { background: #ef7f0e !important; color: #fff !important; box-shadow: none !important; }
+  .fill-dark-b { background: #f59331 !important; color: #1b1c1d !important; box-shadow: none !important; }
+  .pulse { animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: .55 } }
+  @media (prefers-reduced-motion: reduce) { .pulse { animation: none } }
+</style>
+</head>
+<body>
+
+<h1>0.9.8 段1 — 未読の見た目・<u>まだ確認していない面</u></h1>
+<p class="lead">S3(オレンジ塗り+2秒拍動)は<b>アンカーバッジで選ばれました</b>。この版で製品既定にすると、
+<b>同じ状態が他の面にも出ます</b>。その面はまだ実物を見ていません。以下は各面の候補を並べたもので、
+番号で選べます。<b>動きます。</b></p>
+
+<div class="open">
+  <b>この版で決まっていないこと</b> — ① Lane 件数バッジに S3 をどう当てるか ② ピン(領域アンカー)の未読の出し方
+  ③ ダークモードのオレンジの値 ④ attention と未読が同時のときに何を描くか(§4)
+</div>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>① Lane 件数バッジ — 未読のとき</h2>
+<p class="note">現在の Lane 件数は<b>塗りも枠も無い薄い文字</b>(<code>opacity:.75</code>)で、
+未読/attention のときだけ丸い pill になります。バッジと違い<b>「発話者の色」を持ちません</b> —
+既読に戻ったとき何色になるかが、バッジとは別の問いになります。</p>
+
+<table>
+  <tr><th>案</th><th>説明</th><th>未読あり(ライト)</th><th>既読(ライト)</th></tr>
+
+  <tr>
+    <td class="q">L-1</td>
+    <td class="d">バッジと同じ扱い。オレンジの pill + 拍動。既読で<b>薄い文字に戻る</b></td>
+    <td><div class="stage light"><div class="lane"><span class="lane-title">📄 この文書について</span>
+      <span class="lane-count pill fill-s3 pulse">💬2</span></div></div></td>
+    <td><div class="stage light"><div class="lane"><span class="lane-title">📄 この文書について</span>
+      <span class="lane-count">💬2</span></div></div></td>
+  </tr>
+
+  <tr>
+    <td class="q">L-2</td>
+    <td class="d">塗りは同じだが<b>拍動させない</b>。Lane は常に画面下端にあり、動き続けると視界の端で騒がしいため</td>
+    <td><div class="stage light"><div class="lane"><span class="lane-title">📄 この文書について</span>
+      <span class="lane-count pill fill-s3">💬2</span></div></div></td>
+    <td><div class="stage light"><div class="lane"><span class="lane-title">📄 この文書について</span>
+      <span class="lane-count">💬2</span></div></div></td>
+  </tr>
+
+  <tr>
+    <td class="q">L-3</td>
+    <td class="d">Lane の<b>見出し全体</b>をオレンジにする。件数だけでは小さすぎるという判断の場合</td>
+    <td><div class="stage light"><div class="lane" style="border-color:#ef7f0e;box-shadow:0 0 0 2px #ef7f0e33">
+      <span class="lane-title" style="color:#ef7f0e;font-weight:700">📄 この文書について</span>
+      <span class="lane-count pill fill-s3 pulse">💬2</span></div></div></td>
+    <td><div class="stage light"><div class="lane"><span class="lane-title">📄 この文書について</span>
+      <span class="lane-count">💬2</span></div></div></td>
+  </tr>
+
+  <tr>
+    <td class="q">L-0</td>
+    <td class="d">現行(比較用)。青い縁取りだけ</td>
+    <td><div class="stage light"><div class="lane"><span class="lane-title">📄 この文書について</span>
+      <span class="lane-count pill ring-l">💬2</span></div></div></td>
+    <td><div class="stage light"><div class="lane"><span class="lane-title">📄 この文書について</span>
+      <span class="lane-count">💬2</span></div></div></td>
+  </tr>
+</table>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>② ピン(領域アンカー)— 未読のとき</h2>
+<p class="note">ピンは画像や図の上に浮く小さな印で、<b>浮き上がりの影</b>を持ちます。
+バッジと同じく最後の発話者の色を着ます。<b>影と塗りをどう両立させるか</b>が未確認です。</p>
+
+<table>
+  <tr><th>案</th><th>説明</th><th>未読あり(ライト)</th><th>既読(ライト)</th></tr>
+
+  <tr>
+    <td class="q">P-1</td>
+    <td class="d">バッジと同じ。オレンジ塗り+拍動。<b>浮き上がりの影は残す</b></td>
+    <td><div class="stage light" style="background:#eee">
+      図の上 → <span class="pin fill-pin-s3 pulse">💬3</span></div></td>
+    <td><div class="stage light" style="background:#eee">
+      図の上 → <span class="pin" style="background:var(--actor-ai);color:#fff">💬3</span></div></td>
+  </tr>
+
+  <tr>
+    <td class="q">P-2</td>
+    <td class="d">オレンジ塗り+拍動+<b>オレンジの光背</b>。図柄の上でも埋もれないように</td>
+    <td><div class="stage light" style="background:#eee">
+      図の上 → <span class="pin pulse" style="background:#ef7f0e;color:#fff;box-shadow:0 0 0 3px #ef7f0e55,0 1px 4px rgba(0,0,0,.3)">💬3</span></div></td>
+    <td><div class="stage light" style="background:#eee">
+      図の上 → <span class="pin" style="background:var(--actor-ai);color:#fff">💬3</span></div></td>
+  </tr>
+
+  <tr>
+    <td class="q">P-0</td>
+    <td class="d">現行(比較用)。発話者色の塗り+青い縁取り</td>
+    <td><div class="stage light" style="background:#eee">
+      図の上 → <span class="pin ring-pin-l" style="background:var(--actor-ai);color:#fff">💬3</span></div></td>
+    <td><div class="stage light" style="background:#eee">
+      図の上 → <span class="pin" style="background:var(--actor-ai);color:#fff">💬3</span></div></td>
+  </tr>
+</table>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>③ ダークモードのオレンジ</h2>
+<p class="note">デモは今 <b>ライト・ダークとも同じ <code>#ef7f0e</code></b> を使っています。
+製品既定はトークンごとに light/dark を分けており(現在の attention は <code>#ef7f0e</code> / <code>#f59331</code>)、
+<b>未読も分けるかどうか</b>が未確認です。</p>
+
+<table>
+  <tr><th>案</th><th>説明</th><th>ダーク背景での見え方</th><th>比較: ライト</th></tr>
+
+  <tr>
+    <td class="q">D-1</td>
+    <td class="d">両モード同値 <code>#ef7f0e</code>(白文字)。デモの現状のまま</td>
+    <td><div class="stage dark">…本文の中に <span class="badge fill-dark-a pulse">💬2</span> このように…</div></td>
+    <td><div class="stage light">…本文の中に <span class="badge fill-s3 pulse">💬2</span> このように…</div></td>
+  </tr>
+
+  <tr>
+    <td class="q">D-2</td>
+    <td class="d">ダークは明るい <code>#f59331</code>(attention のダーク値と同じ)+<b>黒文字</b></td>
+    <td><div class="stage dark">…本文の中に <span class="badge fill-dark-b pulse">💬2</span> このように…</div></td>
+    <td><div class="stage light">…本文の中に <span class="badge fill-s3 pulse">💬2</span> このように…</div></td>
+  </tr>
+
+  <tr>
+    <td class="q">D-3</td>
+    <td class="d">ダークは <code>#f59331</code> + 白文字</td>
+    <td><div class="stage dark">…本文の中に <span class="badge pulse" style="background:#f59331;color:#fff">💬2</span> このように…</div></td>
+    <td><div class="stage light">…本文の中に <span class="badge fill-s3 pulse">💬2</span> このように…</div></td>
+  </tr>
+</table>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>④ attention と未読が同時のとき(0.9.8 の間だけ起きる)</h2>
+<p class="note">attention の全廃は <b>0.9.9</b> です。0.9.8 の間は両方が立ちえます。
+これまでは <b>attention = 塗り / 未読 = 縁取り</b>で両立していましたが、
+未読が塗りになると<b>同じ場所を奪い合います</b>。しかも既定値はどちらも <code>#ef7f0e</code> で、色でも区別が付きません。</p>
+
+<table>
+  <tr><th>案</th><th>説明</th><th>両方立っているとき</th></tr>
+  <tr>
+    <td class="q">A-1</td>
+    <td class="d">未読が勝つ(attention は見えなくなる)</td>
+    <td><div class="stage light">…本文の中に <span class="badge fill-s3 pulse">💬2</span> このように…</div></td>
+  </tr>
+  <tr>
+    <td class="q">A-2</td>
+    <td class="d">attention が勝つ(未読は見えなくなる。拍動も止まる)</td>
+    <td><div class="stage light">…本文の中に <span class="badge" style="background:#ef7f0e;color:#fff">💬2</span> このように…</div></td>
+  </tr>
+  <tr>
+    <td class="q">A-3</td>
+    <td class="d">未読=塗り+拍動 / attention=<b>点</b>に退避して両立させる</td>
+    <td><div class="stage light">…本文の中に <span class="badge fill-s3 pulse" style="position:relative">💬2<span style="position:absolute;top:-4px;right:-4px;width:9px;height:9px;border-radius:50%;background:#b45309;border:1.5px solid #fff"></span></span> このように…</div></td>
+  </tr>
+</table>
+
+<hr style="margin:3em 0 1.5em;border:none;border-top:1px solid #ddd">
+<p class="note"><b>共通:</b> どの案でも「開いて読めば消える」挙動は同一です(表現だけの選択)。<br>
+<b>動きを避ける設定</b>(<code>prefers-reduced-motion: reduce</code>)では、拍動だけが止まり塗りは残ります。
+このページもその設定に従います。</p>
+
+</body>
+</html>

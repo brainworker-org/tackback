@@ -308,7 +308,7 @@ function instrumentEnv({ noRaf = false } = {}) {
 }
 
 /** Mount a core + panel on a fresh fake document. Returns everything a test needs to drive it. */
-function mountPanel({ comments = [], controls, instrument = false, setup, noRaf = false, storage: storageOverride } = {}) {
+function mountPanel({ comments = [], controls, instrument = false, setup, noRaf = false, storage: storageOverride, theme } = {}) {
   const env = instrument ? instrumentEnv({ noRaf }) : null;
   const doc = fakeDoc();
   // mount on the body, as a page with no explicit root does — that is what puts the lane INSIDE the
@@ -323,7 +323,7 @@ function mountPanel({ comments = [], controls, instrument = false, setup, noRaf 
   setup?.(doc, root, core);
   // Taken after the core is mounted and after the host page exists, and before the panel attaches.
   const before = env ? env.census(doc) : null;
-  const panel = attachPanel(core, { root, target: doc.body, ...(controls ? { controls } : {}) });
+  const panel = attachPanel(core, { root, target: doc.body, ...(controls ? { controls } : {}), ...(theme !== undefined ? { theme } : {}) });
   // Restoring the globals comes FIRST and unconditionally: a teardown that throws before putting the
   // environment back leaves every later test running against stubs, which is how a single mistake
   // here once hung the whole suite rather than failing one case.
@@ -2006,7 +2006,7 @@ test('T6/T12: opening a thread clears that one, and only that one', () => {
 
     assert.equal(f.core.unreadCount('block:p2'), 0, 'the one they opened is read');
     assert.equal(f.core.unreadCount('block:p1'), 1, 'the one they did not is not');
-    assert.ok(!badgeFor(f, 'p2').classList.contains('tb-unread'), 'the ring is gone from the one opened');
+    assert.ok(!badgeFor(f, 'p2').classList.contains('tb-unread'), 'the mark is gone from the one opened');
     assert.ok(badgeFor(f, 'p1').classList.contains('tb-unread'), 'and still on the other');
   } finally { f.restore(); }
 });
@@ -2040,7 +2040,7 @@ test('T8/T9: a folded document lane is not read, and unfolding it reads it', () 
     f.panel.toggleDocumentLane(true);
     f.env.drainMicrotasks();
     assert.equal(f.core.unreadCount('document'), 0);
-    assert.ok(!f.lane().classList.contains('tb-unread'), 'the ring goes when it is opened');
+    assert.ok(!f.lane().classList.contains('tb-unread'), 'the mark goes when it is opened');
   } finally { f.restore(); }
 });
 
@@ -2056,10 +2056,11 @@ test('T10: with no lane, the document thread reads through an ordinary Pane', ()
   } finally { f.restore(); }
 });
 
-test('T26: attention and unread do not take each other\'s place', () => {
-  // If one of them hid the other, an integration still using attention would see "I read it and the
-  // mark is there" all over again — the failure this version exists to remove, reintroduced by the
-  // paint rather than by the state.
+test('T26: attention and unread are separate states, whichever one is drawn', () => {
+  // They now draw on the same channel — both are fills — so the paint can only show one, and unread
+  // is the one it shows. What must not follow is the STATE collapsing into it: an integrator still
+  // using attention has to be able to raise and lower it, and read it back, while unread comes and
+  // goes underneath. Attention is on its way out; until it is, this is what holds.
   const f = mountPanel({ instrument: true, setup: twoBlocks });
   try {
     const c = { id: arrives(f, 'p1', 'here') };
@@ -2070,8 +2071,8 @@ test('T26: attention and unread do not take each other\'s place', () => {
 
     f.core.setAnchorAttention(c.id, true);
     f.env.drainMicrotasks();
-    assert.ok(badge().classList.contains('tb-unread'), 'attention does not cover the ring');
-    assert.ok(badge().classList.contains('tb-attn'), 'and the ring does not cover the fill');
+    assert.ok(badge().classList.contains('tb-unread'), 'both states are on the badge…');
+    assert.ok(badge().classList.contains('tb-attn'), '…and neither is dropped because of the other');
 
     openPane(f, badge());
     assert.ok(!badge().classList.contains('tb-unread'), 'reading clears its own mark');
@@ -2126,7 +2127,7 @@ test('a redraw that nothing else follows still leaves the rings on', () => {
     f.core.recalculateAnchors();
     f.env.drainMicrotasks();
     assert.equal(f.core.unreadCount('block:p1'), 1, 'nothing about the reading changed');
-    assert.ok(badgeFor(f, 'p1').classList.contains('tb-unread'), 'so the ring is still there');
+    assert.ok(badgeFor(f, 'p1').classList.contains('tb-unread'), 'so the mark is still there');
   } finally { f.restore(); }
 });
 
@@ -2336,3 +2337,233 @@ test('row 7 (drawn) — typing does not take somebody else\'s mark down', () => 
     assert.ok(badgeFor(f, 'p1').classList.contains('tb-unread'), 'the mark is still up');
   } finally { f.restore(); }
 });
+
+// ---- the unread mark as the product's own default -------------------------------------------------
+//
+// WHAT THESE CAN AND CANNOT SEE. The fake document's `getComputedStyle` answers with `position` and
+// nothing else, and there is no `getAnimations`, so no test here can say what a mark LOOKS like. What
+// they can say is what the panel WROTE — the rules it puts on the page — and that is what they say.
+// Whether those rules produce an orange that breathes is checked in a real browser, and is not
+// claimed here. Building a fake that resolved the cascade would only move the lie somewhere quieter.
+
+const panelCSS = (f) => (f.doc.head.children || []).map((c) => c.textContent || '').join('\n');
+/**
+ * Every rule that names this selector, joined — not the first one found.
+ *
+ * A selector appears more than once on purpose: the reduced-motion block names the same three marks
+ * in order to stop their movement. Reading only the first match found whichever came earlier in the
+ * file, which is a property of the file rather than of the rule being asked about.
+ */
+const unreadRule = (css, sel) => {
+  const esc = sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return [...css.matchAll(new RegExp(`[^{}@]*${esc}[^{}]*\\{[^}]*\\}`, 'g'))].map((m) => m[0]).join('\n');
+};
+
+test('S3-U1: the mark the panel writes for unread is a FILL, and the ring it replaces is gone', () => {
+  const f = mountPanel({ instrument: true, setup: twoBlocks });
+  try {
+    const css = panelCSS(f);
+    for (const sel of ['.tb-badge.tb-unread', '.tb-pin.tb-unread']) {
+      const rule = unreadRule(css, sel);
+      assert.match(rule, /background:\s*var\(--tb-unread\)\s*!important/, `${sel}: filled`);
+      assert.doesNotMatch(rule, /box-shadow:\s*0 0 0 2px var\(--tb-unread\)/, `${sel}: not also ringed`);
+    }
+    const lane = unreadRule(css, '.tb-lane.tb-unread .tb-lane-count');
+    assert.match(lane, /background:\s*var\(--tb-unread\)\s*!important/, 'the lane count too');
+  } finally { f.restore(); }
+});
+
+test('S3-U2: it breathes on the agreed cycle, and the cycle it names is defined', () => {
+  const f = mountPanel({ instrument: true, setup: twoBlocks });
+  try {
+    const css = panelCSS(f);
+    for (const sel of ['.tb-badge.tb-unread', '.tb-pin.tb-unread', '.tb-lane.tb-unread .tb-lane-count']) {
+      assert.match(unreadRule(css, sel), /animation:\s*tb-unread-pulse\s+2s\b/, `${sel}: 2s pulse`);
+    }
+    assert.match(css, /@keyframes\s+tb-unread-pulse\s*\{/, 'and the cycle exists');
+  } finally { f.restore(); }
+});
+
+test('S3-U3: a reader who asked for less movement gets the mark without the movement', () => {
+  const f = mountPanel({ instrument: true, setup: twoBlocks });
+  try {
+    const css = panelCSS(f);
+    const guard = /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{([\s\S]*?)\}\s*\}/.exec(css);
+    assert.ok(guard, 'the guard exists');
+    assert.match(guard[1], /animation:\s*none/, 'and it stops the movement');
+    assert.doesNotMatch(guard[1], /background|display\s*:\s*none/, 'and takes nothing else with it');
+  } finally { f.restore(); }
+});
+
+test('S3-U4: the ink on the fill follows the base, and is not a token anyone can take apart', () => {
+  const light = mountPanel({ instrument: true, setup: twoBlocks, theme: 'light' });
+  try {
+    assert.match(panelCSS(light), /\.tb-badge\.tb-unread[\s\S]{0,200}?color:\s*#ffffff\s*!important/,
+      'white on the light fill');
+  } finally { light.restore(); }
+  const dark = mountPanel({ instrument: true, setup: twoBlocks, theme: 'dark' });
+  try {
+    assert.match(panelCSS(dark), /\.tb-badge\.tb-unread[\s\S]{0,200}?color:\s*#000000\s*!important/,
+      'black on the darker one');
+    assert.doesNotMatch(panelCSS(dark), /--tb-unread-(ink|fg|text)/, 'and no new token was published for it');
+  } finally { dark.restore(); }
+});
+
+// ---- what the change must NOT reach ---------------------------------------------------------------
+
+test('L3-1: changing what unread looks like moves nothing else', () => {
+  const f = mountPanel({ instrument: true, setup: twoBlocks });
+  try {
+    const css = panelCSS(f);
+    for (const [token, value] of [['--tb-accent', '#33aa77'], ['--tb-mark-outline', '#d9a400'],
+      ['--tb-pin-bg', '#d9a400'], ['--tb-attention', '#ef7f0e']]) {
+      assert.match(css, new RegExp(`${token}:\\s*${value}`), `${token} is where it was`);
+    }
+  } finally { f.restore(); }
+});
+
+test('L3-2: unread is not in the palettes yet — that is a later version\'s question', () => {
+  const f = mountPanel({ instrument: true, setup: twoBlocks, theme: 'ocean' });
+  try {
+    assert.match(panelCSS(f), /--tb-unread:\s*#ef7f0e/, 'a palette leaves the mark alone');
+  } finally { f.restore(); }
+});
+
+test('L3-3: a caller can still say what the mark should look like', () => {
+  const f = mountPanel({ instrument: true, setup: twoBlocks, theme: { '--tb-unread': '#123456' } });
+  try {
+    assert.match(panelCSS(f), /--tb-unread:\s*#123456/, 'the default did not seal the door');
+  } finally { f.restore(); }
+});
+
+test('L3-4: only what is unread breathes', () => {
+  const f = mountPanel({ instrument: true, setup: twoBlocks });
+  try {
+    const css = panelCSS(f);
+    const animated = [...css.matchAll(/([^{}]+)\{[^}]*animation:\s*tb-unread-pulse[^}]*\}/g)]
+      .map((m) => m[1].trim());
+    for (const sel of animated) assert.match(sel, /tb-unread/, `${sel} breathes, and it should not`);
+    assert.doesNotMatch(unreadRule(css, '.tb-badge.tb-attn'), /animation/, 'attention alone is still');
+  } finally { f.restore(); }
+});
+
+test('L3-5: hiding the marks hides the areas too, and changes nothing about what is unread', () => {
+  const f = mountPanel({ instrument: true, setup: twoBlocks });
+  try {
+    const css = panelCSS(f);
+    const hide = (new RegExp('\\.tb-hide[^{]*\\{[^}]*\\}', 'g').exec(css) || [''])[0];
+    for (const what of ['.tb-badge', '.tb-pin', '.tb-region', '.tb-mark']) {
+      assert.match(hide, new RegExp(`\\${what}\\b`), `${what} goes with the rest`);
+    }
+    assert.match(css, /tb-hide\s+::highlight\(tb-range\)/, 'and so does a highlighted quote');
+
+    arrives(f, 'p1', 'while the marks are on');
+    assert.equal(f.core.unreadCount('block:p1'), 1);
+    f.panel.toggleMarks();
+    f.env.drainMicrotasks();
+    assert.equal(f.core.unreadCount('block:p1'), 1, 'hiding is not reading');
+    arrives(f, 'p2', 'and this arrives while they are hidden');
+    assert.equal(f.core.unreadCount('block:p2'), 1, 'what arrives out of sight still counts');
+    f.panel.toggleMarks();
+    f.env.drainMicrotasks();
+    assert.ok(badgeFor(f, 'p2').classList.contains('tb-unread'), 'and is there when they look again');
+  } finally { f.restore(); }
+});
+
+test('L3-6: the lane count wears the speaker\'s colour, and unread still outweighs it', () => {
+  const f = mountPanel({ instrument: true });
+  try {
+    f.panel.setActorColors({ human: '#db2777' });
+    f.panel.toggleDocumentLane(true);
+    f.core.addComment({ anchor: { type: 'document' }, body: 'mine', author: { id: 'me', kind: 'human' } });
+    f.env.drainMicrotasks();
+    const count = () => f.lane().querySelector('.tb-lane-count');
+    assert.ok(count().classList.contains('tb-tinted'), 'read: it carries a colour at all');
+    assert.equal(count().style.background, '#db2777', 'and it is the colour of whoever spoke last');
+
+    f.panel.toggleDocumentLane(false);
+    f.env.drainMicrotasks();
+    arrives(f, 'document', 'theirs, while it is folded');
+    assert.ok(f.lane().classList.contains('tb-unread'));
+    assert.match(unreadRule(panelCSS(f), '.tb-lane.tb-unread .tb-lane-count'),
+      /background:\s*var\(--tb-unread\)\s*!important/, 'unread is written to outweigh the inline tint');
+  } finally { f.restore(); }
+});
+
+// ---- the rest of the reader's actions, at the layer that can hold them -----------------------------
+//
+// The seven rows were fixed on block and document anchors. These carry the same rule to the two kinds
+// that were never asked — a quote and an area — and to the acts around it: deleting an anchor, hiding
+// the marks, and the document thread when it has no lane to live in.
+
+const anchorArrives = (f, anchor, body = 'from somewhere else') => {
+  const id = `arr-${arrivalSeq += 1}`;
+  f.core.importEnvelope({
+    schemaVersion: 1, generator: { name: 'tackback', version: 'x' }, document: { id: 'panel-fixture' },
+    comments: [{ id, anchor, body, createdAt: '2026-08-10T00:00:00.000Z', replies: [] }],
+  }, { mode: 'merge' });
+  f.env.drainMicrotasks();
+  return id;
+};
+const QUOTE = { type: 'range', elementId: 'p1', selector: { exact: 'paragraph p1' } };
+const AREA = { type: 'region', surfaceId: 'document', rect: { x: .1, y: .1, width: .2, height: .2 } };
+
+test('A3: writing on an area is not news to the person who wrote it', () => {
+  // A QUOTE cannot be exercised here: resolving one walks the text with `createTreeWalker`, which the
+  // fake document does not have. That half is confirmed in a real browser instead, and is not claimed
+  // by any test in this file.
+  const f = mountPanel({ instrument: true, setup: twoBlocks });
+  try {
+    f.core.addComment({ anchor: AREA, body: 'my note on an area' });
+    f.env.drainMicrotasks();
+    assert.deepEqual(f.core.unreadThreads(), [], 'an area they drew on themselves is not news');
+  } finally { f.restore(); }
+});
+
+test('B4: an answer into an area thread marks it', () => {
+  // Only the arrival half. Opening an area's badge goes through a pointer sequence rather than a
+  // click — the badge would be destroyed by the redraw before a click event could fire — so "opening
+  // it clears it" is confirmed in a real browser, not here.
+  const f = mountPanel({ instrument: true, setup: twoBlocks });
+  try {
+    const id = anchorArrives(f, AREA, 'somebody else drew this');
+    assert.equal(f.core.unreadCount(`region:${id}`), 1, 'it arrived from outside, so it is new');
+    const mark = f.doc.querySelector('.tb-pin');
+    assert.ok(mark, 'an area carries a badge of its own');
+    assert.ok(mark.classList.contains('tb-unread'), 'and it wears the mark');
+  } finally { f.restore(); }
+});
+
+test('deleting the whole anchor takes its mark and its unread with it', () => {
+  // The general rule stated the other way round: nothing unread left means nothing to mark.
+  const f = mountPanel({ instrument: true, setup: twoBlocks });
+  try {
+    arrives(f, 'p1', 'unread, and about to be deleted');
+    assert.equal(f.core.unreadCount('block:p1'), 1);
+    assert.ok(badgeFor(f, 'p1').classList.contains('tb-unread'));
+
+    f.core.deleteComments(f.core.listComments().map((c) => c.id));
+    f.env.drainMicrotasks();
+    assert.equal(f.core.unreadCount('block:p1'), 0, 'nothing left to be unread about');
+    assert.deepEqual(f.core.unreadThreads(), []);
+    assert.equal(badgeFor(f, 'p1'), undefined, 'and no mark left over');
+  } finally { f.restore(); }
+});
+
+test('D4: with no lane, the document thread is an ordinary Pane and behaves like one', () => {
+  // `docLane: false` does not remove the thread — it stops giving it a bar of its own, so it opens
+  // the way every other thread does.
+  const f = mountPanel({ controls: { docLane: false }, instrument: true, setup: twoBlocks });
+  try {
+    assert.equal(f.lane(), null, 'no bar');
+    anchorArrives(f, { type: 'document' }, 'theirs, about the whole thing');
+    assert.equal(f.core.unreadCount('document'), 1, 'and it is still new when it arrives');
+    f.panel.openDocumentThread();
+    f.env.drainMicrotasks();
+    assert.equal(f.core.unreadCount('document'), 0, 'and opening it still reads it');
+  } finally { f.restore(); }
+});
+
+// E4 (a save that fails is reported) is fixed where the failure happens — see unread.test
+// 'a failed save does not undo what the reader did', which asserts the STORAGE_SAVE_FAILED code. The
+// panel adds nothing to that path, so a second copy here would only restate it further from the fact.

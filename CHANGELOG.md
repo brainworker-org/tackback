@@ -6,6 +6,62 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
 
 ## [Unreleased]
 
+## [0.9.8] — 2026-08-11
+
+The version 0.9.7 said it was. Reading clears the mark — and writing never puts one up.
+
+### Fixed
+- **What you wrote is no longer new to you.** Type a comment into a document lane you have folded
+  away, or send one from a Pane that closes as it commits, and 0.9.7 marked the thread as holding
+  something you had not read. It was the thing you had just written.
+
+  The rule is unchanged: unread is an utterance whose arrival number is above how far its thread has
+  been read. What was wrong is that *everything* took an arrival number, so writing something
+  registered as it reaching you. **An utterance handed in through this instance's own input path now
+  takes no arrival number at all** — not one that is then marked read, none. Writing is not arriving.
+
+  Taking no number is what makes the other half hold: a thread's reading is a single number, so
+  "mine is read" could only have been said by moving that number up past everything below it,
+  including an answer you never opened. Nothing is moved, so nothing is swallowed.
+
+  **What this means for callers.** `addComment` / `addReply` are the local input path, so content
+  injected through them is never unread. An integration relaying utterances from its own transport
+  should import them — which is what a real one already does.
+
+  **A stated cost.** Something the same person wrote on another device arrives like anyone else's and
+  is new. Telling that apart needs accounts and stored profiles; that is not in this version.
+
+### Changed
+- **Unread is drawn as a fill that breathes, not a ring.** A badge holding something unread is filled
+  in `--tb-unread` and pulses on a two-second cycle. Reading it takes the fill away and the badge goes
+  back to the colour of whoever spoke last. The default value of `--tb-unread` moves with it — orange
+  rather than blue, and lighter on a dark base. Override the token as before if you want your own.
+
+  A reader whose system asks for reduced motion gets the fill without the movement. The mark stays; it
+  is the movement that goes.
+- **The document lane's count is a badge like any other.** It now carries the colour of whoever spoke
+  last, the same as every other badge. It was the one mark that did not, which made "read is the
+  speaker's colour" a rule with an exception nothing explained.
+- **Hiding the marks hides the areas too.** `toggleMarks()` already hid badges and region boxes; it
+  now also hides the outline on commentable blocks and the highlight on a quoted phrase, because an
+  outline with no badge on it is the part that makes a page hard to read. **It does not change what is
+  unread** — the state goes on being kept while it is out of sight, and turning marks back on shows
+  whatever arrived meanwhile.
+
+### Known limitations
+- **Attention and unread now draw on the same channel.** Both are fills, so an anchor carrying both
+  shows the unread one. Attention is on its way out and this is the version in between; nothing was
+  built to arbitrate it.
+- **The document thread's unread is not surfaced by any built-in UI beyond the lane.** The count is
+  available from the core (`unreadCount('document')`), so an integration can show it wherever it
+  likes; the panel does not add a place for it.
+- Everything 0.9.7 listed under this heading still applies.
+
+### Compatibility
+- **0.9.7 stays on the registry and this version supersedes it.** If you are on 0.9.7, the fix above
+  is the reason to move.
+- If you were overriding `--tb-unread` to get an orange fill, you can stop — that is the default now.
+
 ## [0.9.7] — 2026-08-10
 
 ### Added
