@@ -69,22 +69,22 @@
   .pdf-tools button { font: inherit; cursor: pointer; padding: .2rem .55rem; border: 1px solid var(--tb-border, #bbb);
     background: transparent; color: inherit; border-radius: 6px; }
   /* the "Try it" bar — these are DEMO-page controls, separate from the Tackback panel itself */
-  /* This page owns the bottom-left, so it tells the lane to keep clear of it (--tb-lane-left).
+  /* This page owns the bottom-left, so it tells the lane to keep clear of it (--tb-docbar-left).
      Stacking order is then irrelevant: neither covers the other. */
-  :root { --tb-lane-left: 460px; }
+  :root { --tb-docbar-left: 460px; }
   .trybar { position: fixed; left: 16px; bottom: 16px; z-index: 9998; display: flex; flex-wrap: wrap;
-    gap: 6px; align-items: center; background: var(--tb-popup-bg, #fff); color: var(--tb-popup-fg, #111);
+    gap: 6px; align-items: center; background: var(--tb-pane-bg, #fff); color: var(--tb-pane-fg, #111);
     border: 1px solid var(--tb-border, #ccc); border-radius: 10px; padding: 8px 10px;
     box-shadow: 0 4px 16px rgba(0,0,0,.18); font: 12px system-ui; width: 420px; box-sizing: border-box; }
   .trybar b { font-size: 11px; opacity: .7; margin-right: 2px; }
   .trybar button { font: inherit; cursor: pointer; border: 1px solid var(--tb-border, #bbb);
     background: transparent; color: inherit; border-radius: 6px; padding: 4px 8px; }
   .trybar button.on { background: var(--tb-accent, #33a877); color: #fff; border-color: transparent; }
-  /* The library sets `tb-lane-stacked` on the root when the lane could not fit beside the panel and
+  /* The library sets `tb-docbar-stacked` on the root when the lane could not fit beside the panel and
      had to take the available width. This page owns the bottom-left, so that is its cue to get out of the
      way — a fixed breakpoint of our own would disagree with the lane's measurement. */
-  :root.tb-lane-stacked { --tb-lane-left: 16px; }
-  :root.tb-lane-stacked .trybar { bottom: auto; top: 16px; max-width: calc(100vw - 32px); width: auto; }
+  :root.tb-docbar-stacked { --tb-docbar-left: 16px; }
+  :root.tb-docbar-stacked .trybar { bottom: auto; top: 16px; max-width: calc(100vw - 32px); width: auto; }
 
 </style>
 </head>
@@ -202,7 +202,7 @@
       <tr><td>Reactions</td><td>id + icon + per-locale label — replace the whole set, any size</td><td>👍 agree / 👎 disagree / ❓ question</td></tr>
       <tr><td>Colors</td><td><code>--tb-*</code> tokens (a partial map layers on the OS base) + <code>actorColors</code> per participant category</td><td>auto light/dark, no categories</td></tr>
       <tr><td>Language</td><td><code>setLocale()</code> at runtime; bring your own bundle</td><td>English, ja shipped</td></tr>
-      <tr><td>Panel controls</td><td><code>controls: { author, export, import, theme, marks, clear, docLane }</code> chooses what renders</td><td>all shown except <code>import</code></td></tr>
+      <tr><td>Panel controls</td><td><code>controls: { author, export, import, theme, marks, clear, docBar }</code> chooses what renders</td><td>all shown except <code>import</code></td></tr>
     </tbody>
   </table>
   <p>The bottom-left bar drives all of it live, one axis at a time: <b>Colors</b> re-skins the
@@ -303,7 +303,7 @@
   };
   const ALT_THEME = {
     '--tb-accent': '#0f766e', '--tb-mark-bg': 'rgba(15,118,110,.18)', '--tb-mark-outline': '#0f766e',
-    '--tb-pin-bg': '#0f766e', '--tb-pin-fg': '#ffffff',
+    '--tb-badge-bg': '#0f766e', '--tb-badge-fg': '#ffffff',
   };
   let altColors = false;
 
@@ -322,8 +322,8 @@
 
   // ── a simulated second participant (this page plays the integrator's part; no backend, no network) ─
   // Two scenarios, because Tackback supports two shapes and they read differently:
-  //   local        — no transport: the button says Save and the popup closes on commit.
-  //   conversation — an INTERACTIVE transport descriptor: the button says Send, the popup stays open,
+  //   local        — no transport: the button says Save and the pane closes on commit.
+  //   conversation — an INTERACTIVE transport descriptor: the button says Send, the pane stays open,
   //                  and the simulated participant answers a beat later. The descriptor is all
   //                  Tackback knows — it never transports anything itself.
   let scenario = 'local';
@@ -368,7 +368,7 @@
   // `error` only, so most of what the library reports was invisible to anyone actually using the demo.
   // A seam nobody can observe is a seam nobody can trust.
   const EVENTS = ['ready', 'change', 'comment:add', 'comment:update', 'comment:delete', 'comments:delete',
-    'attention:change', 'transport:change', 'anchor:orphaned', 'recalculate', 'rev:mismatch',
+    'transport:change', 'anchor:orphaned', 'recalculate', 'rev:mismatch',
     'submit:batch', 'thread:visibility', 'unread:change', 'error'];
   const logEl = document.getElementById('event-log');
   const logLines = [];
@@ -399,7 +399,6 @@
     }
     if (name === 'comments:delete') return `${e.ids.length} in one act`;
     if (name === 'comment:delete') return e.id;
-    if (name === 'attention:change') return `${e.id} → ${e.on ? 'on' : 'off'}`;
     if (name === 'error') return String(e.message || e.code || e);
     if (e.id) return e.id;
     return '';

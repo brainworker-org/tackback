@@ -7,12 +7,8 @@
 /** The full token contract (documented; override any in your own CSS). */
 export const TOKENS = [
   '--tb-bg', '--tb-fg', '--tb-accent', '--tb-border',
-  '--tb-mark-bg', '--tb-mark-outline', '--tb-pin-bg', '--tb-pin-fg',
-  '--tb-popup-bg', '--tb-popup-fg', '--tb-muted', '--tb-danger',
-  // `--tb-attention` is the highlight an anchor wears while it carries an ATTENTION flag
-  // (setAnchorAttention). It is a generic "needs-notice" tint — the *meaning* of the flag (e.g.
-  // "unread") is the integrator's, never Tackback's. Override it like any other token.
-  '--tb-attention',
+  '--tb-mark-bg', '--tb-mark-outline', '--tb-badge-bg', '--tb-badge-fg',
+  '--tb-pane-bg', '--tb-pane-fg', '--tb-muted', '--tb-danger',
   // `--tb-unread` FILLS a badge holding something this reader has not got to yet, and it breathes on
   // a two-second cycle while it does. Reading the thread takes the fill away and the badge goes back
   // to the colour of whoever spoke last, so the mark and its removal are one thing rather than two.
@@ -26,17 +22,17 @@ export const TOKENS = [
 export const LIGHT = {
   '--tb-bg': '#ffffff', '--tb-fg': '#1c1e21', '--tb-accent': '#33aa77', '--tb-border': '#cccccc',
   '--tb-mark-bg': 'rgba(255,210,0,.20)', '--tb-mark-outline': '#d9a400',
-  '--tb-pin-bg': '#d9a400', '--tb-pin-fg': '#000000',
-  '--tb-popup-bg': '#ffffff', '--tb-popup-fg': '#111111', '--tb-muted': '#777777', '--tb-danger': '#cc3333',
-  '--tb-attention': '#ef7f0e', '--tb-unread': '#ef7f0e',
+  '--tb-badge-bg': '#d9a400', '--tb-badge-fg': '#000000',
+  '--tb-pane-bg': '#ffffff', '--tb-pane-fg': '#111111', '--tb-muted': '#777777', '--tb-danger': '#cc3333',
+  '--tb-unread': '#ef7f0e',
 };
 
 export const DARK = {
   '--tb-bg': '#1b1c1d', '--tb-fg': '#e6e6e6', '--tb-accent': '#5aa', '--tb-border': '#555555',
   '--tb-mark-bg': 'rgba(255,210,0,.16)', '--tb-mark-outline': '#d9a400',
-  '--tb-pin-bg': '#d9a400', '--tb-pin-fg': '#000000',
-  '--tb-popup-bg': '#2a2c2e', '--tb-popup-fg': '#eeeeee', '--tb-muted': '#aaaaaa', '--tb-danger': '#e06666',
-  '--tb-attention': '#f59331', '--tb-unread': '#f59331',
+  '--tb-badge-bg': '#d9a400', '--tb-badge-fg': '#000000',
+  '--tb-pane-bg': '#2a2c2e', '--tb-pane-fg': '#eeeeee', '--tb-muted': '#aaaaaa', '--tb-danger': '#e06666',
+  '--tb-unread': '#f59331',
 };
 
 /**
@@ -44,9 +40,9 @@ export const DARK = {
  * panel's theme switch can cycle through). Each is just a partial token map fed to `resolveTheme`.
  */
 export const PALETTES = {
-  ocean:   { '--tb-accent': '#1d9bf0', '--tb-mark-bg': 'rgba(29,155,240,.18)', '--tb-mark-outline': '#1d9bf0', '--tb-pin-bg': '#1d9bf0', '--tb-pin-fg': '#ffffff' },
-  passion: { '--tb-accent': '#d6336c', '--tb-mark-bg': 'rgba(214,51,108,.18)', '--tb-mark-outline': '#d6336c', '--tb-pin-bg': '#d6336c', '--tb-pin-fg': '#ffffff' },
-  ochre:   { '--tb-accent': '#c98a00', '--tb-mark-bg': 'rgba(217,164,0,.22)', '--tb-mark-outline': '#d9a400', '--tb-pin-bg': '#d9a400', '--tb-pin-fg': '#000000' },
+  ocean:   { '--tb-accent': '#1d9bf0', '--tb-mark-bg': 'rgba(29,155,240,.18)', '--tb-mark-outline': '#1d9bf0', '--tb-badge-bg': '#1d9bf0', '--tb-badge-fg': '#ffffff' },
+  passion: { '--tb-accent': '#d6336c', '--tb-mark-bg': 'rgba(214,51,108,.18)', '--tb-mark-outline': '#d6336c', '--tb-badge-bg': '#d6336c', '--tb-badge-fg': '#ffffff' },
+  ochre:   { '--tb-accent': '#c98a00', '--tb-mark-bg': 'rgba(217,164,0,.22)', '--tb-mark-outline': '#d9a400', '--tb-badge-bg': '#d9a400', '--tb-badge-fg': '#000000' },
 };
 
 /**
@@ -87,6 +83,6 @@ export function buildThemeCSS(tokens, selector = '[data-tb-root]') {
 export function buildUnreadInkCSS(theme, prefersDark, selector = '[data-tb-root]') {
   const dark = theme === 'dark' || (theme !== 'light' && prefersDark);
   const ink = dark ? '#000000' : '#ffffff';
-  return `${selector} .tb-badge.tb-unread,\n${selector} .tb-pin.tb-unread,\n`
-    + `${selector} .tb-lane.tb-unread .tb-lane-count { color: ${ink} !important; }`;
+  return `${selector} .tb-badge.tb-unread,\n`
+    + `${selector} .tb-docbar.tb-unread .tb-docbar-count { color: ${ink} !important; }`;
 }

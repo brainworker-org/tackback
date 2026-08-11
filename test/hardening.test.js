@@ -97,7 +97,7 @@ test('mutating the input object after add/import does not change stored state', 
   assert.equal(stored.anchor.elementId, 'p1', 'nested anchor not mutated through input ref');
 });
 
-// ---- region surface resolution never builds a selector from an untrusted surfaceId (PR #130 R1 H1) ----
+// ---- region surface resolution never builds a selector from an untrusted surfaceId ----
 
 test('resolveAnchorDom matches a region surface by exact attribute value, even with selector-breaking chars', () => {
   // surfaceId/pageIndex can arrive from an imported envelope; isValidAnchor permits any non-empty
@@ -119,7 +119,7 @@ test('resolveAnchorDom matches a region surface by exact attribute value, even w
   assert.equal(resolveAnchorDom(miss, doc, new Map()), null);
 });
 
-// ---- region surfaces re-resolve after reload via the element id (PR #130 R2) ----
+// ---- region surfaces re-resolve after reload via the element id ----
 
 test('resolveAnchorDom falls back to getElementById for el-<id> surfaceIds (reload persistence)', () => {
   // After reload the runtime data-tb-surface stamp is gone, but an id'd <figure> still has its id.
@@ -136,4 +136,64 @@ test('resolveAnchorDom falls back to getElementById for el-<id> surfaceIds (relo
   // an unmarked, id-less surface (tb-surf-N) has nothing to recover → null, no throw
   const orphan = { ...anchor, surfaceId: 'tb-surf-3' };
   assert.equal(resolveAnchorDom(orphan, doc, new Map()), null);
+});
+
+// ---- the import rules the README states, checked through the engine rather than the sanitizer ----
+//
+// The rules themselves are fixed in sanitize.test.js, against the function that applies them. These
+// three are about what a CALLER sees, which is a different question: the same rule reached through
+// importEnvelope, in both modes, with the document either changed or not. A rule can be right in the
+// sanitizer and still be wrong here — the mode dispatch sits in between.
+
+test('allowPartial does not reach an identity fault: the replace is still refused whole', () => {
+  // The declared asymmetry. An anchor this build cannot place is something a caller may knowingly
+  // accept the loss of; an identity it cannot accept is not, because taking the good half of a
+  // complete-state declaration composes a document neither side asked for. Same flag, different kind,
+  // deliberately different answer — and nothing but this says so.
+  const tb = Tackback.mount({ document: { id: 'n2' }, storage: memoryAdapter() });
+  const errors = [];
+  tb.on('error', (e) => errors.push(e));
+  const a = tb.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'existing' });
+
+  const clash = { comments: [
+    { id: 'dup', anchor: { type: 'block', elementId: 'p2' }, body: 'one', createdAt: '2026-01-01T00:00:00.000Z' },
+    { id: 'dup', anchor: { type: 'block', elementId: 'p3' }, body: 'two', createdAt: '2026-01-01T00:00:00.000Z' },
+  ] };
+  const r = tb.importEnvelope(clash, { mode: 'replace', allowPartial: true });
+
+  assert.deepEqual(tb.listComments().map((c) => c.id), [a.id], 'the document is exactly as it was');
+  assert.equal(r.added, 0, 'and the result says so rather than throwing');
+  assert.equal(errors.filter((e) => e.code === 'IMPORT_REPLACE_REJECTED').length, 1,
+    'refused as a whole, once, with allowPartial set');
+});
+
+test('a tombstone in the envelope is honoured in BOTH modes, not just one', () => {
+  // deleted[] is the one rule that refuses an entry the envelope itself asked for. It has to hold on
+  // the way in and on the way over, or a replace becomes a way to resurrect what a merge would bury.
+  const bury = (id) => ({
+    comments: [{ id, anchor: { type: 'block', elementId: 'p9' }, body: 'back from the dead', createdAt: '2026-01-01T00:00:00.000Z' }],
+    deleted: [id],
+  });
+  for (const mode of ['merge', 'replace']) {
+    const tb = Tackback.mount({ document: { id: `n3-${mode}` }, storage: memoryAdapter() });
+    const r = tb.importEnvelope(bury('ghost'), { mode });
+    assert.equal(tb.listComments().length, 0, `${mode}: the buried entry did not come back`);
+    assert.equal(r.added, 0, `${mode}: and was not counted as added`);
+    assert.ok(r.dropped >= 1, `${mode}: it was refused, not silently skipped`);
+  }
+});
+
+test('a refused entry does not consume its id — a later one carrying it can still be accepted', () => {
+  // Stated in the README as "a refusal does not consume the id". If a refusal DID take the id, an
+  // envelope would be silently order-dependent in a second way: a malformed first copy would make
+  // every good copy after it unusable, and the count would look identical either way.
+  const tb = Tackback.mount({ document: { id: 'n4' }, storage: memoryAdapter() });
+  const r = tb.importEnvelope({ comments: [
+    { id: 'same', anchor: { type: 'block', elementId: '' }, body: 'refused — no elementId', createdAt: '2026-01-01T00:00:00.000Z' },
+    { id: 'same', anchor: { type: 'block', elementId: 'p1' }, body: 'accepted', createdAt: '2026-01-01T00:00:00.000Z' },
+  ] }, { mode: 'merge' });
+
+  assert.equal(r.dropped, 1, 'the first was refused');
+  assert.deepEqual(tb.listComments().map((c) => c.body), ['accepted'],
+    'and the second was not refused as a duplicate of it');
 });

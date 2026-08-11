@@ -17,8 +17,8 @@ import { regionToPx, resolveQuoteSelector, applyRegionFallback, rectsIntersect }
 import { DOCUMENT_SURFACE_ID } from './media.js';
 
 /** The annotatable node set: elements that can carry a block/range comment. The ONE definition.
- *  h1 (the document title) IS annotatable — a reviewer must be able to comment on the title itself
- *  (PR #132 review, Keisuke comment 9a). h1 is also a HEADING; the walk sets it as the current
+ *  h1 (the document title) IS annotatable — a reviewer must be able to comment on the title itself.
+ *  h1 is also a HEADING; the walk sets it as the current
  *  section before assigning its own id, so a title's section context is itself (harmless for a title). */
 export const ANNOTATABLE = 'h1,h2,h3,h4,p,li,blockquote,tr';
 /** Headings that supply nearest-section context to the elements that follow them. */
@@ -37,7 +37,7 @@ function hash32(s) {
  * block keeps its id when other content is inserted/removed around it (drift-stable across edits),
  * and a block whose text changed or was deleted no longer hashes the same, so an imported/replayed
  * anchor ORPHANS instead of silently re-pointing at a different element that merely landed in the old
- * position (REQ-002/004; §6 review R5, PR #132 — a positional ordinal could silently mis-anchor on a
+ * position (REQ-002/004 — a positional ordinal could silently mis-anchor on a
  * fresh load after an insertion). Duplicate-content blocks are disambiguated by occurrence in
  * indexAnnotatable. Because the hash is pure, every resolution path (create/recalc/import/replay)
  * derives the identical id (REQ-014/D-E).
@@ -64,7 +64,7 @@ export function indexAnnotatable(root) {
   // derived id must never COLLIDE with an existing one: if two elements shared an id, getElementById
   // would silently resolve an existing anchor to the WRONG element instead of orphaning under drift.
   // Each id-less element gets its CONTENT-bound id (deriveBlockId), disambiguated by an occurrence
-  // suffix when a document has duplicate-content blocks or an author-id clash. (§6 review, PR #132.)
+  // suffix when a document has duplicate-content blocks or an author-id clash.
   const taken = new Set();
   for (const el of root.querySelectorAll('*')) if (el.id) taken.add(el.id);
   for (const el of root.querySelectorAll('*')) {
@@ -160,7 +160,7 @@ export function computeCapture(surfaceEl, rect, opts = {}) {
   const mediaRef = (el) => el.getAttribute('src') || el.getAttribute('data-tb-media') || el.id || el.tagName.toLowerCase();
   // the surface element ITSELF may be the media (a stamped <img>/<canvas> used directly as the
   // surface, not a container) — querySelectorAll only sees descendants, so include self when it is
-  // media (the region is always within the surface, so it is always covered). (§6 review R4, PR #132.)
+  // media (the region is always within the surface, so it is always covered).
   if (surfaceEl.matches && surfaceEl.matches(MEDIA)) {
     const ref = mediaRef(surfaceEl);
     if (ref) media.push(ref);
@@ -188,12 +188,12 @@ export function resolveRegionRect(anchor, surfaceEl, measure) {
   if (!surfaceEl) return null;
   let rect = anchor.rect;
   const fb = anchor.fallback;
-  // ELEMENT-ANCHORED region (document surface, W-NWBW): position & size are stored in ABSOLUTE px
+  // ELEMENT-ANCHORED region (document surface): position & size are stored in ABSOLUTE px
   // relative to a content element (`fb.w` present marks this form). The region tracks that element, so
   // a change to the surface's TOTAL size — e.g. an embedded PDF sub-surface re-rendering taller on zoom
   // — never moves it (only the element's own movement does). This is why a `document` region must NOT
-  // ride the PDF's scale: its binding is the content under the right-drag ORIGIN, not the whole page
-  // (Keisuke 2026-06-16). The normalized `rect` is kept for portability + the orphan path.
+    // ride the PDF's scale: its binding is the content under the right-drag ORIGIN, not the whole
+    // page. The normalized `rect` is kept for portability + the orphan path.
   if (fb && fb.elementId && fb.w != null) {
     const fbEl = surfaceEl.ownerDocument ? surfaceEl.ownerDocument.getElementById(fb.elementId) : null;
     if (fbEl) {
@@ -265,7 +265,7 @@ export function resolveAnchorDom(anchor, doc, surfaces) {
   if (!element) return null;
   // ONE region-resolution path: delegate the rect to resolveRegionRect so the shared resolver is
   // fallback-aware too (REQ-005/007) — a caller using resolveAnchorDom must not get a stale,
-  // non-fallback rect that disagrees with resolveRegionRect after reflow (§6 review R3, PR #132).
+  // non-fallback rect that disagrees with resolveRegionRect after reflow.
   const rr = resolveRegionRect(anchor, element);
   return { element, rect: rr ? rr.px : regionToPx(anchor.rect, element.clientWidth, element.clientHeight) };
 }

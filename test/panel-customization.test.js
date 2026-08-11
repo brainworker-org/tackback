@@ -72,7 +72,7 @@ test('LocaleRegistry: switch to a registered language (ja shipped)', () => {
   const r = new LocaleRegistry();
   assert.equal(r.setLocale('ja'), true);
   assert.equal(r.t('panel.count', { n: 3 }), '💬 3 件');
-  assert.equal(r.t('popup.save'), '保存');
+  assert.equal(r.t('pane.save'), '保存');
 });
 
 test('LocaleRegistry: unknown language falls back to default (no throw)', () => {
@@ -82,13 +82,13 @@ test('LocaleRegistry: unknown language falls back to default (no throw)', () => 
   console.warn = orig;
   assert.equal(ok, false);
   assert.equal(r.active, 'en');
-  assert.equal(r.t('popup.save'), 'Save');
+  assert.equal(r.t('pane.save'), 'Save');
 });
 
 test('LocaleRegistry: registerLocale adds a custom language', () => {
   const r = new LocaleRegistry();
-  r.register('fr', { 'popup.save': 'Enregistrer' });
+  r.register('fr', { 'pane.save': 'Enregistrer' });
   assert.equal(r.setLocale('fr'), true);
-  assert.equal(r.t('popup.save'), 'Enregistrer');
-  assert.equal(r.t('popup.cancel'), 'Cancel');   // missing key → default bundle
+  assert.equal(r.t('pane.save'), 'Enregistrer');
+  assert.equal(r.t('pane.cancel'), 'Cancel');   // missing key → default bundle
 });

@@ -1,6 +1,6 @@
 // @brainworker/tackback — the comment model: types, factory, validation, legacy migration.
 //
-// The data model is the seam shared with anything downstream (replay tooling, an AI, the Interplay
+// The data model is the seam shared with anything downstream (replay tooling, an AI, a downstream integration
 // backend). It is intentionally explicit: an opaque `id` distinct from `createdAt`, a nested
 // `anchor` whose discriminator (`type`) is always present, and `reaction` stored as a stable id
 // (the icon/meaning live in config, so changing the icon never breaks the binding).
@@ -305,7 +305,7 @@ export function isLegacyComment(rec) {
 /**
  * Deep-copy a RegionState (rect + optional fallback + optional capture, incl. each covered item) so a
  * stored event can never share a mutable reference with the caller's input — the append-only history
- * must be tamper-proof against later mutation of the source object (§6 review, PR #132).
+ * must be tamper-proof against later mutation of the source object.
  * @param {RegionState} s
  * @returns {RegionState}
  */
@@ -348,7 +348,7 @@ export function appendAnchorEvent(anchor, type, after, ts, createTs) {
   const before = regionStateOf(anchor);
   if (events.length === 0) events.push({ ts: createTs, type: 'create', after: before });
   // deep-copy `after` before it enters the append-only log / current state — never retain the
-  // caller's mutable reference, or a later mutation of the input could corrupt stored history (§6).
+  // caller's mutable reference, or a later mutation of the input could corrupt stored history.
   const afterCopy = copyRegionState(after);
   events.push({ ts, type, before, after: afterCopy });
   /** @type {RegionAnchor} */

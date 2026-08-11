@@ -1,6 +1,6 @@
 // @brainworker/tackback — export envelope build + import parse (with legacy migration).
 //
-// The export envelope is the formal seam to anything downstream (replay, an AI, the Interplay
+// The export envelope is the formal seam to anything downstream (replay, an AI, a downstream integration
 // backend). `parseEnvelope` accepts both the v2 envelope and the original v1 export (flat `ts`
 // records / `{ doc, comments:[…] }`) and normalizes to v2 — so old review artifacts keep working.
 

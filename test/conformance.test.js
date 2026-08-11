@@ -1,11 +1,11 @@
-// node:test — phase 9 conformance ledger for tackback-spec v0.9's Traceability Matrix (TEST doc §4).
+// node:test — phase 9 conformance ledger for tackback-spec v0.9's Traceability Matrix.
 //
-// The TEST doc deliberately does NOT restate individual cases (§5: "they rot"); tests live with the
+// The TEST doc deliberately does NOT restate individual cases ("they rot"); tests live with the
 // library and the MATRIX is the traceability. This file IS that matrix in code. Every REQ/NFR row is
 // EITHER `covered` (a real, executable node:test exists — pointer in `by`) OR explicitly surfaced as
-// `manual` / `pending` WITH a reason — there is NO silent "deferred=no test" for a MUST (the gap
-// Keisuke flagged: a captured MUST without a failing test, dressed up as deferred while the suite was
-// green — see memory: spec-first RED tests). It asserts ZERO unclassified rows (INV-10) and runs the
+// `manual` / `pending` WITH a reason — there is NO silent "deferred=no test" for a MUST (the gap this
+// closes: a captured MUST without a failing test, dressed up as deferred while the suite was green).
+// It asserts ZERO unclassified rows (INV-10) and runs the
 // dependency-direction / zero-dep / no-network gates (RUN-001/002), plus pins two MUSTs found
 // uncovered during mapping (REQ-101, REQ-011).
 //
@@ -28,7 +28,7 @@ import { memoryAdapter } from '../src/core/storage.js';
 // implemented) WITH a reason — never a silent "deferred=no test". (memory: spec-first RED tests.)
 const REASONS = new Set(['real-mouse', 'browser-flow', 'phase-8']);
 
-// ---- the traceability matrix (TEST doc §4), classified ---------------------------------------
+// ---- the traceability matrix, classified ---------------------------------------
 // row: [reqId, testId, level, status, by|reason, note?]
 const MATRIX = [
   // anchoring core (REQ-001..014)
@@ -36,7 +36,7 @@ const MATRIX = [
   ['REQ-002', 'TEST-002', 'L3', 'covered', 'resolution.test deriveBlockId / indexAnnotatable'],
   ['REQ-003', 'TEST-003', 'L1', 'covered', 'anchor.test resolveQuoteSelector + resolution.test resolveRange'],
   ['REQ-004', 'TEST-004', 'L1', 'covered', 'region.test reportOrphaned/markResolved + resolution.test resolveRange-null'],
-  ['REQ-005', 'TEST-005', 'L4', 'covered', 'region.test documentSurface/resolveRegionRect + anchor.test regionToPx; browser-verified (phase 5a). W-NWBW: +test — an absolute element-anchored document region is immune to a 2x surface-height change (a PDF zoom cannot move it); orphan-safe'],
+  ['REQ-005', 'TEST-005', 'L4', 'covered', 'region.test documentSurface/resolveRegionRect + anchor.test regionToPx; browser-verified (phase 5a). +test — an absolute element-anchored document region is immune to a 2x surface-height change (a PDF zoom cannot move it); orphan-safe'],
   ['REQ-006', 'TEST-006', 'L1', 'covered', 'interaction.test classifyGesture (right-drag>threshold→region, else selection→range/none→block); real-pointer reliability = NFR-005 manual'],
   ['REQ-007', 'TEST-007', 'L3', 'covered', 'region.test regionFallbackOffset/applyRegionFallback/resolveRegionRect'],
   ['REQ-008', 'TEST-008', 'L3', 'covered', 'region.test recordRegionEvent (recorded, no silent re-point); handle UI = phase-5b'],
@@ -45,7 +45,7 @@ const MATRIX = [
   ['REQ-011', 'TEST-011', 'L1', 'covered', 'conformance.test threadId grouping (below)'],
   ['REQ-012', 'TEST-012', 'L3', 'manual', 'browser-flow', 'pending uncommitted region writes no record until commit — browser-verified (5a/5b); panel flow, no headless unit'],
   ['REQ-013', 'TEST-013', 'L4', 'covered', 'region.test computeCapture mixed text+media + documentSurface; browser-verified (phase 5a document region)'],
-  ['REQ-114', 'TEST-114', 'L3', 'manual', 'real-mouse', 'sub-surface-bound region visual distinction (double-frame border) + host-CSS-immune pin (explicit line-height) — browser/real-mouse verified (W-WK2E demo review / W-NWBW); the surfaceId-based class logic runs in the panel, no headless unit'],
+  ['REQ-114', 'TEST-114', 'L3', 'manual', 'real-mouse', 'sub-surface-bound region visual distinction (double-frame border) + host-CSS-immune pin (explicit line-height) — browser/real-mouse verified (demo review); the surfaceId-based class logic runs in the panel, no headless unit'],
   ['REQ-014', 'TEST-014', 'L2', 'covered', 'resolution.test D-E path-independence'],
   // API surface (REQ-101..111)
   ['REQ-101', 'TEST-101', 'L1', 'covered', 'conformance.test default doc.id (below) + engine.test mount factory'],
@@ -81,18 +81,18 @@ const MATRIX = [
   ['REQ-405', 'TEST-405', 'L3', 'covered', 'attachPanel consumes core — browser-verified (phase 5a: panel attaches + renders)'],
   // media + storage (REQ-501..506)
   ['REQ-501', 'TEST-501', 'L2', 'covered', 'pdf.test MediaAdapter contract + media.js surface'],
-  ['REQ-502', 'TEST-502', 'L4', 'covered', 'pdf.test adapter (fake pdfjs, surface-per-page, zoom-independent); real render = staging. SHOULD [post-v1] — the PDF adapter ships as an optional reference adapter / demo sample, not a v1 release gate (PRD v0.5, W-MA8X)'],
+  ['REQ-502', 'TEST-502', 'L4', 'covered', 'pdf.test adapter (fake pdfjs, surface-per-page, zoom-independent); real render = staging. SHOULD [post-v1] — the PDF adapter ships as an optional reference adapter / demo sample, not a v1 release gate (PRD v0.5, )'],
   ['REQ-503', 'TEST-503', 'L3', 'covered', 'pdf.test + media.js — media-agnostic contract (image/svg/custom authorable)'],
   ['REQ-504', 'TEST-504', 'L2', 'covered', 'store.test localStorage/memory StorageAdapter'],
   ['REQ-505', 'TEST-505', 'L2', 'covered', 'replay.test buildReplayModel (multi-author merge + timeline) — [post-v1] gate none'],
-  ['REQ-507', 'TEST-507', 'L4', 'covered', 'export.test exportEnvelope collects the raster SurfaceDescriptor into surfaces[] (excludes the live document surface) — the descriptor seam ships in v1, keeping the export self-describing; the live PDF/canvas raster-region consumer is [post-v1] (real PDF-render replay = staging, PRD v0.5, W-MA8X)'],
+  ['REQ-507', 'TEST-507', 'L4', 'covered', 'export.test exportEnvelope collects the raster SurfaceDescriptor into surfaces[] (excludes the live document surface) — the descriptor seam ships in v1, keeping the export self-describing; the live PDF/canvas raster-region consumer is [post-v1] (real PDF-render replay = staging, PRD v0.5, )'],
   ['REQ-506', 'TEST-506', 'L2', 'pending', 'phase-8', 'distribution + generators (make-feedback-*.sh to new bundle, v2 replay pipeline) — scheduled before merge, needs pytest env'],
   // errors + submission (REQ-601, 701..704)
   ['REQ-601', 'TEST-601', 'L1', 'covered', 'errors.js TackbackError code enum; hardening/engine assert codes surface'],
   ['REQ-701', 'TEST-611', 'L2', 'covered', 'seam.test three submission modes (export / submitBatch / comment:add)'],
   ['REQ-702', 'TEST-612', 'L3', 'covered', 'interaction.test popupCommit (save↔send by transport) + nextSendState (pending→ok/failed); browser-verified Send label'],
   ['REQ-703', 'TEST-613', 'L3', 'covered', 'interaction.test popupCommit (close vs stay-open when interactive); panel wires it (browser-verified)'],
-  ['REQ-704', 'TEST-614', 'L3', 'covered', 'panel renders thread inline as ONE flat, time-ordered timeline (0.9.1): every comment AND reply is its own actor-labeled row, interleaved with the move/resize history; the anchor badge counts every utterance (0.9.2). NOTHING in the timeline is deletable — deletion is anchor-level via right-click → Delete anchor (0.9.2; browser-verified). Still NO reply INPUT (post-v1/Interplay) — replies arrive via the addReply seam, covered by seam.test (core); an OPEN thread reconciles what arrives while it is showing (0.9.2). The logic behind the rendering is DOM-free and pinned: thread.test (threadKeyOf = one definition of a conversation, shared with the mark grouping; timelineItems = contents + collision-free keys; planInsertions = chronological reconciliation), actors.test (lastSpeaker / actorColorOf), interaction.test (canCommit)'],
+  ['REQ-704', 'TEST-614', 'L3', 'covered', 'panel renders thread inline as ONE flat, time-ordered timeline (0.9.1): every comment AND reply is its own actor-labeled row, interleaved with the move/resize history; the anchor badge counts every utterance (0.9.2). NOTHING in the timeline is deletable — deletion is anchor-level via right-click → Delete anchor (0.9.2; browser-verified). Still NO reply INPUT (post-v1) — replies arrive via the addReply seam, covered by seam.test (core); an OPEN thread reconciles what arrives while it is showing (0.9.2). The logic behind the rendering is DOM-free and pinned: thread.test (threadKeyOf = one definition of a conversation, shared with the mark grouping; timelineItems = contents + collision-free keys; planInsertions = chronological reconciliation), actors.test (lastSpeaker / actorColorOf), interaction.test (canCommit)'],
   // NFRs (NFR-001..010 → TEST-701..710)
   ['NFR-001', 'TEST-701', 'L2', 'covered', 'conformance.test zero-dependency audit (below)'],
   ['NFR-002', 'TEST-702', 'L2', 'covered', 'conformance.test core no-network scan (below)'],
@@ -184,7 +184,7 @@ test('conformance summary: covered / manual / pending breakdown — no MUST is a
   const by = (s) => MATRIX.filter((r) => r[3] === s);
   const covered = by('covered'), manual = by('manual'), pending = by('pending');
   assert.equal(covered.length + manual.length + pending.length, MATRIX.length, 'every row is covered | manual | pending');
-  // every phase-5b MUST now has a REAL executable test (the gap Keisuke flagged is closed); only the
+  // every phase-5b MUST now has a REAL executable test (that gap is closed); only the
   // genuinely physical/visual rows are `manual`, and the scheduled distribution work is `pending`.
   const reason = {};
   for (const r of [...manual, ...pending]) reason[r[4]] = (reason[r[4]] || 0) + 1;

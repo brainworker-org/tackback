@@ -677,27 +677,11 @@ test('T29/I6: nothing is announced when nothing about it changed', async () => {
   core.on('unread:change', (e) => changes.push(e));
 
   core.updateComment(c.id, { body: 'edited' });
-  core.setAnchorAttention(c.id, true);
-  core.setAnchorAttention(c.id, false);
   core.reportThreadVisibility();
   core.reportThreadVisibility();
   await quiet();
-  assert.deepEqual(changes, [], 'an edit is not an arrival, and attention is not reading');
+  assert.deepEqual(changes, [], 'an edit is not an arrival, and looking twice is not reading twice');
   invariants(core, 'T29');
-  core.destroy();
-});
-
-test('T27: attention does not move the count', async () => {
-  const core = mount({ storage: makeStore().adapter });
-  const c = core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'one' });
-  await quiet();
-  const before = core.unreadCount('block:p1');
-  core.setAnchorAttention(c.id, true);
-  await quiet();
-  assert.equal(core.unreadCount('block:p1'), before);
-  core.setAnchorAttention(c.id, false);
-  await quiet();
-  assert.equal(core.unreadCount('block:p1'), before);
   core.destroy();
 });
 

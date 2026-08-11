@@ -1,4 +1,4 @@
-// node:test — export envelope build + import parse/migration (the Interplay seam).
+// node:test — export envelope build + import parse/migration (a downstream integration seam).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';

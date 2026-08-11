@@ -1,5 +1,5 @@
 // @brainworker/tackback/panel — actor rendering logic (DOM-free), so "who gets which color" is
-// headlessly testable, like the gesture/popup decisions in interaction.js.
+// headlessly testable, like the gesture/pane decisions in interaction.js.
 //
 // Tackback ships NO actor categories and NO category colors. An author may carry an opaque `kind`
 // string; the INTEGRATOR maps kinds to colors (`attachPanel({ actorColors })`). Nothing here knows
@@ -41,7 +41,7 @@ export function claimedColors(actorColors) {
 /**
  * A deterministic color for an author identity, drawn from the palette MINUS any color already
  * claimed by an injected category map. Anonymous / unnamed → '' (no tint: the anchor keeps its
- * default pin color). If a map claims every palette entry, the unfiltered palette is used rather
+ * default badge colour). If a map claims every palette entry, the unfiltered palette is used rather
  * than dropping the tint entirely — a duplicate color reads better than an invisible author.
  * @param {Author|null|undefined} a
  * @param {Set<string>} [claimed]

@@ -1,4 +1,4 @@
-// node:test — pure interaction logic: gesture classification (REQ-006), popup commit behavior
+// node:test — pure interaction logic: gesture classification (REQ-006), pane commit behavior
 // (REQ-702/703), region handle hit-test + move/resize (REQ-008). These are the headless DECISIONS the
 // panel wires PointerEvents to; real-pointer reliability (NFR-005) + visual reposition (NFR-009) are
 // the manual-gate residue (skip-marked in conformance.test). Spec-first: each MUST has a real test.
@@ -26,7 +26,7 @@ test('classifyGesture: a drag past threshold but NOT over a surface stays a DOM 
   assert.equal(classifyGesture({ button: 2, dragDist: 50, threshold: 8, hasSelection: true, onSurface: false }), 'range');
 });
 
-// ---- REQ-702/703: popup commit affordance + close vs stay-open by transport ------------------------
+// ---- REQ-702/703: pane commit affordance + close vs stay-open by transport ------------------------
 
 test('popupCommit: no transport → save + close; fire-and-forget → send + close; interactive → send + stay-open', () => {
   assert.deepEqual(popupCommit(null), { action: 'save', closeOnCommit: true, conversation: false });
@@ -47,7 +47,7 @@ test('canCommit: body OR reaction enables the commit button; empty/whitespace-on
 test('canCommit: the state AFTER an interactive send is disabled again (the stay-open reset)', () => {
   // an interactive (stay-open) commit clears BOTH inputs; re-running the rule must disable the
   // button — otherwise the next click hits the empty-commit path and dismisses the conversation.
-  assert.equal(popupCommit({ interactive: true }).closeOnCommit, false, 'the popup stays open');
+  assert.equal(popupCommit({ interactive: true }).closeOnCommit, false, 'the pane stays open');
   assert.equal(canCommit('', ''), false, 'cleared text + cleared reaction → disabled');
 });
 

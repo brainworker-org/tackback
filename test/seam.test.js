@@ -313,16 +313,6 @@ test('importEnvelope: a buried id cannot come back in through the front door, in
   }
 });
 
-test('importEnvelope: a replaced-away comment leaves no attention flag behind', () => {
-  const tb = Tackback.mount({ document: { id: 'replace-attention' }, storage: memoryAdapter() });
-  const c = tb.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'flagged' });
-  tb.setAnchorAttention(c.id, true);
-  assert.equal(tb.hasAttention(c.id), true);
-  tb.importEnvelope({ comments: [], deleted: [c.id] }, { mode: 'replace' });
-  assert.equal(tb.listComments().length, 0, 'omitted from the incoming set, so gone');
-  assert.equal(tb.hasAttention(c.id), false, 'and the flag goes with the comment it was about');
-});
-
 // A MERGE's `change` is a statement about before and after, so no id may appear in two halves of it:
 // a merge that says one id was both added and removed has not described a net effect, it has
 // narrated its own internal steps. This is the property, not one example of it.
