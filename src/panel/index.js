@@ -480,7 +480,9 @@ export function attachPanel(core, options = {}) {
       draftKey: anchorKey({ type: 'document' }),
       threadKey: 'document',
       anchor: { type: 'document' },
-      // the lane is not a pane: committing never dismisses it, so "close" is a no-op here
+      // The bar is not a Pane: committing never dismisses it, and neither does anything else —
+      // which is why it offers no way to dismiss. "close" is a no-op here and always was.
+      dismissible: false,
       onClose: () => {},
       onSave: (body, reaction) => core.addComment({ anchor: { type: 'document' }, body, reaction }),
     });
@@ -788,8 +790,13 @@ export function attachPanel(core, options = {}) {
   //
   // The host supplies only what is genuinely its own: how to close, and what to clean up after a
   // commit. Everything a conversation knows about itself stays in here.
+  // `dismissible` is whether this conversation has somewhere to go when the reader is done with it.
+  // A Pane does: it is a window over one thread, and closing it is the whole of leaving. The
+  // DocumentBar does not — it lives at the bottom of the page and does not go away, so a button
+  // there could only ever throw away what was typed. Nothing else in this library silently discards,
+  // and "Cancel" is not read as an offer to.
   function createConversation({ anchorLabel, existing, onSave, draftKey, threadKey: initialThreadKey = null,
-                                anchor: initialAnchor = null,
+                                anchor: initialAnchor = null, dismissible = true,
                                 onClose = () => {}, afterCommit = () => {} }) {
   // the thread this Pane belongs to (thread.js). A brand-new region has none until its first
   // comment exists — it is adopted below, on commit.
@@ -946,7 +953,7 @@ export function attachPanel(core, options = {}) {
   // is the DISPLAY: replies now render as flat, actor-labeled rows in this timeline (REQ-704), for
   // the multi-party conversation a downstream integration drives.
   const acts = el(doc, 'div', 'tb-acts');
-  const cancel = btn(doc, t('pane.cancel'), 'tb-cancel');
+  const cancel = dismissible ? btn(doc, t('pane.cancel'), 'tb-cancel') : null;
   const save = btn(doc, commit.action === 'send' ? lbl('pane.send', 'Send') : t('pane.save'), 'tb-save');
   // The commit button greys out (disabled) whenever the input is empty — no body text AND no reaction
   // — and re-enables the instant either is present. A commit needs at least one, so an empty commit is
@@ -973,7 +980,7 @@ export function attachPanel(core, options = {}) {
     if (canCommit(ta.value, reactionId)) drafts.set(draftKey, { body: ta.value, reaction: reactionId });
     else drafts.delete(draftKey);
   };
-  cancel.onclick = () => { clearDraft(); onClose(); };
+  if (cancel) cancel.onclick = () => { clearDraft(); onClose(); };
   save.onclick = () => {
     const body = ta.value.trim();
     if (!canCommit(body, reactionId)) { clearDraft(); return onClose(); }
@@ -1006,14 +1013,14 @@ export function attachPanel(core, options = {}) {
     exwrap.scrollTop = exwrap.scrollHeight;   // the newest rows are at the bottom of a scrolling thread
     ta.focus();
   };
-  acts.append(cancel, save);
+  acts.append(...(cancel ? [cancel, save] : [save]));
   // re-label in place when the locale or the transport changes (input is preserved — no rebuild)
   const relabel = () => {
     // re-derive rather than reuse what was captured at open: the transport can change under an
     // open Pane, and then Save/Send and close-vs-stay-open must both follow it.
     commit = popupCommit(core.getTransport());
     ta.placeholder = t('pane.placeholder');
-    cancel.textContent = t('pane.cancel');
+    if (cancel) cancel.textContent = t('pane.cancel');
     save.textContent = commit.action === 'send' ? lbl('pane.send', 'Send') : t('pane.save');
     [...rwrap.children].forEach((b, idx) => {
       const def = reactions[idx]; if (!def) return;

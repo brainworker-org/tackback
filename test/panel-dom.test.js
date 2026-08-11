@@ -660,6 +660,39 @@ test('panel: Cmd/Ctrl+Enter commits, and only when the button would', () => {
 
 // --- what a host that never dies needs, and the pane never did ---------------------------------
 
+test('D-081: the bar has no dismiss button, and the Pane still does', () => {
+  // A button is a promise that something will happen. The bar's Cancel had nowhere to take the
+  // reader — the bar does not close, and committing never dismissed it — so the only thing it did
+  // was throw away what had been typed, silently, under a word that does not say so. It is gone.
+  //
+  // The Pane keeps its button because the Pane genuinely closes, which is what the reader is asking
+  // for. So this is one assertion about two places: the button exists exactly where leaving does.
+  const f = mountPanel();
+  try {
+    const bar = f.lane();
+    assert.equal(bar.querySelectorAll('.tb-cancel').length, 0, 'the bar offers no dismiss');
+    assert.equal(bar.querySelectorAll('.tb-save').length, 1, 'but still offers to commit');
+
+    // and the composer is unharmed by its absence: typing, committing and clearing all still work
+    const ta = bar.querySelector('textarea');
+    ta.value = 'still writable'; ta.dispatchEvent({ type: 'input' });
+    bar.querySelector('.tb-save').click();
+    assert.equal(f.core.listComments().length, 1, 'the bar can still be written in');
+    assert.equal(ta.value, '', 'and still clears after a commit');
+
+  } finally { f.restore(); }
+
+  // The other half of the same rule, reached the way this suite already reaches a Pane.
+  const g = mountPanel({ controls: { docBar: false } });
+  try {
+    g.core.addComment({ anchor: { type: 'document' }, body: 'in a Pane this time' });
+    g.panel.openDocumentThread();
+    const pane = g.doc.querySelector('.tb-pane');
+    assert.ok(pane, 'a Pane opened');
+    assert.equal(pane.querySelectorAll('.tb-cancel').length, 1, 'a Pane can be left, so it says so');
+  } finally { g.restore(); }
+});
+
 test('lane: a local Save clears the composer instead of leaving it loaded', () => {
   // the pane got away with skipping the reset because it was about to be destroyed. A host that
   // stays kept the committed text in an enabled box, ready to be sent a second time.
