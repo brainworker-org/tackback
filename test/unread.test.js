@@ -122,6 +122,31 @@ const envelope = (comments, over = {}) => ({
 
 const mount = (over = {}) => Tackback.mount({ document: { id: 'unread-fixture' }, ...over });
 
+/**
+ * Something ARRIVING — which, since writing is not arriving, is the only way anything becomes new.
+ *
+ * `addComment` is this reader typing, and what they typed is not news to them, so a fixture that used
+ * it to stand for "something showed up" was describing the wrong event. Every arrival in this file
+ * comes in the way one really does: from outside, through the envelope.
+ * @returns {string[]} the ids that arrived, in order
+ */
+const arrives = (core, comments, opts = { mode: 'merge' }) => {
+  core.importEnvelope(envelope(comments), opts);
+  return comments.map((c) => c.id);
+};
+/** One arrival, for the many fixtures that only need a single utterance to turn up. */
+const arrival = (core, id = 'a1', elementId = 'p1', over = {}) => {
+  arrives(core, [entry(id, elementId, over)]);
+  return id;
+};
+/** A reply arriving from outside, hung under a comment that is already here. */
+const replyArrives = (core, commentId, replyId, over = {}) => {
+  const held = core.listComments().find((c) => c.id === commentId);
+  arrives(core, [{ ...held, replies: [...(held.replies || []), reply(replyId, over)] }],
+    { mode: 'merge', onConflict: 'replace' });
+  return replyId;
+};
+
 // ---- invariants, before any example --------------------------------------------------------------
 //
 // These hold after EVERY operation in this file. Written first because an example test can only
@@ -253,7 +278,7 @@ test('T4: a reply is an utterance, and counts like one', async () => {
   await d.show();
   assert.equal(core.unreadCount('block:p1'), 0);
 
-  core.addReply(c.id, { body: 'from somebody else' });
+  replyArrives(core, c.id, 'r-t4', { body: 'from somebody else' });
   await settle();
   assert.equal(core.unreadCount('block:p1'), 1, 'the reply is what is new');
   await d.show('block:p1');
@@ -290,14 +315,14 @@ test('T13a: a display that cannot be read clears nothing', async () => {
   // question is whether the stale answer gets used as though it were a look.
   const core = mount({ storage: makeStore().adapter });
   const d = display(core);
-  core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'read before the trouble' });
+  arrival(core, 'a-t13a-1', 'p1', { body: 'read before the trouble' });
   await d.show('block:p1');
   assert.equal(core.unreadCount('block:p1'), 0);
-  core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'unread' });
+  arrival(core, 'a-t13a-2', 'p1', { body: 'unread' });
   await quiet();
   assert.equal(core.unreadCount('block:p1'), 0, 'still open, so still read');
   await d.show();
-  core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'and one more, unseen' });
+  arrival(core, 'a-t13a-3', 'p1', { body: 'and one more, unseen' });
   await quiet();
   assert.equal(core.unreadCount('block:p1'), 1);
   const changes = [], errors = [];
@@ -316,12 +341,12 @@ test('T13a: a display that cannot be read clears nothing', async () => {
   // that no display ever put in front of anybody.
   const still = mount({ storage: makeStore().adapter });
   const d2 = display(still);
-  still.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'seen' });
+  arrival(still, 'b-0-1', 'p1', { body: 'seen' });
   await d2.show('block:p1');
   assert.equal(still.unreadCount('block:p1'), 0);
   d2.stop();
   still.registerThreadVisibility(() => { throw new Error('the screen went out'); });
-  still.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'arrived in the dark' });
+  arrival(still, 'b-0-2', 'p1', { body: 'arrived in the dark' });
   await quiet();
   assert.equal(still.unreadCount('block:p1'), 1, 'the thread was open a moment ago, which is not now');
   invariants(still, 'T13a still-open');
@@ -374,7 +399,7 @@ test('T34: closing before the boundary means it was never open', async () => {
   core.on('unread:change', (e) => changes.push(e));
   const closeFirst = core.on('change', () => { d.open = []; core.reportThreadVisibility(); });
 
-  core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'they shut it first' });
+  arrival(core, 'a-t34', 'p1', { body: 'they shut it first' });
   await quiet();
   closeFirst();
   assert.equal(core.unreadCount('block:p1'), 1);
@@ -391,10 +416,10 @@ test('T14: a reload keeps both what was read and what was not', async () => {
   const store = makeStore();
   const a = mount({ storage: store.adapter });
   const da = display(a);
-  a.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'one' });
-  a.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'two' });
+  arrival(a, 'b-1-1', 'p1', { body: 'one' });
+  arrival(a, 'b-1-2', 'p1', { body: 'two' });
   await da.show('block:p1');
-  a.addComment({ anchor: { type: 'block', elementId: 'p2' }, body: 'never opened' });
+  arrival(a, 'b-1-3', 'p2', { body: 'never opened' });
   await settle();
   assert.equal(a.unreadCount('block:p1'), 0);
   assert.equal(a.unreadCount('block:p2'), 1);
@@ -507,7 +532,7 @@ test('T19: a failed save does not undo what the reader did, and the next one cat
   core.on('error', (e) => errors.push(e));
   const d = display(core);
 
-  core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'one' });
+  arrival(core, 'a-2-1', 'p1', { body: 'one' });
   await quiet();
   await d.show('block:p1');
   await quiet();
@@ -516,7 +541,7 @@ test('T19: a failed save does not undo what the reader did, and the next one cat
   assert.ok(errors.every((e) => e.code === 'STORAGE_SAVE_FAILED'));
 
   flaky.fail = false;
-  core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'two' });
+  arrival(core, 'a-2-2', 'p1', { body: 'two' });
   await quiet();
   const last = flaky.saves.at(-1);
   assert.ok(last, 'a save finally landed');
@@ -532,8 +557,8 @@ test('T19: a failed save does not undo what the reader did, and the next one cat
 
 test('T20/T21: deleting what was unread takes it out of the count', async () => {
   const core = mount({ storage: makeStore().adapter });
-  const a = core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'one' });
-  const b = core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'two' });
+  const a = { id: arrival(core, 'a-3-1', 'p1', { body: 'one' }) };
+  const b = { id: arrival(core, 'a-3-2', 'p1', { body: 'two' }) };
   await settle();
   assert.equal(core.unreadCount('block:p1'), 2);
 
@@ -632,7 +657,7 @@ test('T28: the announcement carries the whole picture, not a difference', async 
   const changes = [];
   core.on('unread:change', (e) => changes.push(e));
 
-  core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'new' });
+  arrival(core, 'a-4-1', 'p1', { body: 'new' });
   await settle();
   assert.equal(changes.length, 1);
   assert.deepEqual(changes[0].threads, [{ threadKey: 'block:p1', count: 1 }]);
@@ -680,7 +705,7 @@ test('T30: what a subscriber is handed is theirs to keep or wreck', async () => 
   const core = mount({ storage: makeStore().adapter });
   const got = [];
   core.on('unread:change', (e) => got.push(e));
-  core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'one' });
+  arrival(core, 'a-5-1', 'p1', { body: 'one' });
   await settle();
   assert.equal(got.length, 1);
 
@@ -709,7 +734,7 @@ test('T31: opening a thread from inside the announcement settles, and settles ri
     core.reportThreadVisibility();
   });
 
-  core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'one' });
+  arrival(core, 'a-6-1', 'p1', { body: 'one' });
   await quiet();
   assert.equal(changes.length, 2, 'the arrival, then the reading of it');
   assert.deepEqual(changes[0].threads, [{ threadKey: 'block:p1', count: 1 }]);
@@ -731,7 +756,7 @@ test('T32: deleting from inside the announcement settles too', async () => {
     core.deleteComment(e.threads[0].threadKey === 'block:p1' ? core.listComments()[0].id : '');
   });
 
-  core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'one' });
+  arrival(core, 'a-7-1', 'p1', { body: 'one' });
   await quiet();
   assert.equal(changes.length, 2);
   assert.deepEqual(changes[1].threads, []);
@@ -1069,8 +1094,8 @@ test('T43: the fact comes before what is derived from it', async () => {
   core.on('thread:visibility', () => order.push('thread:visibility'));
   core.on('unread:change', () => order.push('unread:change'));
 
-  core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'in the open one' });
-  core.addComment({ anchor: { type: 'block', elementId: 'p2' }, body: 'in the shut one' });
+  arrives(core, [entry('a-t43-1', 'p1', { body: 'in the open one' }),
+                 entry('a-t43-2', 'p2', { body: 'in the shut one' })]);
   await settle();
   assert.deepEqual(order, ['thread:visibility', 'unread:change']);
   assert.deepEqual(core.unreadThreads(), [{ threadKey: 'block:p2', count: 1 }],
@@ -1201,11 +1226,14 @@ test('the library owns identity on every way in, replies included', async () => 
   // The fourth place a rule was enforced at one granularity and acted on at another. Adding a comment
   // accepts initial replies, and those went in wearing whatever ids the caller supplied — so an id
   // that already named something else could enter through the ordinary front door, past the check the
-  // import and restore paths both run. What it produces is silent: an utterance counted as already
-  // read because a different utterance was.
+  // import and restore paths both run.
+  //
+  // What the collision must not do is let one utterance inherit another's reading. Since writing is
+  // not arriving, what comes in this way is this reader's own and is not new to them — so the way to
+  // see the inheritance would be the OTHER thread's reading moving, which is what is checked.
   const core = mount({ storage: makeStore().adapter });
   const d = display(core);
-  const first = core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'first' });
+  const first = { id: arrival(core, 'a-13-1', 'p1', { body: 'first' }) };
   await d.show('block:p1');
   await d.show();
   assert.equal(core.unreadCount('block:p1'), 0, 'read, so anything new after this should show');
@@ -1219,7 +1247,9 @@ test('the library owns identity on every way in, replies included', async () => 
 
   const everywhere = [...idsOf(core, 'block:p1'), ...idsOf(core, 'block:p2')];
   assert.equal(new Set(everywhere).size, everywhere.length, 'no id names two utterances');
-  assert.equal(core.unreadCount('block:p2'), 2, 'and both new utterances are new — neither inherits a reading');
+  assert.equal(idsOf(core, 'block:p1').length, 1, 'and the thread whose id was borrowed still holds one');
+  assert.equal(core.unreadCount('block:p1'), 0, 'whose reading the collision did not disturb');
+  assert.equal(core.unreadCount('block:p2'), 0, 'what a caller writes here is not news to them, however it is named');
   invariants(core, 'identity on the add path');
   core.destroy();
 });
@@ -1313,9 +1343,9 @@ test('progress comes back through its own record, and the document through its o
   const store = makeStore();
   const a = mount({ storage: store.adapter });
   const da = display(a);
-  a.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'read this' });
+  arrival(a, 'b-5-1', 'p1', { body: 'read this' });
   await da.show('block:p1');
-  a.addComment({ anchor: { type: 'block', elementId: 'p2' }, body: 'not this' });
+  arrival(a, 'b-5-2', 'p2', { body: 'not this' });
   await quiet();
   assert.deepEqual(Object.keys(store.peek()).sort(), ['comments', 'documentId', 'keepsProgress', 'schemaVersion'],
     'the document record carries the document, and the shape it was written in — nothing about a reader');
@@ -1348,7 +1378,7 @@ test('one record failing to save does not strand the other, or itself', async ()
   const errors = [];
   core.on('error', (e) => errors.push(e));
 
-  core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'written while progress is broken' });
+  arrival(core, 'a-11-1', 'p1', { body: 'written while progress is broken' });
   await quiet();
   assert.equal(state.docs.length, 1, 'the document was still attempted, and landed');
   assert.ok(errors.length >= 1, 'and the progress failure was reported');
@@ -1361,7 +1391,7 @@ test('one record failing to save does not strand the other, or itself', async ()
   assert.ok(state.progress.length >= 1, 'progress landed on its own');
 
   await d.show();
-  core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'written while the document is broken' });
+  arrival(core, 'a-11-2', 'p1', { body: 'written while the document is broken' });
   await quiet();
   assert.equal(state.docs.length, 1, 'the document write failed, so nothing new was stored');
 
@@ -1501,7 +1531,7 @@ test('what the window cannot know yet, it does not claim — and the next report
   const seen = [];
   core.on('unread:change', (e) => seen.push(e.threads));
 
-  core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'nobody is looking' });
+  arrival(core, 'a-14-1', 'p1', { body: 'nobody is looking' });
   assert.equal(core.unreadCount('block:p1'), 0, 'not claimed before it is settled');
   await quiet();
   assert.equal(core.unreadCount('block:p1'), 1);
@@ -1684,7 +1714,7 @@ test('a document whose progress never landed is not mistaken for one written bef
     loadProgress: () => null, saveProgress: () => neverAnswers,
   } });
   await first.ready;
-  first.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'arrived and never marked read' });
+  arrival(first, 'b-4-1', 'p1', { body: 'arrived and never marked read' });
   await quiet();
   assert.equal(first.unreadCount('block:p1'), 1, 'unread here');
   assert.ok(document, 'the document itself did land');
@@ -1718,7 +1748,7 @@ test('a document kept by an adapter that cannot hold progress does not claim it 
   const documentOnly = { load: () => document, save: (d) => { document = d; } };
   const first = mount({ storage: documentOnly });
   await first.ready;
-  first.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'written with nowhere to keep progress' });
+  arrival(first, 'b-3-1', 'p1', { body: 'written with nowhere to keep progress' });
   await quiet();
   assert.equal(first.unreadCount('block:p1'), 1, 'unread within the session');
   assert.ok(!document.keepsProgress, 'and the document does not claim a record is coming');
@@ -2015,7 +2045,7 @@ test('T47: the same reply, into a timeline that is hidden, is unread until it is
   await d.show();                                   // the reader closes it and goes elsewhere
   await quiet();
 
-  core.addReply(c.id, { body: 'answered while you were away' });
+  replyArrives(core, c.id, 'r-t47', { body: 'answered while you were away' });
   await quiet();
   assert.equal(core.unreadCount('block:p1'), 1, 'hidden timeline: the reply is what is new');
 
@@ -2036,7 +2066,7 @@ test('T46/T47: shown or hidden is the ONLY thing that separates them', async () 
     await d.show('block:p1');
     await quiet();
     if (!shown) { await d.show(); await quiet(); }
-    core.addReply(c.id, { body: 'the answer' });
+    replyArrives(core, c.id, 'r-pair', { body: 'the answer' });
     await quiet();
     const n = core.unreadCount('block:p1');
     invariants(core, `shown=${shown}`);
@@ -2045,4 +2075,167 @@ test('T46/T47: shown or hidden is the ONLY thing that separates them', async () 
   };
   assert.equal(await run(true), 0, 'shown → read');
   assert.equal(await run(false), 1, 'hidden → unread');
+});
+
+// ---- writing is not arriving --------------------------------------------------------------------
+//
+// The rule is unchanged: unread is an utterance whose arrival number is above the thread's observed
+// one. What changed is what counts as an arrival. Something this reader wrote, here, through this
+// instance's own input path never gets a number at all — because writing is not arriving, and nobody
+// needs telling about what they just typed.
+//
+// No notion of WHO is speaking is introduced. The distinction is the way in: typed here, or reached
+// here from outside. So an utterance this same person wrote on another device arrives like anyone
+// else's and is new, which is the declared edge of this design rather than an oversight — resolving
+// it needs accounts and profiles, and there is one person here.
+//
+// Rows 1-7 below are the agreed state table. Rows 1 and 2 are the regression: both were unread
+// before this, which is the report that started it.
+
+const seven = () => { const core = mount({ storage: makeStore().adapter }); return { core, d: display(core) }; };
+
+test('row 1 — writing into a folded lane counts, and is not unread', async () => {
+  const { core, d } = seven();
+  await d.show();                                    // the lane is folded: nothing is on screen
+  await quiet();
+  core.addComment({ anchor: { type: 'document' }, body: 'typed into the folded lane' });
+  await quiet();
+  assert.equal(idsOf(core, 'document').length, 1, 'the count goes up');
+  assert.equal(core.unreadCount('document'), 0, 'and none of it is new to the person who wrote it');
+  assert.deepEqual(core.unreadThreads(), []);
+  invariants(core, 'row 1');
+  core.destroy();
+});
+
+test('row 2 — the same, from a Pane that shuts on commit', async () => {
+  // The Pane closes synchronously as it commits, so by the settling boundary the thread is gone from
+  // screen — the T34 rule. Before this, that made what the reader had just sent unread to them.
+  const { core, d } = seven();
+  await d.show('block:p1');
+  await quiet();
+  const shutOnCommit = core.on('change', () => { d.open = []; core.reportThreadVisibility(); });
+  core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'sent, and the Pane shuts' });
+  await quiet();
+  shutOnCommit();
+  assert.equal(core.unreadCount('block:p1'), 0, 'shut or open, what they sent is not news to them');
+  invariants(core, 'row 2');
+  core.destroy();
+});
+
+test('row 3 — writing while it is open is no different', async () => {
+  const { core, d } = seven();
+  await d.show('block:p1');
+  await quiet();
+  core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'typed with it open' });
+  await quiet();
+  assert.equal(core.unreadCount('block:p1'), 0);
+  invariants(core, 'row 3');
+  core.destroy();
+});
+
+test('row 4 — an answer arriving while the lane is folded IS unread', async () => {
+  const { core, d } = seven();
+  await d.show();
+  await quiet();
+  core.addComment({ anchor: { type: 'document' }, body: 'mine' });
+  await quiet();
+  arrives(core, [{ id: 'row4', anchor: { type: 'document' }, body: 'theirs', createdAt: NOW_ISH }]);
+  await quiet();
+  assert.equal(core.unreadCount('document'), 1, 'theirs is new; mine still is not');
+  await d.show('document');
+  await quiet();
+  assert.equal(core.unreadCount('document'), 0, 'and opening it is what clears it');
+  invariants(core, 'row 4');
+  core.destroy();
+});
+
+test('row 5 — the same, into a Pane that is shut', async () => {
+  const { core, d } = seven();
+  await d.show('block:p1');
+  await quiet();
+  await d.show();
+  arrival(core, 'row5', 'p1', { body: 'theirs, while they were away' });
+  await quiet();
+  assert.equal(core.unreadCount('block:p1'), 1);
+  await d.show('block:p1');
+  await quiet();
+  assert.equal(core.unreadCount('block:p1'), 0);
+  invariants(core, 'row 5');
+  core.destroy();
+});
+
+test('row 6 — an answer arriving while it is open is read as it lands', async () => {
+  const { core, d } = seven();
+  await d.show('block:p1');
+  await quiet();
+  const announced = [];
+  core.on('unread:change', (e) => announced.push(e));
+  arrival(core, 'row6', 'p1', { body: 'theirs, in front of them' });
+  await quiet();
+  assert.equal(core.unreadCount('block:p1'), 0);
+  assert.deepEqual(announced, [], 'never unread, so never announced — not even briefly');
+  invariants(core, 'row 6');
+  core.destroy();
+});
+
+test('row 7 — writing does not clear what was already unread', async () => {
+  // The hazard the design had to avoid. A thread's reading is one number, so "my new utterance is
+  // read" could only have been said by moving that number up past everything below it — including an
+  // answer the reader never opened. Not taking a number at all is what makes this hold: there is
+  // nothing to move the cursor to.
+  const { core, d } = seven();
+  await d.show('block:p1');
+  await quiet();
+  await d.show();
+  arrival(core, 'row7-theirs', 'p1', { body: 'arrived, and never looked at' });
+  await quiet();
+  assert.equal(core.unreadCount('block:p1'), 1);
+
+  core.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'and then I typed something' });
+  await quiet();
+  assert.equal(core.unreadCount('block:p1'), 1, 'still exactly one, and it is still theirs');
+  await d.show('block:p1');
+  await quiet();
+  assert.equal(core.unreadCount('block:p1'), 0, 'only looking clears it');
+  invariants(core, 'row 7');
+  core.destroy();
+});
+
+test('rows 1-7 across a reload — what was written here stays written here', async () => {
+  // The absence of a number is the whole record of authorship, so a reload has to read it the same
+  // way: an utterance in the document that the record of arrivals does not mention was written here.
+  const store = makeStore();
+  const a = mount({ storage: store.adapter });
+  const da = display(a);
+  await da.show('block:p1');
+  await quiet();
+  await da.show();
+  a.addComment({ anchor: { type: 'block', elementId: 'p1' }, body: 'mine, while shut' });
+  arrival(a, 'reload-theirs', 'p2', { body: 'theirs, while shut' });
+  await quiet();
+  assert.equal(a.unreadCount('block:p1'), 0);
+  assert.equal(a.unreadCount('block:p2'), 1);
+  a.destroy();
+
+  const b = mount({ storage: store.adapter });
+  await b.ready;
+  await quiet();
+  assert.equal(b.unreadCount('block:p1'), 0, 'mine is still mine after a reload');
+  assert.equal(b.unreadCount('block:p2'), 1, 'and theirs is still waiting');
+  invariants(b, 'rows 1-7 reloaded');
+  b.destroy();
+});
+
+test('the declared edge — the same person, from another device, arrives like anyone else', async () => {
+  // Recorded rather than fixed: telling this apart needs accounts and stored profiles, and there is
+  // one person here. Reopening it starts from where a user's record would live, not from this rule.
+  const { core, d } = seven();
+  await d.show('block:p1');
+  await quiet();
+  await d.show();
+  arrives(core, [entry('elsewhere', 'p1', { body: 'I wrote this on my laptop', author: { id: 'me' } })]);
+  await quiet();
+  assert.equal(core.unreadCount('block:p1'), 1, 'the way in decides, and this one came from outside');
+  invariants(core, 'declared edge');
+  core.destroy();
 });

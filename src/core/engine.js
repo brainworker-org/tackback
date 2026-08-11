@@ -104,6 +104,13 @@ class TackbackInstance {
     // Both are environment-local facts with no source outside this instance: they are not a cached
     // view of something else, so keeping them is not the copy this codebase otherwise refuses to make.
     this._arrival = new Map();       // utterance id → the order it reached here (a positive integer)
+    // Utterances THIS reader wrote, here, through this instance's own input path. They never take an
+    // arrival number, because writing something is not the same as it reaching you: a number is what
+    // makes an utterance capable of being unread, and nobody needs telling about what they just typed.
+    // Membership is not stored — the absence of a number IS the fact, and that survives a reload for
+    // free (see _restoreEnvState, which reads an id present in a document but missing from a record
+    // of arrivals as one that was written here).
+    this._own = new Set();
     this._observed = new Map();      // thread key → how far that thread has been seen
     this._arrivalNext = 1;
     this._staged = [];               // ids seen but not yet numbered — see _stageArrival
@@ -193,6 +200,8 @@ class TackbackInstance {
     }
     const author = input.author !== undefined ? input.author : (this._opts.author ?? null);
     const comment = createComment({ ...input, author }, nowIso());
+    this._mine(comment.id);
+    for (const r of comment.replies || []) this._mine(r.id);
     const diff = this._store.add(comment);
     this._commit(diff, 'local');
     this._emitter.emit('comment:add', comment);
@@ -221,6 +230,7 @@ class TackbackInstance {
     this._assertWritable();
     if (!this._store.has(commentId)) throw new TackbackError('COMMENT_NOT_FOUND', `no comment ${commentId}`);
     const reply = createReply(input || { body: '' }, nowIso());
+    this._mine(reply.id);
     const prev = this._store.get(commentId);
     const replies = [...(prev.replies || []), reply];
     const { diff, previous, next } = this._store.update(commentId, { replies }, nowIso());
@@ -950,9 +960,23 @@ class TackbackInstance {
    * as it likes — and the numbers are what "arrival order" MEANS to anything reading them back.
    * @param {readonly import('./model.js').Comment[]} comments
    */
+  /**
+   * Record that an utterance was written here, through this instance's own input path.
+   *
+   * Called where the id is minted rather than from the commit, because the commit cannot tell the two
+   * apart: the same `addReply` carries a reply this reader typed and one an integrator relays from
+   * somewhere else. What it CAN tell is that neither of those reached this environment from outside,
+   * which is the whole of the distinction — no notion of who is speaking is introduced or needed.
+   * @param {string} id
+   */
+  _mine(id) { if (id) this._own.add(id); }
+
   _stageArrival(comments) {
     const pending = new Set(this._staged);
-    const note = (id) => { if (!this._arrival.has(id) && !pending.has(id)) { this._staged.push(id); pending.add(id); } };
+    const note = (id) => {
+      if (this._own.has(id)) return;   // written here: never an arrival, so never numbered
+      if (!this._arrival.has(id) && !pending.has(id)) { this._staged.push(id); pending.add(id); }
+    };
     for (const c of comments) {
       note(c.id);
       for (const r of c.replies || []) note(r.id);
@@ -1009,6 +1033,7 @@ class TackbackInstance {
       if (key) threads.add(key);
     }
     for (const id of this._arrival.keys()) if (!alive.has(id)) this._arrival.delete(id);
+    for (const id of this._own) if (!alive.has(id)) this._own.delete(id);
     for (const key of this._observed.keys()) if (!threads.has(key)) this._observed.delete(key);
   }
 
@@ -1205,25 +1230,56 @@ class TackbackInstance {
     const legacy = nothingStored && declaration === 'absent';
     const counts = (v) => Number.isSafeInteger(v) && v >= 1;
 
-    const declared = (kept && typeof kept.arrival === 'object' && kept.arrival) ? kept.arrival : {};
+    // Whether there is a record of arrivals to read AT ALL. It is not the same question as whether an
+    // utterance has a number in it: with a record, an id missing from it was written here; with no
+    // record, nothing is known about any of them and every one is looked at again.
+    const hasArrivals = !!(kept && typeof kept.arrival === 'object' && kept.arrival);
+    const declared = hasArrivals ? kept.arrival : {};
     const byNumber = new Map();
+    // An id whose number is structurally wrong was WRITTEN DOWN and cannot be read — which is not the
+    // same as never having been written down. Only the second means "this reader wrote it"; the first
+    // is damage, and damage is numbered again so it lands on the side that asks for another look.
+    const rejected = new Set();
     for (const [id, v] of Object.entries(declared)) {
-      if (!counts(v)) continue;                       // not a number that could have been handed out
+      if (!counts(v)) { rejected.add(id); continue; }  // not a number that could have been handed out
       if (!byNumber.has(v)) byNumber.set(v, []);
       byNumber.get(v).push(id);
     }
+    // Ids that gave a number up because two utterances claimed it. They are numbered again below,
+    // rather than read as written-here: a damaged record must not be able to turn into "already read".
+    const contested = new Set();
     for (const [v, sharing] of byNumber) {
       // A number two utterances both claim identifies neither. Which one is the real holder is not
       // recoverable, so both give theirs up and are numbered again — landing them after everything
       // read so far, which is the side that asks for another look.
       if (sharing.length === 1) this._arrival.set(sharing[0], v);
+      else for (const id of sharing) contested.add(id);
     }
     let highest = 0;
     for (const v of this._arrival.values()) if (v > highest) highest = v;
     // Never hand out a number twice, whatever the stored counter says. A reused number is read as
     // already-seen by whatever cursor is sitting above it.
     this._arrivalNext = Math.max(counts(kept?.arrivalNext) ? kept.arrivalNext : 1, highest + 1);
-    this._ensureArrival(comments);
+    // What an unnumbered utterance means here depends on whether a record of arrivals existed at all.
+    //
+    // With one, every arrival that ever reached this environment was numbered as it landed — so an
+    // utterance sitting in the document without a number is one that never arrived, which is to say
+    // this reader wrote it. That is how "written here" survives a reload without being stored: the
+    // absence is the record. A record from before arrivals existed says nothing of the kind, so
+    // everything in it is numbered as before and the legacy reading below decides what to do with it.
+    // No record to read — missing, unreadable, or not the shape of one — says nothing about who wrote
+    // what, so nothing may be read as written-here. Everything is numbered and left to be looked at
+    // again, which is the side ignorance has to fall on.
+    if (legacy || !hasArrivals) this._ensureArrival(comments);
+    else {
+      for (const c of comments) {
+        for (const id of [c.id, ...(c.replies || []).map((r) => r.id)]) {
+          if (this._arrival.has(id)) continue;
+          if (contested.has(id) || rejected.has(id)) this._arrival.set(id, this._arrivalNext++);
+          else this._mine(id);
+        }
+      }
+    }
 
     const issued = this._arrivalNext - 1;
     const observed = (kept && typeof kept.observed === 'object' && kept.observed) ? kept.observed : {};
