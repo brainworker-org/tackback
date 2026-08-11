@@ -85,6 +85,30 @@
      way — a fixed breakpoint of our own would disagree with the lane's measurement. */
   :root.tb-lane-stacked { --tb-lane-left: 16px; }
   :root.tb-lane-stacked .trybar { bottom: auto; top: 16px; max-width: calc(100vw - 32px); width: auto; }
+
+  /* ── the one mark ────────────────────────────────────────────────────────────────────────────
+     While a thread holds something the reader has not got to, its badge is FILLED orange and
+     breathes on a two-second cycle. Reading it drops the state and the badge goes back to the
+     speaker's colour, which the panel writes as an inline style — so a fill of this weight is what
+     it takes to sit on top of it, and letting go is what takes it off again.
+
+     The library draws this state as a RING. These rules REPLACE that rather than adding to it, which
+     is why the shadow is cleared alongside: two marks for one state is the thing being avoided. Its
+     stylesheet is appended to <head> after this one and re-appended whenever the panel is rebuilt,
+     so weight rather than order is what makes these hold. */
+  .tb-badge.tb-unread, .tb-pin.tb-unread, .tb-lane.tb-unread .tb-lane-count {
+    background: var(--tb-unread, #ef7f0e) !important;
+    color: #fff !important;
+    box-shadow: none !important;
+    animation: tb-unread-pulse 2s ease-in-out infinite;
+  }
+  .tb-pin.tb-unread { box-shadow: 0 1px 4px rgba(0,0,0,.3) !important; }   /* the pin keeps its lift off the page */
+  @keyframes tb-unread-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+  /* A pulse that never stops is exactly the kind a reader may have asked their system to spare them.
+     The mark itself stays — it is the movement that goes, not the information. */
+  @media (prefers-reduced-motion: reduce) {
+    .tb-badge.tb-unread, .tb-pin.tb-unread, .tb-lane.tb-unread .tb-lane-count { animation: none; }
+  }
 </style>
 </head>
 <body>
@@ -180,15 +204,16 @@
   <p>Tackback assigns <b>no meaning</b> to who a participant is. It reads an opaque <code>kind</code>
     off the author and looks it up in a map you supply; it ships no categories and no colors of its
     own.</p>
-  <p>There is <b>one mark</b> on this page and it means one thing: <b>orange is where there is
-    something new</b>, and opening it to read is what makes it go. Nothing else marks anything, so
-    there is a single colour to learn and a single way for it to clear. (The colour is a
-    <code>--tb-*</code> token like the rest — this page sets it, and you would set it too.)</p>
+  <p>There is <b>one mark</b> on this page and it means one thing: a badge holding something new is
+    <b>filled orange and breathes</b>, and opening it to read is what makes it stop — the badge goes
+    back to the colour of whoever spoke last. Nothing else marks anything, so there is a single thing
+    to learn and a single way for it to clear. (Both the colour and the pulse are this page's, over
+    <code>--tb-*</code> tokens and plain CSS — you would set them too.)</p>
   <p>Switch <b>Scenario</b> to <em>conversation</em> in the bottom-left bar and the commit button
     becomes <b>Send</b>: the Pane stays open, your message appears immediately with a pending marker,
     and a second participant answers a moment later — into the timeline you are already looking at.
     <b>It arrives already read</b>, and no mark goes up: the thread was on screen. Close the Pane
-    first and send again, and the next answer <b>marks the anchor orange</b> until you open it, which
+    first and send again, and the next answer <b>fills the anchor orange</b> until you open it, which
     is the whole promise — where there is something new is visible, and reading it clears it. In
     <em>local</em> the button stays <b>Save</b>, the Pane closes, and no answer arrives: that is the
     offline, backend-free shape, and a reply would imply the backend it is defined as not having.</p>
