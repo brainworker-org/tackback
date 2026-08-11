@@ -368,7 +368,7 @@
   // `error` only, so most of what the library reports was invisible to anyone actually using the demo.
   // A seam nobody can observe is a seam nobody can trust.
   const EVENTS = ['ready', 'change', 'comment:add', 'comment:update', 'comment:delete', 'comments:delete',
-    'attention:change', 'transport:change', 'anchor:orphaned', 'recalculate', 'rev:mismatch',
+    'transport:change', 'anchor:orphaned', 'recalculate', 'rev:mismatch',
     'submit:batch', 'thread:visibility', 'unread:change', 'error'];
   const logEl = document.getElementById('event-log');
   const logLines = [];
@@ -399,7 +399,6 @@
     }
     if (name === 'comments:delete') return `${e.ids.length} in one act`;
     if (name === 'comment:delete') return e.id;
-    if (name === 'attention:change') return `${e.id} → ${e.on ? 'on' : 'off'}`;
     if (name === 'error') return String(e.message || e.code || e);
     if (e.id) return e.id;
     return '';

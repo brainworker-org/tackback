@@ -73,15 +73,6 @@ const PANEL_CSS = `
 :root.tb-hide ::highlight(tb-range) { background: transparent; text-decoration: none; }
 ::highlight(tb-range) { background: var(--tb-mark-bg); color: inherit; text-decoration: underline dotted var(--tb-mark-outline); }
 .tb-badge.tb-orphan { opacity: .7; }
-/* an anchor carrying a live ATTENTION flag (setAnchorAttention) wears a generic "needs-notice" tint.
-   It overrides the per-actor tint (which is set inline) via !important, and disappears the moment the
-   flag is cleared. The MEANING of the flag (e.g. "unread") is the integrator's — Tackback only paints
-   and clears it; it attaches no semantics of its own. */
-.tb-badge.tb-attn { background: var(--tb-attention) !important; color: #fff !important; }
-/* Something here has not been read yet. A RING, not a fill: attention already owns the fill, and the
-   two say different things, so an anchor that is both wears both and neither has to win. A box-shadow
-   rather than an outline because it follows border-radius (same reason the on-surface frame uses one),
-   and because the ring is then visible in grayscale as a shape, not only as a colour. */
 /* A badge holding something this reader has not got to is FILLED and breathes. Reading the thread
    drops the class, and the badge goes back to the colour of whoever spoke last — which the render
    writes inline, so the fill has to outweigh it, and letting go of that weight is what puts the
@@ -126,7 +117,6 @@ const PANEL_CSS = `
 .tb-docbar .tb-docbar-count { font-size: 11px; opacity: .75; }
 /* the shape a count takes once it carries a colour — the same pill the marks below use */
 .tb-docbar .tb-docbar-count.tb-tinted { border-radius: 9px; padding: 0 7px; opacity: 1; }
-.tb-docbar.tb-attn .tb-docbar-count { background: var(--tb-attention); color: #fff; border-radius: 9px; padding: 0 7px; opacity: 1; }
 /* The document thread has no mark on the page — the lane's own count IS its mark, so the ring goes
    there. Padding and radius are repeated because the count is otherwise a bare number with nothing
    for a ring to sit around. */
@@ -459,7 +449,7 @@ export function attachPanel(core, options = {}) {
   // ---- the document lane -------------------------------------------------------------------------
   // Every other thread is reached from a mark on the thing it is about. This one is about the whole
   // document, so it has no such thing — it gets a bar of its own across the bottom, which doubles as
-  // its mark: the count and the attention tint live on the head, visible without opening anything.
+  // its mark: the count lives on the head, visible without opening anything.
   let lane = null, laneHead = null, laneTitle = null, laneCount = null, laneBody = null, laneComposer = null, laneConv = null;
   let laneHost = null;
   if (controls.docBar) {
@@ -513,8 +503,8 @@ export function attachPanel(core, options = {}) {
     if (open) { laneConv.sync(); laneConv.focus(); }
     return open;
   }
-  // The head is the lane's mark: the same utterance count a badge carries, and the same attention
-  // tint. Both are read from where the marks read them, so they cannot drift apart.
+  // The head is the bar's mark: the same utterance count a badge carries, read from where the marks
+  // read it, so the two cannot drift apart.
   function refreshLane() {
     if (!lane) return;
     const n = utteranceCount(docComments);
@@ -524,19 +514,16 @@ export function attachPanel(core, options = {}) {
     // speaker's colour" a rule with an exception nobody could see a reason for. While something is
     // unread the fill above outweighs this, and reading it hands the thread back to its last speaker.
     //
-    // Written here rather than through paintAnchor: that one also raises the attention class, and on
-    // this mark the class belongs to the lane rather than to the count (see the rule for it).
     const laneTint = n ? actorColorOf(lastSpeaker(docComments)) : null;
     laneCount.style.background = laneTint || '';
     laneCount.style.color = laneTint ? '#fff' : '';
     laneCount.classList.toggle('tb-tinted', !!laneTint);
-    lane.classList.toggle('tb-attn', docComments.some((c) => core.hasAttention(c.id)));
     laneConv?.sync();
   }
 
   // ---- marks / overlays ------------------------------------------------------------------------
   // the document thread's comments, refreshed by every renderMarks. It has no mark on the page, so
-  // the panel control is where its count and its attention tint are shown.
+  // the panel control is where its count is shown.
   let docComments = [];
   const orphanedIds = new Set();   // range ids currently orphaned — emit anchor:orphaned only on transition (§6 R1 M5)
   // place a badge on the document surface overlay (absolute within the positioned root) at the
@@ -552,13 +539,10 @@ export function attachPanel(core, options = {}) {
   const actorColorOf = (author) => resolveActorColor(author, actorColors, claimed);
   // Paint an anchor's badge at its NORMAL color = the color of the LAST speaker in the
   // thread (the most recent comment OR reply by timestamp) — so an anchor reads as "who touched it last".
-  // A live ATTENTION flag on any comment in the group overrides this with the generic --tb-attention
-  // tint (applied as a class so its !important beats the inline actor color). Both are pure rendering:
-  // the "last speaker" mechanism and the attention flag carry no domain meaning of their own.
+  // Pure rendering: the "last speaker" mechanism carries no domain meaning of its own.
   function paintAnchor(node, comments) {
     const col = actorColorOf(lastSpeaker(comments));
     if (col) { node.style.background = col; node.style.color = '#fff'; }
-    if (comments.some((c) => core.hasAttention(c.id))) node.classList.add('tb-attn');
   }
   function renderMarks() {
     const currentOrphans = new Set();
@@ -1544,24 +1528,13 @@ export function attachPanel(core, options = {}) {
   own(core.registerThreadVisibility(visibleThreads));
   onCore('change', onChange);
   onCore('recalculate', renderMarks);
-  // Flipping an attention flag changes exactly ONE class on the affected anchors. A full renderMarks
-  // would rebuild every overlay — throwing away the elements an in-flight region move/resize drag is
-  // holding — so the flag is applied as a targeted toggle instead. The flag is re-read from the core
-  // (not from the event) so the "any comment in the anchor" grouping matches the render path exactly.
-  function syncAttention() {
-    doc.querySelectorAll('.tb-badge').forEach((node) => {
-      const cs = node.__tbComments;
-      if (cs) node.classList.toggle('tb-attn', cs.some((c) => core.hasAttention(c.id)));
-    });
-    refreshLane();   // the document thread's "mark" is the panel control
-  }
 
   /**
    * Mark every anchor whose thread holds something unread, and unmark the rest.
    *
    * The panel keeps NO record of what is unread. It asks, every time, and paints what it is told —
    * so the event path and the redraw path cannot drift, because neither of them remembers anything.
-   * That is also why the same targeted-toggle shape as attention is right here: rebuilding every
+   * It is applied as a targeted toggle rather than a full renderMarks, because rebuilding every
    * overlay would throw away the elements an in-flight region drag is holding.
    */
   function syncUnread() {
@@ -1575,7 +1548,6 @@ export function attachPanel(core, options = {}) {
     if (lane) lane.classList.toggle('tb-unread', unread.has('document'));
   }
   onCore('unread:change', syncUnread);
-  onCore('attention:change', syncAttention);
   onCore('transport:change', () => broadcast((c) => c.relabel()));   // Save ⇄ Send, live, on every host
   if (lane) buildLaneConversation();   // late: the factory closes over drafts/reactions declared above
   if (lane) placeLane();

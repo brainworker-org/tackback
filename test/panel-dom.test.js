@@ -2,7 +2,7 @@
 //
 // Everything else about the panel is tested as DOM-free decisions (thread.js, interaction.js,
 // actors.js). That left the WIRING untested, and wiring is where 0.9.3's defects actually lived: a
-// label dispatch that still fell through to block, and a control that showed an attention tint the
+// label dispatch that still fell through to block, and a control that showed a tint the
 // page had no way to clear. Both survived a fully green suite. This file exists so that class of
 // defect fails a test instead of a review.
 //
@@ -516,18 +516,6 @@ test('panel: the lane head carries the count a badge would — replies included'
   } finally { f.restore(); }
 });
 
-test('panel: the lane wears the attention tint, and drops it when cleared', () => {
-  const f = mountPanel();
-  try {
-    const c = f.core.addComment({ anchor: { type: 'document' }, body: 'q' });
-    assert.equal(f.lane().classList.contains('tb-attn'), false);
-    f.core.setAnchorAttention(c.id, true);
-    assert.equal(f.lane().classList.contains('tb-attn'), true, 'the lane is this thread\'s mark');
-    f.core.setAnchorAttention(c.id, false);
-    assert.equal(f.lane().classList.contains('tb-attn'), false);
-  } finally { f.restore(); }
-});
-
 test('panel: a right-DRAG beginning on the lane starts no gesture', () => {
   // A bar fixed across the bottom sits over the content root, so without a guard a right-drag
   // beginning on it draws a region anchored to nothing anyone pointed at. The drag must be complete:
@@ -600,25 +588,19 @@ test('panel: an anchor kind the build does not know is not drawn as some other k
 });
 
 test('panel: a control click reaches a page-level listener, so a clear-on-open policy can work', () => {
-  // This pins the MECHANISM, not either demo: an integrator clearing its own notice when a thread
-  // opens does so from a document-level listener, and the fixture could not bubble at all before, so
+  // This pins the MECHANISM, not either demo: an integrator that wants to act when a thread opens
+  // does so from a document-level listener, and the fixture could not bubble at all before, so
   // no such policy was exercisable here. A regression in a demo's own listener would still not fail
   // this test — the demos are not loaded.
   const f = mountPanel();
   try {
-    const c = f.core.addComment({ anchor: { type: 'document' }, body: 'q' });
-    f.core.setAnchorAttention(c.id, true);
-    let sawControlClick = false;
+    f.core.addComment({ anchor: { type: 'document' }, body: 'q' });
+    const seen = [];
     f.doc.addEventListener('click', (e) => {
-      if (e.target.closest?.('.tb-docbar')) {
-        sawControlClick = true;
-        f.core.listComments().forEach((x) => { if (x.anchor.type === 'document') f.core.setAnchorAttention(x.id, false); });
-      }
+      if (e.target.closest?.('.tb-docbar')) seen.push(f.core.listComments().length);
     });
     f.laneHead().click();
-    assert.equal(sawControlClick, true, 'the click reached the page-level listener');
-    assert.equal(f.core.hasAttention(c.id), false, 'so the page could clear its own notice');
-    assert.equal(f.lane().classList.contains('tb-attn'), false, 'and the lane drops the tint');
+    assert.deepEqual(seen, [1], 'the click reached the page-level listener, which could then read the core');
   } finally { f.restore(); }
 });
 
@@ -2056,35 +2038,6 @@ test('T10: with no lane, the document thread reads through an ordinary Pane', ()
   } finally { f.restore(); }
 });
 
-test('T26: attention and unread are separate states, whichever one is drawn', () => {
-  // They now draw on the same channel — both are fills — so the paint can only show one, and unread
-  // is the one it shows. What must not follow is the STATE collapsing into it: an integrator still
-  // using attention has to be able to raise and lower it, and read it back, while unread comes and
-  // goes underneath. Attention is on its way out; until it is, this is what holds.
-  const f = mountPanel({ instrument: true, setup: twoBlocks });
-  try {
-    const c = { id: arrives(f, 'p1', 'here') };
-    f.env.drainMicrotasks();
-    const badge = () => badgeFor(f, 'p1');
-    assert.ok(badge().classList.contains('tb-unread'));
-    assert.ok(!badge().classList.contains('tb-attn'));
-
-    f.core.setAnchorAttention(c.id, true);
-    f.env.drainMicrotasks();
-    assert.ok(badge().classList.contains('tb-unread'), 'both states are on the badge…');
-    assert.ok(badge().classList.contains('tb-attn'), '…and neither is dropped because of the other');
-
-    openPane(f, badge());
-    assert.ok(!badge().classList.contains('tb-unread'), 'reading clears its own mark');
-    assert.ok(badge().classList.contains('tb-attn'), 'and leaves the integrator\'s alone');
-
-    f.core.setAnchorAttention(c.id, false);
-    f.env.drainMicrotasks();
-    assert.ok(!badge().classList.contains('tb-attn'));
-    assert.ok(!badge().classList.contains('tb-unread'));
-  } finally { f.restore(); }
-});
-
 test('T44: what was unread before the reload is rung on the first paint', async () => {
   // Restoration finishes after the panel is already on screen, so the first draw happens with nothing
   // known. Whether the ring arrives by the announcement or by the next redraw does not matter — both
@@ -2218,7 +2171,7 @@ test('T52: the reported conversation walk-through, end to end', () => {
   // Step 3 is the one that was reported wrong and is not: with an interactive transport the Pane
   // STAYS open, because that is what a conversation is — the answer lands in front of you rather
   // than behind a badge you have to find again. The mark that used to appear here was the demo
-  // page raising the attention flag on arrival, not the library.
+  // page raising a flag of its own on arrival, not the library.
   const f = mountPanel({ instrument: true, setup: twoBlocks });
   try {
     f.core.setTransport({ interactive: true });                       // (2) scenario: conversation
@@ -2416,7 +2369,7 @@ test('L3-1: changing what unread looks like moves nothing else', () => {
   try {
     const css = panelCSS(f);
     for (const [token, value] of [['--tb-accent', '#33aa77'], ['--tb-mark-outline', '#d9a400'],
-      ['--tb-badge-bg', '#d9a400'], ['--tb-attention', '#ef7f0e']]) {
+      ['--tb-badge-bg', '#d9a400']]) {
       assert.match(css, new RegExp(`${token}:\\s*${value}`), `${token} is where it was`);
     }
   } finally { f.restore(); }
@@ -2443,7 +2396,6 @@ test('L3-4: only what is unread breathes', () => {
     const animated = [...css.matchAll(/([^{}]+)\{[^}]*animation:\s*tb-unread-pulse[^}]*\}/g)]
       .map((m) => m[1].trim());
     for (const sel of animated) assert.match(sel, /tb-unread/, `${sel} breathes, and it should not`);
-    assert.doesNotMatch(unreadRule(css, '.tb-badge.tb-attn'), /animation/, 'attention alone is still');
   } finally { f.restore(); }
 });
 

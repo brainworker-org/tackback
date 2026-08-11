@@ -10,7 +10,7 @@ any HTML, including Markdown rendered to HTML.
 
 > The hosted demo runs the **last published release** (it loads the package from a CDN), so it lags
 > this branch during pre-1.0 staging. To exercise what is in the source right now — the flat
-> multi-participant timeline, actor colors, attention, and the Save/Send scenarios — run
+> multi-participant timeline, actor colors, unread, and the Save/Send scenarios — run
 > `demo/demo.html`: `npm run build`, serve the package root over http, and open it.
 
 > **Version 0.9.8 (staging).** Pre-1.0: the API is functional and tested but may still change before
@@ -119,7 +119,7 @@ re-skins and re-labels Tackback without forking it or overriding its CSS:
 - **Language** — `setLocale()` at runtime; English and Japanese ship, bring your own bundle.
 - **Controls** — `controls: { author, export, import, theme, marks, clear, docBar }` chooses what
   renders; every one except `import` is on by default. `docBar` is the document thread's own bar
-  across the bottom of the viewport, and doubles as its mark: the utterance count and the attention
+  across the bottom of the viewport, and doubles as its mark: the utterance count and the unread
   tint sit on its head, visible without expanding it.
 
 Hiding a control does not hide the *data* behind it, but what remains reachable differs:
@@ -138,7 +138,7 @@ const panel = attachPanel(tb, {
     { id: 'rework',  icon: '🔁', label: { en: 'Rework',  ja: '要再考' } },
     { id: 'blocker', icon: '🛑', label: { en: 'Blocker', ja: '障害'  } },
   ],
-  theme: { '--tb-accent': '#0f766e', '--tb-badge-bg': '#0f766e', '--tb-attention': '#b45309' },
+  theme: { '--tb-accent': '#0f766e', '--tb-badge-bg': '#0f766e', '--tb-unread': '#b45309' },
   actorColors: { reviewer: '#0f766e', assistant: '#b45309' },
 });
 panel.setReactions(otherSet);      // …or swap any of them at runtime
@@ -188,23 +188,6 @@ panel.setActorColors({ assistant: '#7c3aed', reviewer: '#059669' });
 const tb = Tackback.mount({ author: { id: 'kei', kind: 'reviewer' } });   // kind is yours to define
 tb.addReply(commentId, { body: 'here is my read', author: { id: 'helper', kind: 'assistant' } });
 ```
-
-**Attention** is the same shape — a generic "this anchor wants a look" flag whose meaning is yours
-(unread, needs-review, whatever you track):
-
-```js
-tb.setAnchorAttention(commentId);          // paints the anchor with --tb-attention (orange by default)
-tb.setAnchorAttention(commentId, false);   // back to its normal actor tint
-tb.hasAttention(commentId);                // → boolean
-tb.on('attention:change', ({ id, on }) => {/* … */});
-```
-
-The flag is **session-only**: never persisted, never written into the export envelope, so a per-viewer
-UI state can't leak into a shared file. It lives as long as its comment — deleting or wiping the comment
-drops it, and re-importing that comment id starts unflagged. Restyle it via the `--tb-attention` token.
-
-> Since 0.9.7 you no longer need attention to mean "unread" — Tackback tracks and paints that itself
-> (below). Attention is back to being a flag with no meaning of its own.
 
 ### What this reader has not got to yet
 
@@ -276,7 +259,7 @@ instance at a time** per environment. A `readOnly` mount calls `saveProgress` an
 
 ### Which threads a reader can see
 
-A flag like attention is only half of it: something has to decide when to *clear* it. That takes
+Marking something is only half of it: something has to decide when to *stop* marking it. That takes
 knowing which threads are actually in front of the reader right now, and Tackback reports it as a
 **settled snapshot** rather than as open/close edges you would have to keep balanced yourself:
 
@@ -407,7 +390,7 @@ omits, so there is nothing left for a tombstone to take.
 ## Modules
 | import | responsibility |
 |---|---|
-| `@brainworker/tackback` | `Tackback.mount` → instance: CRUD, replies, typed events, import/export, media-adapter coordination, lifecycle, `anchor:orphaned`, session-only anchor attention |
+| `@brainworker/tackback` | `Tackback.mount` → instance: CRUD, replies, typed events, import/export, media-adapter coordination, lifecycle, `anchor:orphaned`, unread tracking |
 | `@brainworker/tackback/panel` | `attachPanel` — control panel (configurable via `controls`), anchored marks, comment pane with the flat multi-participant timeline, gesture capture (right-click block, select+right-click range, right-drag region), theming/reactions/actor colors/i18n |
 | `@brainworker/tackback/pdf` | `createPdfAdapter` — an **optional** PDF adapter (renders pages to surfaces; pdf.js is a peer the consumer provides). PDF/raster surfaces are a post-v1 sample, not a v1 focus. |
 

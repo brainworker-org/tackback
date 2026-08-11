@@ -90,9 +90,6 @@ class TackbackInstance {
     this._visibilityReported = false;           // whether this failure has already been announced
     this._visibilityRetryPending = false;
     this._visibilityScheduled = false;
-    this._attention = new Set();   // comment ids currently flagged for ATTENTION — a generic, live UI
-                                   // state driven by the integrator; NOT persisted, NOT exported, and
-                                   // WITHOUT any built-in meaning (see setAnchorAttention).
 
     // ---- what has arrived, and how far a reader has got ------------------------------------------
     //
@@ -244,7 +241,6 @@ class TackbackInstance {
     this._assertWritable();
     if (!this._store.has(id)) throw new TackbackError('COMMENT_NOT_FOUND', `no comment ${id}`);
     const { diff, previous } = this._store.delete(id);
-    this._attention.delete(id);   // a deleted comment carries no live attention flag
     this._commit(diff, 'local');
     this._emitter.emit('comment:delete', { id, previous });
   }
@@ -268,7 +264,6 @@ class TackbackInstance {
     for (const id of ids || []) {
       if (!this._store.has(id)) continue;
       const r = this._store.delete(id);
-      this._attention.delete(id);
       removed.push(id); previous.push(r.previous);
       diff = { added: [], updated: [], removed: [...diff.removed, ...r.diff.removed] };
     }
@@ -454,7 +449,6 @@ class TackbackInstance {
     for (const id of (doomed || [])) {
       if (this._store.has(id)) {
         const r = this._store.delete(id);
-        this._attention.delete(id);
         gone.push(id); gonePrev.push(r.previous);
         diff.removed.push(...r.diff.removed);
         continue;
@@ -465,7 +459,6 @@ class TackbackInstance {
       // an import reports every other modification; the per-comment delete events stay about comments.
       const r = this._store.deleteReply(id);
       if (!r) continue;
-      this._attention.delete(id);
       buriedReplies.push(r);
       diff.updated.push(...r.diff.updated);
     }
@@ -527,38 +520,6 @@ class TackbackInstance {
     this._commit(diff, 'local');
     return next;
   }
-
-  /**
-   * Flag (or clear) an ATTENTION state on an anchor, keyed by one of its comment ids. This is a
-   * generic, live signal the integrator drives — Tackback attaches NO meaning to it (it is not
-   * "unread", not "needs-review"; those are the integrator's concepts). The panel paints a flagged
-   * anchor with the `--tb-attention` tint and clears it when the flag is removed. It is deliberately
-   * SESSION-only: never persisted to storage and never written into the export envelope, so it can
-   * never leak a per-viewer UI state into a shared file. A panel groups comments by anchor, so a
-   * thread's badge shows attention when ANY of its comment ids is flagged — pass the id you track.
-   * Idempotent: no event when the state does not actually change (a panel can call it freely).
-   * A flag lives exactly as long as its comment: deleting or wiping the comment drops it, so a later
-   * import that re-creates the same id starts UNflagged (a stale flag never resurrects).
-   * Throws on a destroyed instance.
-   * @param {string} id      a comment id belonging to the anchor
-   * @param {boolean} [on]    true to flag (default), false to clear
-   * @returns {boolean}       the resulting attention state for that id
-   */
-  setAnchorAttention(id, on = true) {
-    // a destroyed instance has no live UI state to flag — fail loudly rather than mutating a set no
-    // listener will ever see (readOnly is deliberately NOT blocked: attention is view state, not a
-    // document mutation, so a read-only viewer can still track its own notices).
-    if (this._destroyed) throw new TackbackError('ADAPTER_FAILED', 'instance destroyed');
-    const want = !!on;
-    const had = this._attention.has(id);
-    if (want === had) return want;   // idempotent — no redundant event / re-render
-    if (want) this._attention.add(id); else this._attention.delete(id);
-    this._emitter.emit('attention:change', { id, on: want });
-    return want;
-  }
-
-  /** @param {string} id @returns {boolean} whether the attention flag is set on this comment id */
-  hasAttention(id) { return this._attention.has(id); }
 
   // ---- thread visibility -----------------------------------------------------------------------
   //
@@ -896,7 +857,6 @@ class TackbackInstance {
     this._destroyed = true;
     for (const t of this._adapterTeardowns.splice(0)) { try { t(); } catch { /* ignore */ } }
     this._surfaces.clear();
-    this._attention.clear();
     this._visibilityProvider = null;
     this._visibilityDelivered.clear();
     this._emitter.clear();
@@ -922,7 +882,6 @@ class TackbackInstance {
     // core's side nothing had changed.
     this._stageArrival(comments);
     this._pruneEnvState(comments);
-    this._pruneAttention(comments);   // BEFORE the emit, so listeners never render a ghost flag
     // Every mutation can change what a reader is looking at, so every mutation schedules a report.
     // Scheduling too often costs one comparison that finds nothing; scheduling too rarely leaves the
     // consumer acting on a world that has moved. Only one of those two errors is recoverable.
@@ -1015,7 +974,7 @@ class TackbackInstance {
   }
 
   /**
-   * Forget what is gone — the same shape and the same place as the attention sweep.
+   * Forget what is gone.
    *
    * Safe because numbers only ever go up: a thread that is emptied and later written in again receives
    * a number above anything its old cursor could have been, so it reads as new without the record
@@ -1302,19 +1261,6 @@ class TackbackInstance {
     // Nothing is written back here. The normalization rides out on the next ordinary save, so a mount
     // that reads and never observes anything leaves the stored document alone.
     return { ...doc, comments };
-  }
-
-  /**
-   * Drop attention flags whose comment no longer exists. A flag is keyed by a comment id, so a wipe
-   * (clear-all / `replace` import) must not leave it dangling — otherwise a later import that
-   * re-creates the SAME id would resurrect a stale flag the integrator never re-set. Cheap: the flag
-   * set is a live UI signal, normally near-empty, and this is a no-op when it is.
-   * @param {import('./model.js').Comment[]} comments
-   */
-  _pruneAttention(comments) {
-    if (this._attention.size === 0) return;
-    const alive = new Set(comments.map((c) => c.id));
-    for (const id of this._attention) if (!alive.has(id)) this._attention.delete(id);
   }
 
   _fail(code, message, cause) {

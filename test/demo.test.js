@@ -2,12 +2,12 @@
 //
 // They were the only human gate on a release and the only artefact no machine looked at, so the one
 // thing that could rot there did: both pages went on expressing "unread" the way they had to before
-// the library could, by raising the generic attention flag when an answer arrived and lowering it on
-// a click. A reply landing in a thread that was already open produced no click, so the mark stayed up
+// the library could, by raising a generic "look at this" flag when an answer arrived and lowering it
+// on a click. A reply landing in a thread that was already open produced no click, so the mark stayed up
 // while it was being read — the exact failure the library now exists to remove, on the page a release
 // is accepted from.
 //
-// The correction after that was to give attention a switch instead, and it made things worse rather
+// The correction after that was to give that flag a switch instead, and it made things worse rather
 // than better: a thread holding nothing but your own comments went orange and stayed orange however
 // often you read it, while something genuinely new was a different colour entirely. Two marks, two
 // colours, and only one of them answering to reading.
@@ -58,8 +58,13 @@ function blockAt(text, start) {
   return text.slice(from);
 }
 
-/** A call that moves a flag — raising or lowering, since neither belongs to a demo any more. */
-const MOVES_A_FLAG = /setAnchorAttention\s*\([^)]*\)/g;
+/**
+ * A demo putting a mark on the page with its own hands. The flag API this used to catch is gone in
+ * 0.9.9, so what is left to catch is the other way of keeping a second mark: writing one of the
+ * library's mark classes directly. Demos style their own controls with their own classes, so this
+ * looks only for `tb-`.
+ */
+const MOVES_A_FLAG = /classList\s*\.\s*(?:add|remove|toggle)\s*\(\s*['"]tb-[a-z-]+/g;
 
 test('the demo pages exist and are found, so an empty sweep cannot pass for a clean one', () => {
   const pages = demoPages();
@@ -89,7 +94,8 @@ test('T51: no demo page decides "read" from a click, either', () => {
   for (const { rel, text } of demoPages()) {
     for (const m of text.matchAll(/addEventListener\s*\(\s*['"]click['"]/g)) {
       const code = blockAt(text, m.index);
-      if (/setAnchorAttention|tb-unread|classList\.(add|toggle)\s*\(\s*['"]tb-/.test(code)) {
+      MOVES_A_FLAG.lastIndex = 0;
+      if (MOVES_A_FLAG.test(code)) {
         offenders.push(`${rel}: a page-wide click handler moves a mark`);
       }
     }
@@ -107,20 +113,25 @@ test('T50/T51: the sweep answers about real text, and is not just failing to mat
   // The failure an absence check has: reading nothing, finding nothing, and reporting that as clean.
   // So the same readings are pointed at the wiring that was removed, which they must catch.
   const onArrival = `
-    function answerOn(commentId) {
-      tb.addReply(commentId, { body: 'x' });
-      tb.setAnchorAttention(commentId, true);
-    }`;
+      function answerOn(commentId, el) {
+        tb.addReply(commentId, { body: 'x' });
+        el.classList.add('tb-unread');
+      }`;
   assert.equal((onArrival.match(MOVES_A_FLAG) || []).length, 1, 'the first attempt is caught');
 
   const bySwitch = `
-    mkBtn('Attention: off', (b) => {
-      for (const c of tb.listComments()) tb.setAnchorAttention(c.id, attentionOn);
-    });`;
+      mkBtn('Notice: off', (b) => {
+        for (const el of document.querySelectorAll('.tb-badge')) el.classList.toggle('tb-unread', on);
+      });`;
   assert.equal((bySwitch.match(MOVES_A_FLAG) || []).length, 1, 'and so is the second');
 
-  const clickClear = `document.addEventListener('click', (e) => { tb.setAnchorAttention(e.id, false); }, true);`;
-  assert.match(blockAt(clickClear, clickClear.indexOf("addEventListener('click'")), /setAnchorAttention/,
+  const clickClear = `document.addEventListener('click', (e) => { e.target.classList.remove('tb-unread'); }, true);`;
+  assert.match(blockAt(clickClear, clickClear.indexOf("addEventListener('click'")), /classList/,
     'and the click-clear is found where it was');
+
+  // The demos DO touch classList — for their own buttons. If the reading could not tell those apart
+  // it would be failing every run, or passing by looking at nothing.
+  assert.equal(`b.classList.toggle('on', altColors);`.match(MOVES_A_FLAG), null,
+    'a demo styling its own control is not a second mark');
 
 });
