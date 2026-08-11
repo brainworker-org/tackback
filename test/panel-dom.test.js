@@ -2447,14 +2447,26 @@ test('L3-4: only what is unread breathes', () => {
   } finally { f.restore(); }
 });
 
-test('L3-5: hiding the marks hides the areas too, and changes nothing about what is unread', () => {
+test('L3-5: hiding the marks takes the panel\'s own off the page and leaves the page alone', () => {
+  // The distinction this fixes, and the one the first version of it missed: a class the panel OWNS
+  // may be hidden; a class the panel BORROWED may only be undressed. `tb-mark` is borrowed — it goes
+  // on the host's own paragraph — so hiding elements wearing it hid the document's text. A reader
+  // placed a comment, turned the marks off, and the paragraph they had just commented on vanished.
   const f = mountPanel({ instrument: true, setup: twoBlocks });
   try {
     const css = panelCSS(f);
-    const hide = (new RegExp('\\.tb-hide[^{]*\\{[^}]*\\}', 'g').exec(css) || [''])[0];
-    for (const what of ['.tb-badge', '.tb-pin', '.tb-region', '.tb-mark']) {
-      assert.match(hide, new RegExp(`\\${what}\\b`), `${what} goes with the rest`);
-    }
+    // The EXACT set, not a list of things that must be in it. Anything added here is being hidden
+    // from a reader, and whether the panel is entitled to hide it depends on whether the panel made
+    // it — a question worth being asked again rather than answered by a growing list nobody re-reads.
+    const bare = css.replace(/\/\*[\s\S]*?\*\//g, '');   // prose has commas in it; selectors are what is being read
+    const hidden = [...bare.matchAll(/([^{}]*\.tb-hide[^{}]*)\{[^}]*display:\s*none[^}]*\}/g)]
+      .flatMap((m) => m[1].split(',').map((sel) => sel.trim().replace(/^\.tb-hide\s+/, '')))
+      .filter(Boolean).sort();
+    assert.deepEqual(hidden, ['.tb-badge', '.tb-pin', '.tb-region'],
+      'these three the panel drew itself; anything else here is the host\'s and must not be hidden');
+    const undressed = (/\.tb-hide\s+\.tb-mark\s*\{[^}]*\}/.exec(css) || [''])[0];
+    assert.match(undressed, /background:\s*none/, 'its tint comes off instead');
+    assert.match(undressed, /outline:\s*none/, 'and its outline with it');
     assert.match(css, /tb-hide\s+::highlight\(tb-range\)/, 'and so does a highlighted quote');
 
     arrives(f, 'p1', 'while the marks are on');

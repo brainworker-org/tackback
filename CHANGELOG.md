@@ -6,6 +6,20 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
 
 ## [Unreleased]
 
+### Fixed
+- **Turning the marks off no longer takes the page with them.** Comment on a paragraph, press
+  **Toggle marks**, and 0.9.8 hid the paragraph — not the badge on it, the paragraph itself.
+
+  `tb-mark` is a class the panel puts on **your** element, to tint it and outline it as somewhere a
+  comment can go. 0.9.8 added it to the list of things `toggleMarks()` hides, and hiding an element
+  wearing it hides the host's own content. Only what the panel drew is hidden now — the badges and the
+  boxes over an area — and what it borrowed is undressed instead: the tint and the outline come off,
+  the paragraph stays.
+
+  The distinction is now the rule rather than a list: a class the panel **owns** may be hidden, a
+  class it **borrowed** may only be undressed, and the set of hidden things is fixed exactly, so
+  adding a fourth asks the question again instead of passing quietly.
+
 ## [0.9.8] — 2026-08-11
 
 The version 0.9.7 said it was. Reading clears the mark — and writing never puts one up.
@@ -47,6 +61,12 @@ The version 0.9.7 said it was. Reading clears the mark — and writing never put
   outline with no badge on it is the part that makes a page hard to read. **It does not change what is
   unread** — the state goes on being kept while it is out of sight, and turning marks back on shows
   whatever arrived meanwhile.
+
+### Known issues
+- **Turning the marks off hides commented paragraphs.** `toggleMarks()` hides elements carrying
+  `tb-mark`, which is a class the panel puts on the host's own content — so a paragraph you have
+  commented on disappears along with its badge. Fixed in the next version; until then, turning the
+  marks back on restores it, and nothing is lost.
 
 ### Known limitations
 - **Attention and unread now draw on the same channel.** Both are fills, so an anchor carrying both
