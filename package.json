@@ -32,10 +32,11 @@
   ],
   "scripts": {
     "check:names": "node scripts/check-names.mjs",
+    "check:release": "node scripts/check-release.mjs",
     "test": "node scripts/check-names.mjs && node --test",
     "build": "node scripts/build.mjs",
     "types": "tsc -p tsconfig.json && tsc -p tsconfig.types-check.json",
-    "prepublishOnly": "npm run build && npm run types && npm test"
+    "prepublishOnly": "npm run build && npm run types && npm test && npm run check:release"
   },
   "engines": {
     "node": ">=18"

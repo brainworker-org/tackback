@@ -556,8 +556,21 @@ Type declarations (`.d.ts`, generated from JSDoc) ship with the package.
 
 ## Tests
 ```sh
-npm test     # node --test — the full suite, zero external deps
+npm test             # node --test — the full suite, zero external deps
+npm run check:names  # the 0.9.9 renames, checked from outside the suite
+npm run check:release # what has to hold before a tag is cut
 ```
+
+`check:names` runs first inside `npm test`. A rename cannot be verified by a suite that was renamed
+along with it — after a find-and-replace the code agrees with itself whatever happened — so it asks
+from outside, and in both directions: old names gone, and the names that had to stay still present.
+
+`check:release` is the gate in front of a tag, and `npm publish` runs it too. It checks that the
+version reads the same in every place it is written, that the CHANGELOG has a section for it, and
+that the release notes are no older than the last change to `src/`. That last one is an
+approximation — it cannot tell whether a change was worth writing down, only whether anything was
+written down after it — and it exists because a release once went out with a removed button
+described nowhere.
 `node:test` + `node:assert` are built into Node ≥ 18 — no install needed, matching the library's
 runtime zero-dependency ethos. DOM/PDF rendering is verified in the browser via the single bundled
 demo (`demo/demo.html`): run `npm run build`, serve the package root over http, and open it. (Append
