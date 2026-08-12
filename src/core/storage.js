@@ -86,6 +86,53 @@ import { TackbackError } from './errors.js';
  * @property {(cb: () => void) => (() => void)} [subscribe] told when the same storage changed elsewhere
  */
 
+// ---- setting aside a record that cannot be read ------------------------------------------------
+//
+// D-086: report it, start fresh, and KEEP the bytes. The three parts answer three different worries —
+// the reader is told (the core emits STORAGE_LOAD_FAILED), the document is usable again (the core
+// starts with nothing), and what could not be read is still recoverable by hand.
+//
+// It is a MOVE, not a copy. Left in place, every later mount would set the same record aside again and
+// the three slots would fill with one broken document.
+
+const ASIDE = 'tackback:broken:';
+const ASIDE_KEEP = 3;                       // per document — one document's trouble may not evict another's
+// The stamp is an ISO 8601 instant, which sorts oldest-first as plain text. Taking it OFF is how a key
+// is attributed to a document: an id may itself contain ':' (a caller's own `storageKey` can be
+// anything), so splitting on ':' would put `a:b`'s records in `a`'s group.
+const STAMP = /:\d{4}-\d{2}-\d{2}T[\d:.]+Z$/;
+
+/**
+ * @param {Storage} ls
+ * @param {string} key   the live key this adapter reads and writes
+ * @param {string} raw   exactly what was in there, unparsed
+ */
+function setAside(ls, key, raw) {
+  // Failing to set a record aside must not replace the failure the caller is about to hear about.
+  try {
+    // The document's own name where there is one to use: the default key is `tackback::<id>`, but a
+    // caller's `storageKey` is whatever they chose, and that string is then the only name there is.
+    const own = 'tackback::';
+    const group = ASIDE + (key.startsWith(own) ? key.slice(own.length) : key);
+    // Enumeration is how the FIFO stays honest — an index kept alongside can disagree with the keys
+    // themselves. An adapter-like object without it (some test doubles) still gets the record set
+    // aside; only the trimming is skipped.
+    if (typeof ls.length === 'number' && typeof ls.key === 'function') {
+      const mine = [];
+      for (let i = 0; i < ls.length; i++) {
+        const k = ls.key(i);
+        if (k && k.startsWith(ASIDE) && STAMP.test(k) && k.replace(STAMP, '') === group) mine.push(k);
+      }
+      mine.sort();
+      // Down to KEEP-1 BEFORE writing, so the fourth record removes the oldest and the count never
+      // stands at four.
+      while (mine.length >= ASIDE_KEEP) ls.removeItem(/** @type string */(mine.shift()));
+    }
+    ls.setItem(`${group}:${new Date().toISOString()}`, raw);
+    ls.removeItem(key);
+  } catch { /* the record stays where it is; the caller is still told it could not be read */ }
+}
+
 /**
  * The default adapter: a single localStorage key per document. Sync, zero-config, offline.
  * @param {string} key
@@ -101,6 +148,11 @@ export function localStorageAdapter(key) {
       try {
         return JSON.parse(raw);
       } catch (err) {
+        // A record that cannot be read is SET ASIDE before we say so, so that "unreadable" does not
+        // also mean "gone": the core starts fresh, and the next save writes over an empty key rather
+        // than over the only copy of whatever was in there. Then the throw, unchanged — it is the
+        // only way this adapter can tell the core anything.
+        setAside(ls, key, raw);
         throw new TackbackError('STORAGE_LOAD_FAILED', `corrupt stored data at "${key}"`, { cause: err });
       }
     },

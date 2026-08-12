@@ -3,7 +3,7 @@
 // block, right-drag a PDF region), plus the three customization axes (theming / reactions / i18n).
 // It NEVER reaches into core internals — it drives the public API and re-renders on `change`.
 
-import { resolveTheme, buildThemeCSS, buildUnreadInkCSS, PALETTES } from './theme.js';
+import { resolveTheme, buildThemeCSS, buildUnreadInkCSS, paletteTheme } from './theme.js';
 import { DEFAULT_REACTIONS, resolveReaction } from './reactions.js';
 import { LocaleRegistry } from './i18n.js';
 import { indexAnnotatable, resolveAnchorDom, clampToViewport } from './dom.js';
@@ -333,19 +333,25 @@ export function attachPanel(core, options = {}) {
   doc.head.appendChild(ownNode(themeStyleEl));
 
   let mql = null, applyAutoTheme = null;
-  function applyTheme(theme) {
+  // A named palette carries a light and a dark unread fill, so which tokens it means is not known
+  // until the base is. `paletteKey` is the panel's own handle on that (never a `theme` value a caller
+  // passes — the option keeps exactly the values it always took).
+  const tokensFor = (theme, paletteKey, prefersDark) =>
+    resolveTheme(paletteKey ? paletteTheme(paletteKey, prefersDark) : theme, prefersDark);
+  function applyTheme(theme, paletteKey = null) {
     const prefersDark = !!(globalThis.matchMedia && globalThis.matchMedia('(prefers-color-scheme: dark)').matches);
-    themeStyleEl.textContent = buildThemeCSS(resolveTheme(theme, prefersDark))
-      + '\n' + buildUnreadInkCSS(theme, prefersDark);
+    themeStyleEl.textContent = buildThemeCSS(tokensFor(theme, paletteKey, prefersDark))
+      + '\n' + buildUnreadInkCSS();
     if (mql && applyAutoTheme) { mql.removeEventListener('change', applyAutoTheme); mql = null; applyAutoTheme = null; }
-    // 'auto' AND palette/custom-object themes keep the light/dark BASE following the OS live
-    // (a palette only overrides accent tokens; its base still flips with the OS).
-    const followsOS = theme === 'auto' || theme == null || (theme && typeof theme === 'object');
+    // 'auto' AND palette/custom-object themes keep the light/dark BASE following the OS live. A
+    // palette has to follow it for a second reason now: its unread fill is chosen per base, so the
+    // token map itself is different under each one.
+    const followsOS = theme === 'auto' || theme == null || !!paletteKey || (theme && typeof theme === 'object');
     if (followsOS && globalThis.matchMedia) {
       mql = globalThis.matchMedia('(prefers-color-scheme: dark)');
       applyAutoTheme = () => {
-        themeStyleEl.textContent = buildThemeCSS(resolveTheme(theme, mql.matches))
-          + '\n' + buildUnreadInkCSS(theme, mql.matches);
+        themeStyleEl.textContent = buildThemeCSS(tokensFor(theme, paletteKey, mql.matches))
+          + '\n' + buildUnreadInkCSS();
       };
       mql.addEventListener('change', applyAutoTheme);
       // re-registered on every theme change, so the disposer is registered every time too and the
@@ -355,7 +361,9 @@ export function attachPanel(core, options = {}) {
     }
   }
   let currentTheme = options.theme || 'auto';
-  applyTheme(currentTheme);
+  // No palette until the switch picks one — a caller's `theme` is applied exactly as given.
+  let currentPalette = null;
+  applyTheme(currentTheme, currentPalette);
 
   // ---- panel chrome ----------------------------------------------------------------------------
   // `controls` chooses which buttons appear. Hiding a button never hides the DATA behind it, but the substitute differs by control:
@@ -373,11 +381,13 @@ export function attachPanel(core, options = {}) {
 
   // The theme switch (when shown) cycles named "play" themes: default (OS auto) → ocean → passion.
   // Each still follows the OS light/dark base; the palette only re-tints the accent colors.
+  // Palettes are cycled by NAME: each one's unread fill depends on the light/dark base, so the token
+  // map cannot be decided here — only at the moment it is applied.
   const THEME_CYCLE = [
-    { key: 'default', value: 'auto' },
-    { key: 'ocean', value: PALETTES.ocean },
-    { key: 'passion', value: PALETTES.passion },
-    { key: 'ochre', value: PALETTES.ochre },
+    { key: 'default', theme: 'auto', palette: null },
+    { key: 'ocean', theme: 'auto', palette: 'ocean' },
+    { key: 'passion', theme: 'auto', palette: 'passion' },
+    { key: 'ochre', theme: 'auto', palette: 'ochre' },
   ];
   let themeIdx = 0;
   const themeLabel = () => t('panel.theme', { mode: t(`theme.${THEME_CYCLE[themeIdx].key}`) });
@@ -421,7 +431,11 @@ export function attachPanel(core, options = {}) {
   let themeBtn = null;
   if (controls.theme) {
     themeBtn = btn(doc, themeLabel(), 'tb-sec');
-    themeBtn.onclick = () => { themeIdx = (themeIdx + 1) % THEME_CYCLE.length; currentTheme = THEME_CYCLE[themeIdx].value; applyTheme(currentTheme); themeBtn.textContent = themeLabel(); };
+    themeBtn.onclick = () => {
+      themeIdx = (themeIdx + 1) % THEME_CYCLE.length;
+      currentTheme = THEME_CYCLE[themeIdx].theme; currentPalette = THEME_CYCLE[themeIdx].palette;
+      applyTheme(currentTheme, currentPalette); themeBtn.textContent = themeLabel();
+    };
     panel.appendChild(themeBtn);
   }
   let marksBtn = null;
@@ -1563,7 +1577,7 @@ export function attachPanel(core, options = {}) {
 
   // ---- PanelInstance ---------------------------------------------------------------------------
   return {
-    setTheme(theme) { if (destroyed) return; currentTheme = theme; applyTheme(theme); if (themeBtn) themeBtn.textContent = themeLabel(); },
+    setTheme(theme) { if (destroyed) return; currentTheme = theme; currentPalette = null; applyTheme(theme, null); if (themeBtn) themeBtn.textContent = themeLabel(); },
     setReactions(defs) { if (destroyed) return; reactions.length = 0; reactions.push(...defs); },
     // Update the injected category→color map live (the integrator owns the mapping; Tackback just
     // applies it to the last-speaker tint). Pass `{}` to clear back to the generic per-identity hues.

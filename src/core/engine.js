@@ -14,7 +14,7 @@ import { TackbackError } from './errors.js';
 
 // MUST equal package.json "version" (export envelope's generator.version comes from here);
 // export.test.js asserts they match so they can't drift.
-const LIB_VERSION = '0.9.9';
+const LIB_VERSION = '0.9.10';
 const nowIso = () => new Date().toISOString();
 
 /**
@@ -150,7 +150,16 @@ class TackbackInstance {
     // outside input like any envelope, and only what survives validation may reach the store at all.
     const hydrate = (d) => this._hydrateEnv(d);
     this._store = new CommentStore({
-      load: () => { const r = adapter.load(); return (r && typeof r.then === 'function') ? r.then(hydrate) : hydrate(r); },
+      // A record that cannot be READ AT ALL is a third case, next to "there is one" and "there is
+      // none": it is reported, and this instance starts with nothing (D-086). The adapter says so by
+      // throwing — the only channel it has — and that throw must not come out of `mount()`, or a
+      // reader with one corrupt key gets no document, no marks and no page-side error to act on.
+      load: () => {
+        try {
+          const r = adapter.load();
+          return (r && typeof r.then === 'function') ? r.then(hydrate, (err) => hydrate(this._unreadable(err))) : hydrate(r);
+        } catch (err) { return hydrate(this._unreadable(err)); }
+      },
       save: (d) => adapter.save(d),
       ...(typeof adapter.subscribe === 'function' ? { subscribe: (cb) => adapter.subscribe(cb) } : {}),
     }, this._doc.id);
@@ -784,7 +793,12 @@ class TackbackInstance {
           // read" is one fact and does not become several by being rediscovered on every later
           // mutation. Saying it again takes a successful look in between, or a different display.
           this._visibilityReported = true;
-          this._fail('ADAPTER_FAILED', 'a display could not report what is visible', attempt.error);
+          // `_failAs`, not `_fail`: the display's own error may be a TackbackError (an unusable anchor
+          // in what it returned), and passing that code through would report INVALID_ANCHOR — a code
+          // this library only ever throws at a caller who supplied a bad anchor. The pull path
+          // already answers this situation with ADAPTER_FAILED (see `visibleThreads`); this is the
+          // same situation reached on the scheduled path, so it gets the same code.
+          this._failAs('ADAPTER_FAILED', 'a display could not report what is visible', attempt.error);
         }
       }
       // Being unable to LOOK is not being unable to COUNT. What has arrived and how far each thread
@@ -1136,6 +1150,24 @@ class TackbackInstance {
   }
 
   /**
+   * A stored document that could not be read: queue the report and hand back nothing.
+   *
+   * The report goes on the same queue as everything else found while restoring, so it reaches the
+   * `error` event just before `ready` — the moment a subscriber exists to hear it. Handing back `null`
+   * is what makes this instance start fresh; the bytes are not lost, the adapter set them aside.
+   * @param {unknown} err
+   * @returns {null}
+   */
+  _unreadable(err) {
+    const e = /** @type {any} */ (err);
+    this._loadFaults.push({
+      code: e instanceof TackbackError ? e.code : 'STORAGE_LOAD_FAILED',
+      message: e?.message || 'stored document could not be read; starting with nothing',
+    });
+    return null;
+  }
+
+  /**
    * Whether this document says reading progress is kept in a record of its own.
    *
    * It decides whether an ABSENT record is read as none having been expected — the one answer that
@@ -1266,6 +1298,18 @@ class TackbackInstance {
   _fail(code, message, cause) {
     const err = cause instanceof TackbackError ? cause : new TackbackError(/** @type any */(code), message, { cause });
     this._emitter.emit('error', err);
+  }
+
+  /**
+   * Report as THIS code, keeping whatever failed as `cause`.
+   *
+   * `_fail` passes a TackbackError cause straight through, which is right when the cause's code IS
+   * the honest description of what happened (a storage write that failed). It is wrong where the
+   * SITUATION owns the code: a display that cannot answer is `ADAPTER_FAILED` however it failed, and
+   * letting the inner code out would announce a caller-input error for something no caller did.
+   */
+  _failAs(code, message, cause) {
+    this._emitter.emit('error', new TackbackError(/** @type any */(code), message, { cause }));
   }
 
   /** Mount the option-supplied adapters; `ready` awaits async mounts so 'ready' fires after render. */
