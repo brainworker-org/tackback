@@ -88,12 +88,42 @@ import { TackbackError } from './errors.js';
 
 // ---- setting aside a record that cannot be read ------------------------------------------------
 //
-// D-086: report it, start fresh, and KEEP the bytes. The three parts answer three different worries —
-// the reader is told (the core emits STORAGE_LOAD_FAILED), the document is usable again (the core
-// starts with nothing), and what could not be read is still recoverable by hand.
+// A stored document that cannot be read is reported, replaced by an empty one, and KEPT: the reader is
+// told (the core emits STORAGE_LOAD_FAILED), the document is usable again, and the bytes are still
+// there to be recovered by hand. It is a MOVE, not a copy — left in place, every later mount would set
+// the same record aside again and the slots would fill with one broken document.
 //
-// It is a MOVE, not a copy. Left in place, every later mount would set the same record aside again and
-// the three slots would fill with one broken document.
+// Keeping and not hoarding pull against each other, and everything that went wrong here went wrong in
+// that gap. These are the rules that hold it, written down because the first three attempts each
+// satisfied one of them and quietly broke another:
+//
+//   I-1  THE SITUATION OWNS THE CODE. Whatever the adapter threw, this is reported as
+//        STORAGE_LOAD_FAILED with the original as `cause`. An adapter is the caller's own object and
+//        may throw any code; passing it on would put a code on the wire by a route the library
+//        documents as impossible. (Enforced in engine.js, where the report is made.)
+//   I-2  NOTHING IS REMOVED UNTIL ITS REPLACEMENT EXISTS. The copy is written first; room is made
+//        after; the live key goes last. A write that fails — a quota, which is exactly when this runs
+//        — must cost the new record, never an old one.
+//   I-3a ONE RECORD, ONE KEY. A record set aside never overwrites another.
+//   I-3b KEYS SORT IN THE ORDER THEY WERE WRITTEN. "Remove the oldest" is implemented as "remove the
+//        lexicographically smallest", so the two have to mean the same thing. A key that is merely
+//        FREE is not enough: a freed name can sort before what is already kept, and the eviction then
+//        removes the record just written.
+//   I-4  ONE DOCUMENT'S TROUBLE NEVER EVICTS ANOTHER'S. The listing is filtered to this document.
+//   I-5  OVER THE LIMIT IS ALLOWED TO BE MOMENTARY. Standing at four for the instant between the write
+//        and the trim is the price of I-2; what may not happen is four left standing.
+//
+// WHERE THE RULES REACH. I-3b and I-5 need to see the other keys, so they hold only where storage can
+// be enumerated (`length` + `key()`) — the default localStorage, and any adapter-like object that
+// answers both. Without enumeration there is nothing to compare against and nothing to list for
+// removal: I-1, I-2 and I-3a still hold, the limit does not apply, and asking whether a name is taken
+// is the only tool left for I-3a.
+//
+// WHAT THE RULES DO NOT REACH: two tabs setting the same document aside in the same instant can still
+// overwrite each other (localStorage has no transaction, the same way two tabs can already overwrite
+// each other's reading progress); a `removeItem` of the live key that fails leaves the document to be
+// set aside again next time, spending a slot on the same bytes; and a key edited by hand into a shape
+// this does not recognise is invisible to the trim.
 
 const ASIDE = 'tackback:broken:';
 const ASIDE_KEEP = 3;                       // per document — one document's trouble may not evict another's
@@ -130,39 +160,37 @@ function setAside(ls, key, raw) {
     // caller's `storageKey` is whatever they chose, and that string is then the only name there is.
     const own = 'tackback::';
     const group = ASIDE + (key.startsWith(own) ? key.slice(own.length) : key);
-    // Enumeration is how the FIFO stays honest — an index kept alongside can disagree with the keys
-    // themselves. An adapter-like object without it (some test doubles) still gets the record set
-    // aside; only the trimming is skipped.
+    // Enumeration is how the order and the limit stay honest — an index kept alongside can disagree
+    // with the keys themselves. Without it (I-3b / I-5 out of reach) the record is still set aside.
     const enumerable = typeof ls.length === 'number' && typeof ls.key === 'function';
     const mine = () => {
       const out = [];
       for (let i = 0; i < ls.length; i++) {
         const k = ls.key(i);
-        if (k && k.startsWith(ASIDE) && STAMP.test(k) && k.replace(STAMP, '') === group) out.push(k);
+        // I-4: this document's records only.
+      if (k && k.startsWith(ASIDE) && STAMP.test(k) && k.replace(STAMP, '') === group) out.push(k);
       }
       return out.sort();
     };
-    // A stamp is only unique if nothing else landed in the same millisecond. Two failures inside one
-    // tick — or any environment whose clock does not advance between them — wrote the same key twice,
-    // and the second silently replaced the first: three unreadable records, one kept.
+    // I-3a: a stamp is only unique if nothing else landed in the same millisecond. Two failures inside
+    // one tick — or a clock that does not advance between them — wrote the same key twice, and the
+    // second silently replaced the first: three unreadable records, one kept.
     //
-    // Being free is not enough for a key, though: it also has to sort AFTER everything already in this
-    // group. Taking the first free slot looked right and was not — once the eviction had removed the
-    // unsuffixed key, a later record took that name back, and the eviction below then read the record
-    // just written as the oldest one and removed it. The newest was the one that went missing.
+    // I-3b: after everything already in this group, not merely unoccupied. Taking the first free slot
+    // looked right and was not — once the trim had removed the unsuffixed key, a later record took that
+    // name back, and the trim then read the record just written as the oldest and removed it.
     let at = `${group}:${new Date().toISOString()}`;
     const newest = enumerable ? mine().pop() : null;
     if (newest && at <= newest) at = bumped(newest);
     while (typeof ls.getItem === 'function' && ls.getItem(at) != null) at = bumped(at);
-    // WRITE FIRST, and only then make room. The other order lost data for real: the eviction had
-    // already happened when the write failed (a quota is exactly when this runs), so the oldest record
-    // was gone and the new one was never stored. Standing at four for an instant is the cheaper fault.
+    // I-2 / I-5: write first, make room after. The other order lost data for real — the eviction had
+    // already happened when the write failed, so the oldest was gone and the new one never stored.
     ls.setItem(at, raw);
     if (enumerable) {
       const kept = mine();
       while (kept.length > ASIDE_KEEP) ls.removeItem(/** @type string */(kept.shift()));
     }
-    // Last, because it is the only copy until the line above has succeeded.
+    // I-2: last, because until the write above has succeeded this is the only copy.
     ls.removeItem(key);
   } catch { /* the record stays where it is; the caller is still told it could not be read */ }
 }

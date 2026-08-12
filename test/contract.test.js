@@ -136,7 +136,15 @@ test('a reply may not take the id of an utterance that is already here', () => {
 });
 
 // ================================================================================================
-// A stored document that cannot be read (D-086): reported, set aside, started over
+// A stored document that cannot be read: reported, set aside, started over
+//
+// One test per rule the mechanism holds (the rules themselves are written at the top of storage.js):
+//   I-1  the situation owns the code          I-3b keys sort in the order they were written
+//   I-2  nothing is removed before its        I-4  one document never evicts another
+//        replacement exists                   I-5  over the limit may be momentary, not left standing
+//   I-3a one record, one key
+// Three of these were learned by breaking them, and one by a fix for another that broke this one; the
+// names are here so the next change can see which rule it is standing on.
 // ================================================================================================
 
 /** run `fn` with a localStorage that also answers `length` / `key(i)` */
@@ -158,7 +166,7 @@ async function withLocalStorage(fn) {
 }
 const asideKeys = (items) => [...items.keys()].filter((k) => k.startsWith('tackback:broken:')).sort();
 
-test('D-086: an unreadable document is reported, and mount() does not throw', async () => {
+test('aside I-1: an unreadable document is reported, and mount() does not throw', async () => {
   await withLocalStorage(async (items) => {
     items.set('tackback::broken-doc', '{not json');
     const errors = [];
@@ -172,7 +180,7 @@ test('D-086: an unreadable document is reported, and mount() does not throw', as
   });
 });
 
-test('D-086: the bytes are moved to a set-aside key, not left where they were', async () => {
+test('aside I-2: the bytes are moved to a set-aside key, not left where they were', async () => {
   await withLocalStorage(async (items) => {
     items.set('tackback::doc-a', '{not json');
     const tb = Tackback.mount({ document: { id: 'doc-a' } });
@@ -192,7 +200,7 @@ test('D-086: the bytes are moved to a set-aside key, not left where they were', 
   });
 });
 
-test('D-086: three are kept per document, and the fourth removes the oldest', async () => {
+test('aside I-5: three are kept per document, and the fourth removes the oldest', async () => {
   await withLocalStorage(async (items) => {
     const stamps = [];
     for (let i = 1; i <= 4; i++) {
@@ -209,7 +217,7 @@ test('D-086: three are kept per document, and the fourth removes the oldest', as
   });
 });
 
-test('D-086: one document\'s trouble does not evict another\'s', async () => {
+test('aside I-4: one document\'s trouble does not evict another\'s', async () => {
   await withLocalStorage(async (items) => {
     for (let i = 1; i <= 3; i++) {
       items.set('tackback::doc-keep', `{keep ${i}`);
@@ -230,7 +238,7 @@ test('D-086: one document\'s trouble does not evict another\'s', async () => {
   });
 });
 
-test('D-086: an id containing a colon keeps its own group', async () => {
+test('aside I-4: an id containing a colon keeps its own group', async () => {
   // `storageKey` is the caller's string and may contain anything. Splitting a set-aside key on ':'
   // would put `a:b`'s records into `a`'s group and trim the wrong ones; the stamp comes off the end
   // instead, which cannot be confused.
@@ -249,7 +257,7 @@ test('D-086: an id containing a colon keeps its own group', async () => {
   });
 });
 
-test('D-086: a document that reads fine is never set aside', async () => {
+test('aside: a document that reads fine is never set aside (the other direction)', async () => {
   // The other direction. A fix that set every load aside would pass every test above.
   await withLocalStorage(async (items) => {
     items.set('tackback::fine', JSON.stringify({ schemaVersion: 1, documentId: 'fine', comments: [C('c1')] }));
@@ -266,7 +274,7 @@ test('D-086: a document that reads fine is never set aside', async () => {
 
 // ---- what an adapter's own failure may and may not put on the wire -----------------------------
 
-test('D-086: an adapter throwing SOME OTHER code is still reported as STORAGE_LOAD_FAILED', async () => {
+test('aside I-1: an adapter throwing SOME OTHER code is still reported as STORAGE_LOAD_FAILED', async () => {
   // An adapter is the caller's object and may throw any TackbackError it likes. Passing its code
   // through would announce a route this library documents as impossible — READ_ONLY is only ever
   // THROWN, at whoever asked for a write — and a caller branching on the documented routes would be
@@ -285,7 +293,7 @@ test('D-086: an adapter throwing SOME OTHER code is still reported as STORAGE_LO
   tb.destroy();
 });
 
-test('D-086: a set-aside write that fails loses nothing that was already set aside', async () => {
+test('aside I-2: a write that fails loses nothing that was already set aside', async () => {
   // The eviction used to run BEFORE the write, and the write is exactly what fails when storage is
   // full: the oldest record was already gone and the new one never arrived. Three became two, and the
   // two were the wrong two — the loss was permanent and silent.
@@ -313,7 +321,7 @@ test('D-086: a set-aside write that fails loses nothing that was already set asi
   });
 });
 
-test('D-086: records set aside within the same millisecond do not overwrite each other', async () => {
+test('aside I-3a: records set aside within the same millisecond do not overwrite each other', async () => {
   // The key was the instant, and an instant is not unique: two failures in one tick — or a clock that
   // does not advance between them — wrote the same key twice and the second replaced the first. Three
   // unreadable documents, one kept, no sign that two were gone.
@@ -340,7 +348,7 @@ test('D-086: records set aside within the same millisecond do not overwrite each
   });
 });
 
-test('D-086: with a clock that never moves, the three kept are always the three newest', async () => {
+test('aside I-3b: with a clock that never moves, the three kept are always the three newest', async () => {
   // The regression that the first collision fix introduced. Being FREE is not enough for a key: it has
   // to sort after everything already in the group. Once the eviction had taken the unsuffixed key away,
   // the fifth record took that name back, and the eviction then read the record just written as the
@@ -369,7 +377,7 @@ test('D-086: with a clock that never moves, the three kept are always the three 
   });
 });
 
-test('D-086: a storage without enumeration still keeps same-tick records apart', async () => {
+test('aside I-3a: a storage without enumeration still keeps same-tick records apart', async () => {
   // Some storage-like objects answer getItem/setItem/removeItem and nothing else — including the ones
   // tests hand in. There is no eviction without enumeration (nothing can be listed to evict), so the
   // ordering rule has nothing to read either, and uniqueness rests on asking whether the key is taken.

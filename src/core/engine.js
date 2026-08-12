@@ -1163,11 +1163,11 @@ class TackbackInstance {
   _unreadable(err) {
     const e = /** @type {any} */ (err);
     this._loadFaults.push({
-      // ALWAYS this code, whatever came back. An adapter is a caller's own object and may throw any
-      // TackbackError it likes — READ_ONLY, ADAPTER_FAILED — and passing that code on would announce
-      // a route this library documents as impossible (READ_ONLY is only ever thrown, at the caller who
-      // asked for a write). What happened here is one thing: the stored document could not be read.
-      // The original survives as `cause`, which is where a caller looks for the detail.
+      // I-1 (storage.js): the situation owns the code. An adapter is a caller's own object and may
+      // throw any TackbackError it likes — READ_ONLY, ADAPTER_FAILED — and passing that code on would
+      // announce a route this library documents as impossible (READ_ONLY is only ever thrown, at the
+      // caller who asked for a write). What happened here is one thing: the stored document could not
+      // be read. The original survives as `cause`, which is where a caller looks for the detail.
       code: 'STORAGE_LOAD_FAILED',
       message: e?.message || 'stored document could not be read; starting with nothing',
       cause: err,
