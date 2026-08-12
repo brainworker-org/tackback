@@ -2636,3 +2636,50 @@ test('panel: the same press, MOVED, is a region instead — one input, two outco
     assert.equal(f.doc.querySelector('.tb-pane'), null, 'and no pane opened on the way');
   } finally { f.restore(); }
 });
+
+// ---- the console's width, and the room the bar is left with ------------------------------------
+//
+// The console is shrink-to-fit and one of its children is a sentence, so its width used to be the
+// length of that sentence — about twice what its buttons need. Everything to its left pays for that:
+// the document bar reserves the console's measured width, so a wide console is a narrow bar, and on a
+// narrow window the bar stops being wide enough to type into and steps above instead.
+
+test('the console is capped so its hint wraps rather than setting the width', () => {
+  const f = mountPanel({ instrument: true, setup: twoBlocks });
+  try {
+    const css = unreadRule(panelCSS(f), '.tb-console');
+    assert.match(css, /max-width:\s*200px/, 'the box is capped');
+    // and the cap is on the box, not on the hint — the hint has to be allowed to wrap, not be clipped
+    const hint = unreadRule(panelCSS(f), '.tb-console-hint');
+    assert.doesNotMatch(hint, /white-space:\s*nowrap/, 'nothing stops the hint wrapping');
+    assert.doesNotMatch(hint, /overflow:\s*hidden/, 'and it is not cut off either');
+  } finally { f.restore(); }
+});
+
+test('the bar re-places itself when the console changes size, not only when the window does', () => {
+  // The reservation is a measurement, and it was taken on window events alone. A label switching
+  // language, a count reaching two digits or a webfont arriving after mount all change the console's
+  // width with no resize and no scroll — and the bar kept the right edge it had computed for a console
+  // that no longer existed.
+  const observed = [];
+  const savedRO = globalThis.ResizeObserver;
+  globalThis.ResizeObserver = class {
+    constructor(cb) { this.cb = cb; }
+    observe(el) { observed.push({ el, cb: this.cb }); }
+    disconnect() { this.disconnected = true; }
+  };
+  try {
+    const f = mountPanel({ setup: twoBlocks });
+    try {
+      const consoleEl = f.doc.querySelector('.tb-console');
+      const watching = observed.find((o) => o.el === consoleEl);
+      assert.ok(watching, 'the console itself is watched');
+      // firing it must not throw, and must go through the placement path (which sets the reservation)
+      assert.doesNotThrow(() => watching.cb([]), 'a console resize re-places the bar');
+      const lane = f.lane();
+      assert.ok(lane.style.getPropertyValue('--tb-console-reserve'), 'the reservation was written');
+    } finally { f.restore(); }
+  } finally {
+    if (savedRO === undefined) delete globalThis.ResizeObserver; else globalThis.ResizeObserver = savedRO;
+  }
+});

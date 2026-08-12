@@ -34,6 +34,18 @@ Nothing renamed, nothing removed, no new options.
   another's. Nothing about this is a promise to build on — it is what the default adapter does with a
   record it cannot parse, and the contract remains the error event.
 
+- **The document bar and the panel no longer crowd each other on a narrow window.** Two things were
+  wrong. The panel is shrink-to-fit and one of its children is a sentence, so its width was the length
+  of that sentence — about 400px where its buttons need 200 — and the bar reserves the panel's measured
+  width, so half the bottom of a narrow window was reserved for a hint. The hint now wraps and the
+  panel is capped: measured, 424px to 224px, and the bar keeps its place beside the panel down to a
+  viewport ~200px narrower than before.
+
+  The second is that the reservation is a MEASUREMENT, and it was only ever taken on a window resize or
+  a scroll. A label switching language, a count reaching two digits, a webfont arriving after mount —
+  each changes the panel's width with no resize and no scroll, and the bar kept the right edge it had
+  computed for a panel that no longer existed. The panel's own box is watched now.
+
 - **The unread mark's ink is now black on a light screen too.** It followed the base before — white on
   light, black on dark — and white was the weaker half of that pair everywhere: 2.7:1 against the light
   orange where black reads 7.7:1.

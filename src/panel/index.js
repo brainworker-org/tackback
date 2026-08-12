@@ -25,6 +25,12 @@ const PANEL_CSS = `
 .tb-console button.tb-sec { background: #555; }
 .tb-console input { font: inherit; border: 1px solid #555; border-radius: 6px; padding: 5px 8px; background: #333; color: #fff; }
 .tb-console-count { font-weight: 700; }
+/* The console is shrink-to-fit, so its width was whatever its widest child wanted — and the hint is a
+   sentence. Unwrapped it made the box ~400px, which on a narrow window leaves the document bar beside
+   it too little to type into (and pushed the bar into stacking far earlier than it needed to). The cap
+   lets the hint wrap onto a second line: measured, the box goes from 396px to 224px, and the bar stays
+   beside the console down to a ~590px viewport instead of ~765px. */
+.tb-console { max-width: 200px; }
 .tb-console-hint { font-size: 11px; color: #bbb; line-height: 1.45; }
 .tb-commentable { background: var(--tb-mark-bg) !important; outline: 1px dashed var(--tb-mark-outline); outline-offset: 1px; }
 /* line-height is set EXPLICITLY: a badge is appended inside the surface element, so it would
@@ -1532,6 +1538,17 @@ export function attachPanel(core, options = {}) {
     const hidden = Math.max(0, (globalThis.innerHeight || 0) - (vv.height + vv.offsetTop));
     lane.style.bottom = `calc(16px + env(safe-area-inset-bottom, 0px) + var(--tb-docbar-lift, 0px) + ${Math.round(hidden)}px)`;
   };
+  // The bar reserves room for the console by MEASURING it, and that measurement was only ever taken on
+  // a window resize or a scroll. Everything else that changes the console's width — a label switching
+  // language, a count reaching two digits, a webfont arriving after mount — left the reservation
+  // describing a console that no longer existed, and the bar keeps its old right edge. Watch the box
+  // itself, so the reservation cannot go stale without the bar being told.
+  let consoleRo = null;
+  if (typeof globalThis.ResizeObserver === 'function') {
+    consoleRo = new globalThis.ResizeObserver(() => placeLane());
+    try { consoleRo.observe(panel); } catch { /* ignore */ }
+    own(() => { try { consoleRo.disconnect(); } catch { /* ignore */ } });
+  }
   if (vv) {
     for (const [type, fn] of [['resize', queueRecalc], ['scroll', queueRecalc], ['resize', placeLane], ['scroll', placeLane]]) {
       vv.addEventListener(type, fn);
