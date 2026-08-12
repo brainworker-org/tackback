@@ -6,9 +6,12 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
 
 ## [0.9.9] — 2026-08-11
 
-**Everything in this release is a rename or a removal.** No behaviour changed. If you have never
-written CSS against Tackback's classes, never overridden a token, and never called `setAnchorAttention`,
-there is nothing here for you to do.
+**Almost everything in this release is a rename or a removal**, and nothing was added. Two changes are
+visible without reading any code: the document bar has lost its cancel button, and the Pane's Japanese
+cancel now reads 閉じる. Both are described below.
+
+Past those two: if you have never written CSS against Tackback's classes, never overridden a token, and
+never called `setAnchorAttention`, there is nothing here for you to do.
 
 If you have, the tables below are the whole of it.
 
@@ -26,6 +29,14 @@ cleared by looking at the thread.
 `unreadThreads` and `unread:change` already track and paint it, and the mark clears when the reader
 actually reads. **If you were using it to mean something else**, you now need your own class and your
 own colour — Tackback no longer offers a general-purpose "look at this" tint.
+
+The document bar's cancel button is gone.
+
+It only ever cleared the draft. The bar does not close — nothing closes it, and committing never
+dismissed it either — so the whole effect of pressing it was to throw away what had been typed, under a
+word that does not offer to. A button that does almost nothing is not worth the place it takes.
+
+**The Pane keeps its close button.** A Pane really does close, and that is what the button is for.
 
 ### Renamed — API and settings
 
