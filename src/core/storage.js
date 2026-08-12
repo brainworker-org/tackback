@@ -134,18 +134,30 @@ const ASIDE_KEEP = 3;                       // per document — one document's t
 // `a`'s group.
 const STAMP = /:\d{4}-\d{2}-\d{2}T[\d:.]+Z(?:-\d+)?$/;
 
+// I-3b is a claim about TEXT, so the number in a key has to be written in a form whose alphabetical
+// order is its numeric order. Plain decimals are not: '-10' sorts before '-2', so the tenth record in
+// one tick became the smallest key in its group and the trim took it away again. Fixed width fixes
+// that, and the width is the ceiling — past it there is no name left that sorts in the right place, so
+// the mechanism declines to write one rather than write one that breaks the order.
+const SUFFIX_WIDTH = 4;
+const SUFFIX_MAX = 10 ** SUFFIX_WIDTH - 1;
+
 /**
- * The next key after this one, in the order the eviction reads: `…Z` → `…Z-2` → `…Z-3`.
+ * The next key after this one, in the order the trim reads: `…Z` → `…Z-0002` → `…Z-0003`.
  *
- * The suffix only ever grows, and a longer key sorts after the one it grew from (`Z` before `Z-2`,
- * `Z-2` before `Z-3`), so "newer" and "sorts later" stay the same statement. A stamp always ends in
- * `Z` or `Z-<n>`, which is why matching the tail cannot catch a digit group inside the instant.
+ * A stamp always ends in `Z` or `Z-<digits>`, which is why matching the tail cannot catch a digit group
+ * inside the instant. (A group holding both an old unpadded suffix and a new padded one would sort
+ * wrongly, and cannot arise: suffixes only exist within one millisecond, and two builds cannot write
+ * into the same millisecond.)
  * @param {string} k
- * @returns {string}
+ * @returns {string|null}  null when the count no longer fits — see SUFFIX_WIDTH
  */
 function bumped(k) {
   const tail = /-(\d+)$/.exec(k);
-  return tail ? `${k.slice(0, -tail[0].length)}-${Number(tail[1]) + 1}` : `${k}-2`;
+  const next = tail ? Number(tail[1]) + 1 : 2;
+  if (next > SUFFIX_MAX) return null;
+  const base = tail ? k.slice(0, -tail[0].length) : k;
+  return `${base}-${String(next).padStart(SUFFIX_WIDTH, '0')}`;
 }
 
 /**
@@ -182,7 +194,12 @@ function setAside(ls, key, raw) {
     let at = `${group}:${new Date().toISOString()}`;
     const newest = enumerable ? mine().pop() : null;
     if (newest && at <= newest) at = bumped(newest);
-    while (typeof ls.getItem === 'function' && ls.getItem(at) != null) at = bumped(at);
+    while (at && typeof ls.getItem === 'function' && ls.getItem(at) != null) at = bumped(at);
+    // No name left that sorts where it belongs (SUFFIX_WIDTH). Writing one anyway would break I-3b and
+    // the next trim would remove the wrong record; leaving the document where it is loses nothing —
+    // the live key is untouched, the reader is still told, and the next mount has a later instant to
+    // use. Only reachable with a clock that does not advance across ten thousand failures.
+    if (!at) return;
     // I-2 / I-5: write first, make room after. The other order lost data for real — the eviction had
     // already happened when the write failed, so the oldest was gone and the new one never stored.
     ls.setItem(at, raw);

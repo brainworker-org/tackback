@@ -407,3 +407,34 @@ test('aside I-3a: a storage without enumeration still keeps same-tick records ap
     if (saved === undefined) delete globalThis.localStorage; else globalThis.localStorage = saved;
   }
 });
+
+test('aside I-3b: the order holds past the point where the suffix grows a digit', async () => {
+  // The rule was right and the ENCODING broke it: as plain decimals, '-10' sorts before '-2', so the
+  // tenth record in one tick became the group's smallest and the trim took it. The earlier test stopped
+  // at five, one past the limit of three — a boundary chosen from the mechanism's number rather than
+  // from the representation's. Ten is where the text changes shape, and that is the boundary that
+  // mattered.
+  await withLocalStorage(async (items) => {
+    const RealDate = globalThis.Date;
+    // @ts-ignore — one instant for all twelve, so every key differs only by its suffix
+    globalThis.Date = class extends RealDate { toISOString() { return '2026-08-12T08:00:00.000Z'; } };
+    try {
+      for (let i = 1; i <= 12; i++) {
+        items.set('tackback::wide-doc', `{broken ${i}`);
+        const tb = Tackback.mount({ document: { id: 'wide-doc' } });
+        await tb.ready; await settle(4);
+        tb.destroy();
+        const now = asideKeys(items);
+        assert.ok(now.length <= 3, `never more than three (after ${i}: ${now.length})`);
+        // the newest write must survive its own trim, every time — not only while the suffix is short
+        assert.ok(now.map((k) => items.get(k)).includes(`{broken ${i}`),
+          `record ${i} is still there right after being set aside (${now.join(', ')})`);
+      }
+    } finally { globalThis.Date = RealDate; }
+
+    const kept = asideKeys(items);
+    assert.deepEqual(kept.map((k) => items.get(k)), ['{broken 10', '{broken 11', '{broken 12'],
+      'the three newest, across the digit change');
+    assert.deepEqual([...kept], [...kept].sort(), 'and the keys still sort in the order they were written');
+  });
+});
