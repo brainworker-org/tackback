@@ -105,6 +105,20 @@ const ASIDE_KEEP = 3;                       // per document — one document's t
 const STAMP = /:\d{4}-\d{2}-\d{2}T[\d:.]+Z(?:-\d+)?$/;
 
 /**
+ * The next key after this one, in the order the eviction reads: `…Z` → `…Z-2` → `…Z-3`.
+ *
+ * The suffix only ever grows, and a longer key sorts after the one it grew from (`Z` before `Z-2`,
+ * `Z-2` before `Z-3`), so "newer" and "sorts later" stay the same statement. A stamp always ends in
+ * `Z` or `Z-<n>`, which is why matching the tail cannot catch a digit group inside the instant.
+ * @param {string} k
+ * @returns {string}
+ */
+function bumped(k) {
+  const tail = /-(\d+)$/.exec(k);
+  return tail ? `${k.slice(0, -tail[0].length)}-${Number(tail[1]) + 1}` : `${k}-2`;
+}
+
+/**
  * @param {Storage} ls
  * @param {string} key   the live key this adapter reads and writes
  * @param {string} raw   exactly what was in there, unparsed
@@ -131,10 +145,15 @@ function setAside(ls, key, raw) {
     // A stamp is only unique if nothing else landed in the same millisecond. Two failures inside one
     // tick — or any environment whose clock does not advance between them — wrote the same key twice,
     // and the second silently replaced the first: three unreadable records, one kept.
+    //
+    // Being free is not enough for a key, though: it also has to sort AFTER everything already in this
+    // group. Taking the first free slot looked right and was not — once the eviction had removed the
+    // unsuffixed key, a later record took that name back, and the eviction below then read the record
+    // just written as the oldest one and removed it. The newest was the one that went missing.
     let at = `${group}:${new Date().toISOString()}`;
-    if (enumerable || typeof ls.getItem === 'function') {
-      for (let n = 2; ls.getItem(at) != null; n++) at = `${at.replace(/-\d+$/, '')}-${n}`;
-    }
+    const newest = enumerable ? mine().pop() : null;
+    if (newest && at <= newest) at = bumped(newest);
+    while (typeof ls.getItem === 'function' && ls.getItem(at) != null) at = bumped(at);
     // WRITE FIRST, and only then make room. The other order lost data for real: the eviction had
     // already happened when the write failed (a quota is exactly when this runs), so the oldest record
     // was gone and the new one was never stored. Standing at four for an instant is the cheaper fault.

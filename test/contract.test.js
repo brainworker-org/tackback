@@ -339,3 +339,63 @@ test('D-086: records set aside within the same millisecond do not overwrite each
     assert.deepEqual([...aside], [...aside].sort(), 'the suffix keeps the order readable');
   });
 });
+
+test('D-086: with a clock that never moves, the three kept are always the three newest', async () => {
+  // The regression that the first collision fix introduced. Being FREE is not enough for a key: it has
+  // to sort after everything already in the group. Once the eviction had taken the unsuffixed key away,
+  // the fifth record took that name back, and the eviction then read the record just written as the
+  // oldest of the four and removed it — so the newest was the one that went missing, silently, with a
+  // full complement of three left behind to say nothing was wrong.
+  await withLocalStorage(async (items) => {
+    const RealDate = globalThis.Date;
+    const FROZEN = '2026-08-12T06:00:00.000Z';
+    // @ts-ignore — the same instant for all five
+    globalThis.Date = class extends RealDate { toISOString() { return FROZEN; } };
+    try {
+      for (let i = 1; i <= 5; i++) {
+        items.set('tackback::five-doc', `{broken ${i}`);
+        const tb = Tackback.mount({ document: { id: 'five-doc' } });
+        await tb.ready; await settle(4);
+        tb.destroy();
+        assert.ok(asideKeys(items).length <= 3, `never more than three are kept (after ${i})`);
+      }
+    } finally { globalThis.Date = RealDate; }
+
+    const kept = asideKeys(items);
+    assert.equal(kept.length, 3);
+    assert.deepEqual(kept.map((k) => items.get(k)), ['{broken 3', '{broken 4', '{broken 5'],
+      'the three newest, in order — and the fifth is among them');
+    assert.deepEqual([...kept], [...kept].sort(), 'the keys still sort oldest-first');
+  });
+});
+
+test('D-086: a storage without enumeration still keeps same-tick records apart', async () => {
+  // Some storage-like objects answer getItem/setItem/removeItem and nothing else — including the ones
+  // tests hand in. There is no eviction without enumeration (nothing can be listed to evict), so the
+  // ordering rule has nothing to read either, and uniqueness rests on asking whether the key is taken.
+  const items = new Map();
+  const saved = globalThis.localStorage;
+  globalThis.localStorage = {
+    getItem: (k) => (items.has(k) ? items.get(k) : null),
+    setItem: (k, v) => { items.set(k, v); },
+    removeItem: (k) => { items.delete(k); },
+    // deliberately no length, no key()
+  };
+  const RealDate = globalThis.Date;
+  // @ts-ignore — one instant for both
+  globalThis.Date = class extends RealDate { toISOString() { return '2026-08-12T07:00:00.000Z'; } };
+  try {
+    for (let i = 1; i <= 2; i++) {
+      items.set('tackback::plain-store', `{broken ${i}`);
+      const tb = Tackback.mount({ document: { id: 'plain-store' } });
+      await tb.ready; await settle(4);
+      tb.destroy();
+    }
+    const aside = [...items.keys()].filter((k) => k.startsWith('tackback:broken:')).sort();
+    assert.equal(aside.length, 2, `both were kept (${aside.join(', ')})`);
+    assert.deepEqual(aside.map((k) => items.get(k)), ['{broken 1', '{broken 2'], 'and neither replaced the other');
+  } finally {
+    globalThis.Date = RealDate;
+    if (saved === undefined) delete globalThis.localStorage; else globalThis.localStorage = saved;
+  }
+});

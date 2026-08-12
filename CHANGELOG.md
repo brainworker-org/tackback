@@ -31,7 +31,8 @@ Nothing renamed, nothing removed, no new options.
   The unreadable bytes are **kept**. They are moved to `tackback:broken:<document>:<when>` before the
   report, so "cannot be read" does not also mean "gone" and the next save does not write over the only
   copy. Three are kept per document, oldest dropped first; one document's trouble never evicts
-  another's; two records landing in the same millisecond do not overwrite each other; and the copy is
+  another's; a new record always sorts after the ones already kept, so two landing in the same
+  millisecond neither overwrite each other nor push the newer one out; and the copy is
   written before anything is evicted, so storage refusing the write (a quota, typically) costs you the
   new record rather than an old one. Whatever the adapter threw is reported as `STORAGE_LOAD_FAILED`
   with the original as `cause` — an adapter's own choice of code does not become a route this library
