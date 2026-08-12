@@ -3,7 +3,7 @@
 // block, right-drag a PDF region), plus the three customization axes (theming / reactions / i18n).
 // It NEVER reaches into core internals — it drives the public API and re-renders on `change`.
 
-import { resolveTheme, buildThemeCSS, buildUnreadInkCSS, PALETTES } from './theme.js';
+import { resolveTheme, buildThemeCSS, buildUnreadInkCSS, paletteTheme } from './theme.js';
 import { DEFAULT_REACTIONS, resolveReaction } from './reactions.js';
 import { LocaleRegistry } from './i18n.js';
 import { indexAnnotatable, resolveAnchorDom, clampToViewport } from './dom.js';
@@ -25,6 +25,12 @@ const PANEL_CSS = `
 .tb-console button.tb-sec { background: #555; }
 .tb-console input { font: inherit; border: 1px solid #555; border-radius: 6px; padding: 5px 8px; background: #333; color: #fff; }
 .tb-console-count { font-weight: 700; }
+/* The console is shrink-to-fit, so its width was whatever its widest child wanted — and the hint is a
+   sentence. Unwrapped it made the box ~400px, which on a narrow window leaves the document bar beside
+   it too little to type into (and pushed the bar into stacking far earlier than it needed to). The cap
+   lets the hint wrap onto a second line: measured, the box goes from 396px to 224px, and the bar stays
+   beside the console down to a ~590px viewport instead of ~765px. */
+.tb-console { max-width: 200px; }
 .tb-console-hint { font-size: 11px; color: #bbb; line-height: 1.45; }
 .tb-commentable { background: var(--tb-mark-bg) !important; outline: 1px dashed var(--tb-mark-outline); outline-offset: 1px; }
 /* line-height is set EXPLICITLY: a badge is appended inside the surface element, so it would
@@ -333,19 +339,25 @@ export function attachPanel(core, options = {}) {
   doc.head.appendChild(ownNode(themeStyleEl));
 
   let mql = null, applyAutoTheme = null;
-  function applyTheme(theme) {
+  // A named palette carries a light and a dark unread fill, so which tokens it means is not known
+  // until the base is. `paletteKey` is the panel's own handle on that (never a `theme` value a caller
+  // passes — the option keeps exactly the values it always took).
+  const tokensFor = (theme, paletteKey, prefersDark) =>
+    resolveTheme(paletteKey ? paletteTheme(paletteKey, prefersDark) : theme, prefersDark);
+  function applyTheme(theme, paletteKey = null) {
     const prefersDark = !!(globalThis.matchMedia && globalThis.matchMedia('(prefers-color-scheme: dark)').matches);
-    themeStyleEl.textContent = buildThemeCSS(resolveTheme(theme, prefersDark))
-      + '\n' + buildUnreadInkCSS(theme, prefersDark);
+    themeStyleEl.textContent = buildThemeCSS(tokensFor(theme, paletteKey, prefersDark))
+      + '\n' + buildUnreadInkCSS();
     if (mql && applyAutoTheme) { mql.removeEventListener('change', applyAutoTheme); mql = null; applyAutoTheme = null; }
-    // 'auto' AND palette/custom-object themes keep the light/dark BASE following the OS live
-    // (a palette only overrides accent tokens; its base still flips with the OS).
-    const followsOS = theme === 'auto' || theme == null || (theme && typeof theme === 'object');
+    // 'auto' AND palette/custom-object themes keep the light/dark BASE following the OS live. A
+    // palette has to follow it for a second reason now: its unread fill is chosen per base, so the
+    // token map itself is different under each one.
+    const followsOS = theme === 'auto' || theme == null || !!paletteKey || (theme && typeof theme === 'object');
     if (followsOS && globalThis.matchMedia) {
       mql = globalThis.matchMedia('(prefers-color-scheme: dark)');
       applyAutoTheme = () => {
-        themeStyleEl.textContent = buildThemeCSS(resolveTheme(theme, mql.matches))
-          + '\n' + buildUnreadInkCSS(theme, mql.matches);
+        themeStyleEl.textContent = buildThemeCSS(tokensFor(theme, paletteKey, mql.matches))
+          + '\n' + buildUnreadInkCSS();
       };
       mql.addEventListener('change', applyAutoTheme);
       // re-registered on every theme change, so the disposer is registered every time too and the
@@ -355,7 +367,9 @@ export function attachPanel(core, options = {}) {
     }
   }
   let currentTheme = options.theme || 'auto';
-  applyTheme(currentTheme);
+  // No palette until the switch picks one — a caller's `theme` is applied exactly as given.
+  let currentPalette = null;
+  applyTheme(currentTheme, currentPalette);
 
   // ---- panel chrome ----------------------------------------------------------------------------
   // `controls` chooses which buttons appear. Hiding a button never hides the DATA behind it, but the substitute differs by control:
@@ -373,11 +387,13 @@ export function attachPanel(core, options = {}) {
 
   // The theme switch (when shown) cycles named "play" themes: default (OS auto) → ocean → passion.
   // Each still follows the OS light/dark base; the palette only re-tints the accent colors.
+  // Palettes are cycled by NAME: each one's unread fill depends on the light/dark base, so the token
+  // map cannot be decided here — only at the moment it is applied.
   const THEME_CYCLE = [
-    { key: 'default', value: 'auto' },
-    { key: 'ocean', value: PALETTES.ocean },
-    { key: 'passion', value: PALETTES.passion },
-    { key: 'ochre', value: PALETTES.ochre },
+    { key: 'default', theme: 'auto', palette: null },
+    { key: 'ocean', theme: 'auto', palette: 'ocean' },
+    { key: 'passion', theme: 'auto', palette: 'passion' },
+    { key: 'ochre', theme: 'auto', palette: 'ochre' },
   ];
   let themeIdx = 0;
   const themeLabel = () => t('panel.theme', { mode: t(`theme.${THEME_CYCLE[themeIdx].key}`) });
@@ -421,7 +437,11 @@ export function attachPanel(core, options = {}) {
   let themeBtn = null;
   if (controls.theme) {
     themeBtn = btn(doc, themeLabel(), 'tb-sec');
-    themeBtn.onclick = () => { themeIdx = (themeIdx + 1) % THEME_CYCLE.length; currentTheme = THEME_CYCLE[themeIdx].value; applyTheme(currentTheme); themeBtn.textContent = themeLabel(); };
+    themeBtn.onclick = () => {
+      themeIdx = (themeIdx + 1) % THEME_CYCLE.length;
+      currentTheme = THEME_CYCLE[themeIdx].theme; currentPalette = THEME_CYCLE[themeIdx].palette;
+      applyTheme(currentTheme, currentPalette); themeBtn.textContent = themeLabel();
+    };
     panel.appendChild(themeBtn);
   }
   let marksBtn = null;
@@ -1518,6 +1538,17 @@ export function attachPanel(core, options = {}) {
     const hidden = Math.max(0, (globalThis.innerHeight || 0) - (vv.height + vv.offsetTop));
     lane.style.bottom = `calc(16px + env(safe-area-inset-bottom, 0px) + var(--tb-docbar-lift, 0px) + ${Math.round(hidden)}px)`;
   };
+  // The bar reserves room for the console by MEASURING it, and that measurement was only ever taken on
+  // a window resize or a scroll. Everything else that changes the console's width — a label switching
+  // language, a count reaching two digits, a webfont arriving after mount — left the reservation
+  // describing a console that no longer existed, and the bar keeps its old right edge. Watch the box
+  // itself, so the reservation cannot go stale without the bar being told.
+  let consoleRo = null;
+  if (typeof globalThis.ResizeObserver === 'function') {
+    consoleRo = new globalThis.ResizeObserver(() => placeLane());
+    try { consoleRo.observe(panel); } catch { /* ignore */ }
+    own(() => { try { consoleRo.disconnect(); } catch { /* ignore */ } });
+  }
   if (vv) {
     for (const [type, fn] of [['resize', queueRecalc], ['scroll', queueRecalc], ['resize', placeLane], ['scroll', placeLane]]) {
       vv.addEventListener(type, fn);
@@ -1563,7 +1594,7 @@ export function attachPanel(core, options = {}) {
 
   // ---- PanelInstance ---------------------------------------------------------------------------
   return {
-    setTheme(theme) { if (destroyed) return; currentTheme = theme; applyTheme(theme); if (themeBtn) themeBtn.textContent = themeLabel(); },
+    setTheme(theme) { if (destroyed) return; currentTheme = theme; currentPalette = null; applyTheme(theme, null); if (themeBtn) themeBtn.textContent = themeLabel(); },
     setReactions(defs) { if (destroyed) return; reactions.length = 0; reactions.push(...defs); },
     // Update the injected category→color map live (the integrator owns the mapping; Tackback just
     // applies it to the last-speaker tint). Pass `{}` to clear back to the generic per-identity hues.

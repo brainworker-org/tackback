@@ -65,3 +65,94 @@ test('resolveQuoteSelector: positional fallback only if text still matches', () 
   // if the slice no longer equals exact, fallback rejects
   assert.equal(resolveQuoteSelector('shifted text entirely here now', { exact: 'exact span', start: 5, end: 15 }), null);
 });
+
+// ---- DI-004: a selector may not carry half a character -----------------------------------------
+//
+// A character outside the BMP is two code units. Slicing between them keeps a lone surrogate, and
+// nothing local complains: JSON.stringify escapes it, TextEncoder swaps in U+FFFD. It breaks where a
+// strict UTF-8 encoder refuses it — the far end of a send — so what a reader saw was a comment that
+// never went and never said why. Eight of them, on one page.
+
+const EMOJI_TEXT = '💬2 未読 💬2 既読(AI) 💬2 既読(人間) 💬2 バッジ 💬3 影付き 💬2 この文書について';
+const hasLoneSurrogate = (s) => !s.isWellFormed();
+
+test('DI-004: no field of a selector is left holding half a character', () => {
+  // The case that was actually reported: an offset landing inside the first 💬.
+  const one = buildQuoteSelector(EMOJI_TEXT, 1, 3);
+  for (const field of ['exact', 'prefix', 'suffix']) {
+    assert.ok(!hasLoneSurrogate(one[field]), `${field} is well-formed: ${JSON.stringify(one[field])}`);
+  }
+
+  // And every selection this text can produce, not just the reported one — the bug was a boundary
+  // that happened to fall inside a pair, so the only honest coverage is the sweep.
+  let checked = 0;
+  for (let start = 0; start < EMOJI_TEXT.length - 1; start++) {
+    for (let len = 1; len <= 6 && start + len <= EMOJI_TEXT.length; len++) {
+      const sel = buildQuoteSelector(EMOJI_TEXT, start, start + len);
+      checked++;
+      assert.ok(!hasLoneSurrogate(sel.exact), `exact at ${start}+${len}`);
+      assert.ok(!hasLoneSurrogate(sel.prefix), `prefix at ${start}+${len}`);
+      assert.ok(!hasLoneSurrogate(sel.suffix), `suffix at ${start}+${len}`);
+      assert.notEqual(sel.exact, '', `a quote is never emptied by the rounding (${start}+${len})`);
+    }
+  }
+  assert.ok(checked > 300, `the sweep really ran (${checked} selections)`);
+});
+
+test('DI-004: the offsets it hands back are on character boundaries too', () => {
+  // start/end are stored on the anchor and used as the positional fallback, so they have to be
+  // usable on their own — a stored offset inside a pair would re-create the same half character.
+  for (let start = 0; start < EMOJI_TEXT.length - 1; start++) {
+    const sel = buildQuoteSelector(EMOJI_TEXT, start, start + 2);
+    assert.ok(!hasLoneSurrogate(EMOJI_TEXT.slice(0, sel.start)), `start ${sel.start} splits nothing`);
+    assert.ok(!hasLoneSurrogate(EMOJI_TEXT.slice(sel.end)), `end ${sel.end} splits nothing`);
+  }
+});
+
+test('DI-004: the rounding SHRINKS — it never reaches for a character nobody selected', () => {
+  // Both directions produce a well-formed string, so well-formedness alone does not say which way it
+  // went. The direction is the contract: growing the quote would comment on a character the reader did
+  // not select, and growing a context window would claim surroundings that were never checked for
+  // uniqueness. Index 1 of this text is the second half of the leading 💬 — a real split.
+  assert.equal(EMOJI_TEXT.codePointAt(0), 0x1F4AC, 'the fixture really starts with an astral character');
+  const sel = buildQuoteSelector(EMOJI_TEXT, 1, 5);
+  assert.equal(sel.start, 2, 'forward, off the pair — not back to 0, which would swallow the emoji');
+  assert.equal(sel.exact.startsWith('💬'), false, 'the quote does not gain a character');
+  assert.equal(sel.exact, EMOJI_TEXT.slice(2, 5));
+
+  // the same, for the far edge of a context window: it comes IN, so the window can only get shorter
+  const mid = EMOJI_TEXT.indexOf('バッジ');
+  const win = buildQuoteSelector(EMOJI_TEXT, mid, mid + 3, 5);
+  assert.ok(win.prefix.length <= 5, `the prefix window never grows past ctx (${win.prefix.length})`);
+  assert.ok(win.suffix.length <= 5, `nor the suffix window (${win.suffix.length})`);
+
+  const hit = resolveQuoteSelector(EMOJI_TEXT, sel);
+  assert.ok(hit, 'the shortened quote still resolves');
+  assert.equal(EMOJI_TEXT.slice(hit.start, hit.end), sel.exact, 'and resolves to what it says');
+});
+
+test('DI-004: a selection covering only half a character takes the whole one', () => {
+  // Nothing is left to shrink to here, and an empty quote resolves to nothing at all.
+  const sel = buildQuoteSelector('a💬b', 1, 2);
+  assert.equal(sel.exact, '💬', 'the character the reader saw');
+  assert.ok(!hasLoneSurrogate(sel.exact));
+});
+
+test('DI-004: text with no astral characters comes back byte for byte unchanged', () => {
+  // The rounding must be invisible to everything that was already fine — this is the pair that
+  // catches a fix which "helpfully" adjusts every selector.
+  const plain = 'The quick brown fox jumps over the lazy dog, and then some more text follows here.';
+  for (let start = 0; start < plain.length - 1; start++) {
+    for (const len of [1, 3, 7]) {
+      if (start + len > plain.length) continue;
+      const sel = buildQuoteSelector(plain, start, start + len);
+      assert.deepEqual(sel, {
+        exact: plain.slice(start, start + len),
+        prefix: plain.slice(Math.max(0, start - 24), start),
+        suffix: plain.slice(start + len, Math.min(plain.length, start + len + 24)),
+        start,
+        end: start + len,
+      }, `unchanged at ${start}+${len}`);
+    }
+  }
+});

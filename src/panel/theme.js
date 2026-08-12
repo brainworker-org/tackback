@@ -46,6 +46,37 @@ export const PALETTES = {
 };
 
 /**
+ * The unread fill each palette uses, per light/dark base.
+ *
+ * A palette re-tints what a comment IS; unread says one has not been read yet, and the two have to
+ * stay apart — from each other and from the colour of whoever spoke last, which an integration
+ * supplies (blue and pink, in the one this was chosen against). So the fill is picked per palette
+ * rather than shared, and the choice was made by looking at the three side by side. The default (no
+ * palette) keeps the orange it has had since it meant "unread" at all.
+ *
+ * Kept beside PALETTES rather than inside it because a palette is a flat token map, and this one
+ * token has two values. The pulse is NOT per palette — it is the same everywhere.
+ */
+export const PALETTE_UNREAD = {
+  ocean:   { light: '#1ad411', dark: '#4bf042' },
+  passion: { light: '#11d490', dark: '#42f0b3' },
+  ochre:   { light: '#d48511', dark: '#f0a942' },
+};
+
+/**
+ * A named palette as a plain token map, with the unread fill for this base folded in.
+ * @param {string} key            a key of PALETTES
+ * @param {boolean} prefersDark   the current base
+ * @returns {Record<string,string>|'auto'}  'auto' for an unknown key (nothing to apply)
+ */
+export function paletteTheme(key, prefersDark) {
+  const base = PALETTES[/** @type {keyof PALETTES} */ (key)];
+  if (!base) return 'auto';
+  const unread = PALETTE_UNREAD[/** @type {keyof PALETTE_UNREAD} */ (key)];
+  return unread ? { ...base, '--tb-unread': prefersDark ? unread.dark : unread.light } : { ...base };
+}
+
+/**
  * Resolve a `theme` option into a concrete token map.
  * @param {'auto'|'light'|'dark'|Record<string,string>} theme
  * @param {boolean} prefersDark   the current OS preference (for 'auto')
@@ -70,19 +101,23 @@ export function buildThemeCSS(tokens, selector = '[data-tb-root]') {
   return `${selector} {\n${body}\n}`;
 }
 
+/** The ink an unread mark is written in — black, on every base and every palette. */
+const UNREAD_INK = '#000000';
+
 /**
- * The ink a filled unread mark is written in — white on the light base, black on the dark one.
+ * The ink a filled unread mark is written in.
  *
  * Not a token, deliberately. It is not a colour anyone chooses; it is whatever stays legible on the
  * fill beside it, so publishing it as a token would offer a promise that can only be used to break
  * the pairing. It is emitted as a plain rule alongside the token map instead.
- * @param {'auto'|'light'|'dark'|Record<string,string>} theme
- * @param {boolean} prefersDark
+ *
+ * It used to follow the base — white on light, black on dark. Measured against the fills, white was
+ * the weaker half of that pair everywhere, and on the light orange it read at 2.7:1 where black reads
+ * at 7.7:1. It is black on both bases now, and on every palette fill.
+ * @param {string} [selector]
  * @returns {string}
  */
-export function buildUnreadInkCSS(theme, prefersDark, selector = '[data-tb-root]') {
-  const dark = theme === 'dark' || (theme !== 'light' && prefersDark);
-  const ink = dark ? '#000000' : '#ffffff';
+export function buildUnreadInkCSS(selector = '[data-tb-root]') {
   return `${selector} .tb-badge.tb-unread,\n`
-    + `${selector} .tb-docbar.tb-unread .tb-docbar-count { color: ${ink} !important; }`;
+    + `${selector} .tb-docbar.tb-unread .tb-docbar-count { color: ${UNREAD_INK} !important; }`;
 }

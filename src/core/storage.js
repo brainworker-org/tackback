@@ -86,6 +86,132 @@ import { TackbackError } from './errors.js';
  * @property {(cb: () => void) => (() => void)} [subscribe] told when the same storage changed elsewhere
  */
 
+// ---- setting aside a record that cannot be read ------------------------------------------------
+//
+// A stored document that cannot be read is reported, replaced by an empty one, and KEPT: the reader is
+// told (the core emits STORAGE_LOAD_FAILED), the document is usable again, and the bytes are still
+// there to be recovered by hand. It is a MOVE, not a copy — left in place, every later mount would set
+// the same record aside again and the slots would fill with one broken document.
+//
+// Keeping and not hoarding pull against each other, and everything that went wrong here went wrong in
+// that gap. These are the rules that hold it, written down because the first three attempts each
+// satisfied one of them and quietly broke another:
+//
+//   I-1  THE SITUATION OWNS THE CODE. Whatever the adapter threw, this is reported as
+//        STORAGE_LOAD_FAILED with the original as `cause`. An adapter is the caller's own object and
+//        may throw any code; passing it on would put a code on the wire by a route the library
+//        documents as impossible. (Enforced in engine.js, where the report is made.)
+//   I-2  NOTHING IS REMOVED UNTIL ITS REPLACEMENT EXISTS. The copy is written first; room is made
+//        after; the live key goes last. A write that fails — a quota, which is exactly when this runs
+//        — must cost the new record, never an old one.
+//   I-3a ONE RECORD, ONE KEY. A record set aside never overwrites another.
+//   I-3b KEYS SORT IN THE ORDER THEY WERE WRITTEN. "Remove the oldest" is implemented as "remove the
+//        lexicographically smallest", so the two have to mean the same thing. A key that is merely
+//        FREE is not enough: a freed name can sort before what is already kept, and the eviction then
+//        removes the record just written.
+//   I-4  ONE DOCUMENT'S TROUBLE NEVER EVICTS ANOTHER'S. The listing is filtered to this document.
+//   I-5  OVER THE LIMIT IS ALLOWED TO BE MOMENTARY. Standing at four for the instant between the write
+//        and the trim is the price of I-2; what may not happen is four left standing.
+//
+// WHERE THE RULES REACH. I-3b and I-5 need to see the other keys, so they hold only where storage can
+// be enumerated (`length` + `key()`) — the default localStorage, and any adapter-like object that
+// answers both. Without enumeration there is nothing to compare against and nothing to list for
+// removal: I-1, I-2 and I-3a still hold, the limit does not apply, and asking whether a name is taken
+// is the only tool left for I-3a.
+//
+// WHAT THE RULES DO NOT REACH: two tabs setting the same document aside in the same instant can still
+// overwrite each other (localStorage has no transaction, the same way two tabs can already overwrite
+// each other's reading progress); a `removeItem` of the live key that fails leaves the document to be
+// set aside again next time, spending a slot on the same bytes; and a key edited by hand into a shape
+// this does not recognise is invisible to the trim.
+
+const ASIDE = 'tackback:broken:';
+const ASIDE_KEEP = 3;                       // per document — one document's trouble may not evict another's
+// The stamp is an ISO 8601 instant, optionally followed by `-<n>` when two records land in the same
+// millisecond. Both sort oldest-first as plain text (`Z` sorts before `Z-`), which is what the FIFO
+// reads. Taking the stamp OFF is how a key is attributed to a document: an id may itself contain ':'
+// (a caller's own `storageKey` can be anything), so splitting on ':' would put `a:b`'s records in
+// `a`'s group.
+const STAMP = /:\d{4}-\d{2}-\d{2}T[\d:.]+Z(?:-\d+)?$/;
+
+// I-3b is a claim about TEXT, so the number in a key has to be written in a form whose alphabetical
+// order is its numeric order. Plain decimals are not: '-10' sorts before '-2', so the tenth record in
+// one tick became the smallest key in its group and the trim took it away again. Fixed width fixes
+// that, and the width is the ceiling — past it there is no name left that sorts in the right place, so
+// the mechanism declines to write one rather than write one that breaks the order.
+const SUFFIX_WIDTH = 4;
+const SUFFIX_MAX = 10 ** SUFFIX_WIDTH - 1;
+
+/**
+ * The next key after this one, in the order the trim reads: `…Z` → `…Z-0002` → `…Z-0003`.
+ *
+ * A stamp always ends in `Z` or `Z-<digits>`, which is why matching the tail cannot catch a digit group
+ * inside the instant. (A group holding both an old unpadded suffix and a new padded one would sort
+ * wrongly, and cannot arise: suffixes only exist within one millisecond, and two builds cannot write
+ * into the same millisecond.)
+ * @param {string} k
+ * @returns {string|null}  null when the count no longer fits — see SUFFIX_WIDTH
+ */
+function bumped(k) {
+  const tail = /-(\d+)$/.exec(k);
+  const next = tail ? Number(tail[1]) + 1 : 2;
+  if (next > SUFFIX_MAX) return null;
+  const base = tail ? k.slice(0, -tail[0].length) : k;
+  return `${base}-${String(next).padStart(SUFFIX_WIDTH, '0')}`;
+}
+
+/**
+ * @param {Storage} ls
+ * @param {string} key   the live key this adapter reads and writes
+ * @param {string} raw   exactly what was in there, unparsed
+ */
+function setAside(ls, key, raw) {
+  // Failing to set a record aside must not replace the failure the caller is about to hear about.
+  try {
+    // The document's own name where there is one to use: the default key is `tackback::<id>`, but a
+    // caller's `storageKey` is whatever they chose, and that string is then the only name there is.
+    const own = 'tackback::';
+    const group = ASIDE + (key.startsWith(own) ? key.slice(own.length) : key);
+    // Enumeration is how the order and the limit stay honest — an index kept alongside can disagree
+    // with the keys themselves. Without it (I-3b / I-5 out of reach) the record is still set aside.
+    const enumerable = typeof ls.length === 'number' && typeof ls.key === 'function';
+    const mine = () => {
+      const out = [];
+      for (let i = 0; i < ls.length; i++) {
+        const k = ls.key(i);
+        // I-4: this document's records only.
+      if (k && k.startsWith(ASIDE) && STAMP.test(k) && k.replace(STAMP, '') === group) out.push(k);
+      }
+      return out.sort();
+    };
+    // I-3a: a stamp is only unique if nothing else landed in the same millisecond. Two failures inside
+    // one tick — or a clock that does not advance between them — wrote the same key twice, and the
+    // second silently replaced the first: three unreadable records, one kept.
+    //
+    // I-3b: after everything already in this group, not merely unoccupied. Taking the first free slot
+    // looked right and was not — once the trim had removed the unsuffixed key, a later record took that
+    // name back, and the trim then read the record just written as the oldest and removed it.
+    let at = `${group}:${new Date().toISOString()}`;
+    const newest = enumerable ? mine().pop() : null;
+    if (newest && at <= newest) at = bumped(newest);
+    while (at && typeof ls.getItem === 'function' && ls.getItem(at) != null) at = bumped(at);
+    // No name left that sorts where it belongs (SUFFIX_WIDTH). Writing one anyway would break I-3b and
+    // the next trim would remove the wrong record; leaving the document where it is loses nothing —
+    // the live key is untouched, the reader is still told, and the next mount has a later instant to
+    // use. Only reachable with a clock that does not advance across ten thousand failures.
+    if (!at) return;
+    // I-2 / I-5: write first, make room after. The other order lost data for real — the eviction had
+    // already happened when the write failed, so the oldest was gone and the new one never stored.
+    ls.setItem(at, raw);
+    if (enumerable) {
+      const kept = mine();
+      while (kept.length > ASIDE_KEEP) ls.removeItem(/** @type string */(kept.shift()));
+    }
+    // I-2: last, because until the write above has succeeded this is the only copy.
+    ls.removeItem(key);
+  } catch { /* the record stays where it is; the caller is still told it could not be read */ }
+}
+
 /**
  * The default adapter: a single localStorage key per document. Sync, zero-config, offline.
  * @param {string} key
@@ -101,6 +227,11 @@ export function localStorageAdapter(key) {
       try {
         return JSON.parse(raw);
       } catch (err) {
+        // A record that cannot be read is SET ASIDE before we say so, so that "unreadable" does not
+        // also mean "gone": the core starts fresh, and the next save writes over an empty key rather
+        // than over the only copy of whatever was in there. Then the throw, unchanged — it is the
+        // only way this adapter can tell the core anything.
+        setAside(ls, key, raw);
         throw new TackbackError('STORAGE_LOAD_FAILED', `corrupt stored data at "${key}"`, { cause: err });
       }
     },

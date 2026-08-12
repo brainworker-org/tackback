@@ -4,6 +4,95 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
 [Keep a Changelog](https://keepachangelog.com/), and the project uses [SemVer](https://semver.org/)
 (pre-1.0: the public **JavaScript** API may still change before 1.0).
 
+## [0.9.10] — 2026-08-12
+
+**Two of these you can see; the rest are things that were already written down and not quite true.**
+Nothing renamed, nothing removed, no new options.
+
+### Fixed
+
+- **A comment on a phrase that crossed an emoji was never sent, and never said so.** The quote a range
+  anchor stores keeps a little text either side of the selection to tell repeated phrases apart, and it
+  cut that text by character count — which is not the same as by character. A cut landing in the middle
+  of an emoji kept half of one, and half a character is something a strict UTF-8 encoder at the other
+  end of a send refuses. Locally nothing complained: the JSON was well-formed, the send simply did not
+  happen. Eight comments on one page were sitting in a browser nobody could see them from.
+
+  Every edge of a selector is now rounded to a whole character, and the rounding **shrinks** — a quote
+  never grows to cover something you did not select. Text without emoji is byte for byte what it was.
+  Comments already stored this way still resolve: the quote no longer matches, and the stored offsets
+  take over.
+
+- **A stored document that cannot be read no longer stops the page.** `Tackback.mount()` used to throw
+  when the default adapter found something unparseable under its key — no instance, no marks, no error
+  event to react to, from one corrupt value. It now does what it always said it did: reports
+  `STORAGE_LOAD_FAILED` on the `error` event and starts with an empty document.
+
+  The unreadable bytes are **kept**. They are moved to `tackback:broken:<document>:<when>` before the
+  report, so "cannot be read" does not also mean "gone" and the next save does not write over the only
+  copy. Three are kept per document, oldest dropped first; one document's trouble never evicts
+  another's; a new record always sorts after the ones already kept — including past the tenth in one
+  millisecond, where a plain decimal suffix would have sorted `-10` before `-2` and thrown the newest
+  away — so two landing in the same instant neither overwrite each other nor push the newer one out;
+  and the copy is
+  written before anything is evicted, so storage refusing the write (a quota, typically) costs you the
+  new record rather than an old one. Whatever the adapter threw is reported as `STORAGE_LOAD_FAILED`
+  with the original as `cause` — an adapter's own choice of code does not become a route this library
+  says is impossible. Nothing about this is a promise to build on: it is what the default adapter does
+  with a record it cannot parse, and the contract remains the error event.
+
+- **The document bar and the panel no longer crowd each other on a narrow window.** Two things were
+  wrong. The panel is shrink-to-fit and one of its children is a sentence, so its width was the length
+  of that sentence — about 400px where its buttons need 200 — and the bar reserves the panel's measured
+  width, so half the bottom of a narrow window was reserved for a hint. The hint now wraps and the
+  panel is capped: measured, 424px to 224px, and the bar keeps its place beside the panel down to a
+  viewport ~200px narrower than before.
+
+  The second is that the reservation is a MEASUREMENT, and it was only ever taken on a window resize or
+  a scroll. A label switching language, a count reaching two digits, a webfont arriving after mount —
+  each changes the panel's width with no resize and no scroll, and the bar kept the right edge it had
+  computed for a panel that no longer existed. The panel's own box is watched now.
+
+- **The unread mark's ink is now black on a light screen too.** It followed the base before — white on
+  light, black on dark — and white was the weaker half of that pair everywhere: 2.7:1 against the light
+  orange where black reads 7.7:1.
+
+- **A display that cannot say what is visible is reported as an adapter failure, always.** If the
+  display's own error was a `TackbackError` — an anchor in what it returned that this build cannot use —
+  that code was passed through, so `INVALID_ANCHOR` could arrive on the `error` event. That code means
+  "the anchor **you** gave me is unusable" and nobody had given anything. It is `ADAPTER_FAILED` now,
+  with the display's error kept as `cause`, which is what the same failure already looked like when you
+  asked for `visibleThreads()` directly.
+
+### Changed
+
+- **Each palette now has its own unread fill.** The mark used to be the same orange under every
+  palette, which put it close to one of the speaker colours in some of them. The fill is chosen per
+  palette and per light/dark base now; the default palette keeps the orange it has always had. **The
+  pulse is unchanged and shared** — two seconds, everywhere, and still absent for a reader who has asked
+  their system for less movement. `--tb-unread` remains a token: your override still wins.
+
+- **Four statements in `## Errors` and `## What an import may not do` now match the code.** These were
+  written in 0.9.9 and describe behaviour that has not changed — the sentences were wrong, not the
+  library:
+  - `ADAPTER_FAILED` is also emitted for a storage adapter offering half the reading-progress pair.
+  - `IMPORT_ENTRY_DROPPED` is one per **fault**, not per entry (a refused utterance takes its replies
+    with it, and they are counted in `dropped` without being blamed), and it happens on a `replace`
+    that goes through as well as on a `merge` and a restore.
+  - A `replace` refused whole reports **once**, as `IMPORT_REPLACE_REJECTED`; its result is zeros apart
+    from `dropped`, which is not zero and is the useful part.
+  - Refusals have **three** kinds, not two: `tombstone` joins `identity` and `anchor`, and a `replace`
+    carrying only buried rows goes through rather than failing.
+- Two rules in the refusal table are stated more exactly: R1 is about not being an object, and R11
+  covers a reply claiming the id of an utterance as well as of another reply.
+
+### Tests
+
+- 436, from 410. The new ones fix what the four statements above say, the set-aside behaviour, the
+  selector rounding, the per-palette fill, and — for the first time — **the gesture that opens a pane on
+  plain prose**: it happens on the right button's release, not on `contextmenu`, and that decision had
+  been checked only by hand.
+
 ## [0.9.9] — 2026-08-11
 
 **Almost everything in this release is a rename or a removal**, and nothing was added. Two changes are

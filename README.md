@@ -13,7 +13,7 @@ any HTML, including Markdown rendered to HTML.
 > multi-participant timeline, actor colors, unread, and the Save/Send scenarios — run
 > `demo/demo.html`: `npm run build`, serve the package root over http, and open it.
 
-> **Version 0.9.9 (staging).** Pre-1.0: the API is functional and tested but may still change before
+> **Version 0.9.10 (staging).** Pre-1.0: the API is functional and tested but may still change before
 > the 1.0 stable release. The public API is the **JavaScript** API called in the browser (not an HTTP API).
 
 ## Install
@@ -438,16 +438,21 @@ not valid JSON, or valid JSON with no comments in it. Also thrown when a **repla
 records whose anchors cannot be placed and you did not pass `allowPartial: true`; the existing document
 is left untouched rather than being cleared by a file that could not be read properly.
 
-**`IMPORT_ENTRY_DROPPED`** — *emitted, one per entry.* An entry was refused and the rest went in, with
-a message naming what was wrong with it. This happens on **merge** imports and when a stored document
-is restored. The number refused is also in the import's return value as `dropped`. **The entry is not
-applied** — nothing partial is written from a refused entry.
+**`IMPORT_ENTRY_DROPPED`** — *emitted, one per fault.* An entry was refused and the rest went in, with
+a message naming what was wrong with it. This happens on a **merge**, on a **replace** that still goes
+through, and when a stored document is restored. **The entry is not applied** — nothing partial is
+written from a refused entry.
+
+One per **fault**, which is not always one per entry: a refused utterance takes its replies with it, and
+those replies are counted in `dropped` without being blamed for a fault of their own. So `dropped` is
+how many entries did not make it, and the number of these errors is how many things were wrong.
 
 **`IMPORT_REPLACE_REJECTED`** — *emitted.* A **replace** import carried at least one entry whose
 identity could not be accepted, so the whole import was refused and your document was left exactly as
 it was. **`allowPartial` does not override this** — taking the good half of a complete-state
-declaration composes a document neither side asked for. The call returns a result with everything at
-zero rather than throwing.
+declaration composes a document neither side asked for. The call returns rather than throwing, with
+`added`, `updated`, `skipped`, `conflicts` and `deleted` all zero — and `dropped` carrying how many
+entries were at fault, which is the one thing worth knowing about a refusal.
 
 **`STORAGE_LOAD_FAILED`** — *emitted.* Your storage adapter had something stored that could not be
 read back. **Unreadable is not the same as empty**: what could not be read is not believed, and reading
@@ -467,9 +472,12 @@ something does.
 when `visibleThreads()` is asked while the registered display cannot answer — a pull has no honest
 synchronous answer, so it throws rather than handing back something from before.
 
-*Emitted* when a media adapter fails to mount, when initialisation fails, and when a scheduled look at
-the display has failed and the core has stopped retrying. That last one is said **once per failure
-episode**, not once per attempt: it ends when a look succeeds or the display is replaced.
+*Emitted* when a media adapter fails to mount, when initialisation fails, when a scheduled look at the
+display has failed and the core has stopped retrying, and when a storage adapter offers half the
+reading-progress pair (one of `loadProgress`/`saveProgress` without the other — taken as neither, and
+said out loud rather than left to be discovered as unread that will not persist). The retry one is said
+**once per failure episode**, not once per attempt: it ends when a look succeeds or the display is
+replaced.
 
 A misconfigured adapter arrives here too. Leaving out something an adapter requires — the pdf.js
 module, or the document to render — is reported as `ADAPTER_FAILED` like any other adapter failure,
@@ -481,8 +489,10 @@ An import can add to your document and it can replace it. What it may **not** do
 utterance is which. Every entry is checked **before anything is applied**, and the rules below are the
 whole of that check — they are the specification, not a description of it.
 
-A refused entry is never partially applied, and never silent: each one produces an
-`IMPORT_ENTRY_DROPPED` on `error`, and the count is the import's `dropped`.
+A refused entry is never partially applied, and never silent. What you hear depends on whether the
+import survived the refusal: one `IMPORT_ENTRY_DROPPED` per fault when it did, and a single
+`IMPORT_REPLACE_REJECTED` when it did not — a replacement refused whole is one refusal, of the whole
+thing, not one per row. Either way `dropped` says how many entries did not make it.
 
 **Notation.** `E` is the entry being checked — an utterance, or a reply hanging off one. `TAKEN` is the
 set of ids **already accepted within this check**. `HELD` is what the document **already holds**.
@@ -495,7 +505,7 @@ matches ends the check for that entry.
 
 | # | Refused when | Effect |
 |---|---|---|
-| R1 | `E` is not an object, or not shaped like an utterance | refuse |
+| R1 | `E` is not an object | refuse |
 | R2 | `E.id` is not usable | refuse + collateral |
 | R3 | `E.id ∈ BURIED` | refuse + collateral |
 | R4 | `checkAnchor ∧ E.anchor` is not valid | refuse + collateral |
@@ -505,7 +515,7 @@ matches ends the check for that entry.
 | R8 | a reply's id is not usable | refuse that reply |
 | R9 | a reply's id `∈ BURIED` | refuse that reply |
 | R10 | a reply's id `∈ TAKEN` | refuse that reply |
-| R11 | a reply's id `∈ HELD` under a different utterance | refuse that reply |
+| R11 | a reply's id `∈ HELD` as an utterance, or under a different one | refuse that reply |
 
 R1–R7 apply to utterances, R8–R11 to replies. A refused reply is refused alone: its utterance and its
 siblings stay.
@@ -521,17 +531,22 @@ its order stable.
 
 **What happens after a refusal depends on the mode:**
 
+Every refusal carries a **kind** — `identity`, `anchor` or `tombstone` — and the kind is what the modes
+answer differently:
+
 | Mode | Condition | Result |
 |---|---|---|
-| merge | anything refused | apply the rest; one `IMPORT_ENTRY_DROPPED` per refusal |
-| replace | an anchor was refused, no `allowPartial` | **throws `IMPORT_INVALID`. The document does not change.** |
-| replace | an anchor was refused, `allowPartial: true` | replace using what could be placed |
-| replace | an **identity** was refused | **`IMPORT_REPLACE_REJECTED`. The document does not change**, and the result is all zeros |
+| merge | anything refused | apply the rest; one `IMPORT_ENTRY_DROPPED` per fault |
+| replace | an **anchor** was refused, no `allowPartial` | **throws `IMPORT_INVALID`. The document does not change.** |
+| replace | an **anchor** was refused, `allowPartial: true` | replace using what could be placed |
+| replace | an **identity** was refused | **`IMPORT_REPLACE_REJECTED`. The document does not change**; the result is zeros apart from `dropped` |
 | replace | an identity was refused, `allowPartial: true` | **the same** — `allowPartial` does not reach identity |
+| replace | only **tombstones** were refused | the replacement goes through, and each refusal is reported. A complete-state declaration whose rows are buried by its own `deleted[]` is being read correctly, not failing — including when what it declares is that nothing is left |
 | restore | anything refused | drop those and carry on; reported just before `ready` |
 
-That last distinction is the point of the two kinds: an **anchor** you cannot place is something
-`allowPartial` can let you past. An **identity** you cannot accept is not.
+The three kinds are three different answers: an **anchor** you cannot place is something `allowPartial`
+can let you past, an **identity** you cannot accept is not, and a **tombstone** is not a fault in the
+envelope at all.
 
 **An import and a restore differ in exactly one way.** An import must supply anchors this build can
 place, and refuses the ones it cannot (R4). A restore keeps them: an import asks to change the document

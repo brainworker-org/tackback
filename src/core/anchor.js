@@ -73,8 +73,39 @@ export function rectsIntersect(a, b) {
 }
 
 /**
+ * Move an index off the middle of a surrogate pair, always by SHRINKING the span it bounds.
+ *
+ * A character outside the BMP is two code units, and a `slice` that lands between them keeps half of
+ * one — a lone surrogate. The text still looks fine locally: `JSON.stringify` escapes it and
+ * `TextEncoder` swaps in U+FFFD, so nothing throws here. It breaks at the other end, where a strict
+ * UTF-8 encoder refuses it, and what a reader sees is a comment that was never sent and never
+ * complained. Rounding INWARD (a shorter quote, a shorter context) can only lose one character of
+ * disambiguation; rounding outward would grow the span past what the reader selected.
+ *
+ * @param {string} text
+ * @param {number} i     the index to move
+ * @param {1|-1} inward  +1 to move forward (a span's start), -1 to move back (a span's end)
+ * @returns {number}
+ */
+function onCodePointBoundary(text, i, inward) {
+  if (i <= 0 || i >= text.length) return i;
+  const before = text.charCodeAt(i - 1);
+  // i splits a pair only when the unit just before it is a HIGH surrogate and the one at it is LOW.
+  if (before >= 0xD800 && before <= 0xDBFF) {
+    const at = text.charCodeAt(i);
+    if (at >= 0xDC00 && at <= 0xDFFF) return i + inward;
+  }
+  return i;
+}
+
+/**
  * Build a TextQuoteSelector from a selected substring and its surrounding text (W3C Web Annotation
  * shape). `prefix`/`suffix` disambiguate repeated phrases; `start`/`end` are a positional fallback.
+ *
+ * Every edge is rounded to a code-point boundary (DI-004): the quote's own two, and the outer edge of
+ * each context window. Text with no astral characters is untouched — the rounding only moves an index
+ * that would have split a pair.
+ *
  * @param {string} fullText  the container's textContent
  * @param {number} start     selection start offset within fullText
  * @param {number} end       selection end offset
@@ -82,12 +113,22 @@ export function rectsIntersect(a, b) {
  * @returns {{exact:string,prefix:string,suffix:string,start:number,end:number}}
  */
 export function buildQuoteSelector(fullText, start, end, ctx = 24) {
+  let s = onCodePointBoundary(fullText, start, 1);        // the quote starts one unit later
+  let e = onCodePointBoundary(fullText, end, -1);         // and ends one unit earlier
+  // A span covering only PART of one character has nothing left to shrink to, and an empty quote
+  // resolves to nothing at all. Take the whole character instead — it is what was on screen.
+  if (e <= s) {
+    s = onCodePointBoundary(fullText, start, -1);
+    e = onCodePointBoundary(fullText, end, 1);
+  }
+  const pre = onCodePointBoundary(fullText, Math.max(0, s - ctx), 1);
+  const suf = onCodePointBoundary(fullText, Math.min(fullText.length, e + ctx), -1);
   return {
-    exact: fullText.slice(start, end),
-    prefix: fullText.slice(Math.max(0, start - ctx), start),
-    suffix: fullText.slice(end, Math.min(fullText.length, end + ctx)),
-    start,
-    end,
+    exact: fullText.slice(s, e),
+    prefix: fullText.slice(pre, s),
+    suffix: fullText.slice(e, suf),
+    start: s,
+    end: e,
   };
 }
 

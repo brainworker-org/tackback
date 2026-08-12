@@ -14,6 +14,7 @@ import assert from 'node:assert/strict';
 
 import { Tackback } from '../src/core/engine.js';
 import { attachPanel } from '../src/panel/index.js';
+import { paletteTheme } from '../src/panel/theme.js';
 
 // ---- fake DOM ---------------------------------------------------------------------------------
 
@@ -2381,18 +2382,19 @@ test('S3-U3: a reader who asked for less movement gets the mark without the move
   } finally { f.restore(); }
 });
 
-test('S3-U4: the ink on the fill follows the base, and is not a token anyone can take apart', () => {
-  const light = mountPanel({ instrument: true, setup: twoBlocks, theme: 'light' });
-  try {
-    assert.match(panelCSS(light), /\.tb-badge\.tb-unread[\s\S]{0,200}?color:\s*#ffffff\s*!important/,
-      'white on the light fill');
-  } finally { light.restore(); }
-  const dark = mountPanel({ instrument: true, setup: twoBlocks, theme: 'dark' });
-  try {
-    assert.match(panelCSS(dark), /\.tb-badge\.tb-unread[\s\S]{0,200}?color:\s*#000000\s*!important/,
-      'black on the darker one');
-    assert.doesNotMatch(panelCSS(dark), /--tb-unread-(ink|fg|text)/, 'and no new token was published for it');
-  } finally { dark.restore(); }
+test('S3-U4: the ink on the fill is black on both bases, and is not a token anyone can take apart', () => {
+  // It used to follow the base — white on light, black on dark. Measured against the fills it was on,
+  // white was the weaker half everywhere: 2.7:1 on the light orange where black reads 7.7:1. So the
+  // ink is one colour now. Still not a token: the fill and its ink are legible as a PAIR, and a token
+  // would offer callers a way to break the pairing while leaving the fill in place.
+  for (const base of ['light', 'dark']) {
+    const f = mountPanel({ instrument: true, setup: twoBlocks, theme: base });
+    try {
+      assert.match(panelCSS(f), /\.tb-badge\.tb-unread[\s\S]{0,200}?color:\s*#000000\s*!important/,
+        `black on the ${base} fill`);
+      assert.doesNotMatch(panelCSS(f), /--tb-unread-(ink|fg|text)/, 'and no new token was published for it');
+    } finally { f.restore(); }
+  }
 });
 
 // ---- what the change must NOT reach ---------------------------------------------------------------
@@ -2408,11 +2410,20 @@ test('L3-1: changing what unread looks like moves nothing else', () => {
   } finally { f.restore(); }
 });
 
-test('L3-2: unread is not in the palettes yet — that is a later version\'s question', () => {
-  const f = mountPanel({ instrument: true, setup: twoBlocks, theme: 'ocean' });
-  try {
-    assert.match(panelCSS(f), /--tb-unread:\s*#ef7f0e/, 'a palette leaves the mark alone');
-  } finally { f.restore(); }
+test('L3-2: a palette brings its own unread fill, one value per base', () => {
+  // Unread used to be the same orange under every palette. It is chosen per palette now, because the
+  // fill has to stay apart from the colour of whoever spoke last — and that colour is the palette's
+  // business. The two values per palette are the light base and the dark one.
+  //
+  // (The theme SWITCH that cycles palettes is not reachable here — this mounts the palette's token map
+  // directly, which is the same map the switch applies. The cycling itself is checked on real hardware.)
+  for (const [base, prefersDark, expected] of [['light', false, '#1ad411'], ['dark', true, '#4bf042']]) {
+    const f = mountPanel({ instrument: true, setup: twoBlocks, theme: paletteTheme('ocean', prefersDark) });
+    try {
+      assert.match(panelCSS(f), new RegExp(`--tb-unread:\\s*${expected}`), `ocean's fill on the ${base} base`);
+      assert.match(panelCSS(f), /--tb-accent:\s*#1d9bf0/, "and the rest of the palette is still the palette's");
+    } finally { f.restore(); }
+  }
 });
 
 test('L3-3: a caller can still say what the mark should look like', () => {
@@ -2564,3 +2575,111 @@ test('D4: with no lane, the document thread is an ordinary Pane and behaves like
 // E4 (a save that fails is reported) is fixed where the failure happens — see unread.test
 // 'a failed save does not undo what the reader did', which asserts the STORAGE_SAVE_FAILED code. The
 // panel adds nothing to that path, so a second copy here would only restate it further from the fact.
+
+// ---- the gesture that opens a pane on plain prose ------------------------------------------------
+//
+// A pane opens on the right button's RELEASE, not on `contextmenu`: the release is the first moment it
+// is known that this was a click and not the start of a region drag. Nothing here was reachable by the
+// browser automation used for release checks — automation's right-click does not emit the pointer pair
+// — so the DECISION had no test and was verified by hand, twice. It has one now; what still needs a
+// person is a real pointer, which is a different claim.
+
+test('panel: a right-button press and release on prose, with no movement, opens the pane', () => {
+  const f = mountPanel({ setup: twoBlocks });
+  try {
+    const p = f.doc.querySelector('#b1') || f.root.children[0];
+    const fire = (type, buttons) =>
+      p.dispatchEvent({ type, button: 2, buttons, clientX: 12, clientY: 14, pointerId: 7 });
+    fire('pointerdown', 2);
+    assert.equal(f.doc.querySelector('.tb-pane'), null, 'not on the press — a drag could still start');
+    fire('pointerup', 0);
+    const pane = f.doc.querySelector('.tb-pane');
+    assert.ok(pane, 'on the release');
+    assert.equal(f.doc.querySelectorAll('.tb-draw').length, 0, 'and nothing was drawn');
+  } finally { f.restore(); }
+});
+
+test('panel: what that pane saves is a comment on the block, with a mark to show it', () => {
+  const f = mountPanel({ setup: twoBlocks });
+  try {
+    const p = f.doc.querySelector('#b1') || f.root.children[0];
+    const fire = (type, buttons) =>
+      p.dispatchEvent({ type, button: 2, buttons, clientX: 12, clientY: 14, pointerId: 8 });
+    fire('pointerdown', 2); fire('pointerup', 0);
+    const ta = f.doc.querySelector('.tb-pane').querySelector('textarea');
+    ta.value = 'from the gesture'; ta.dispatchEvent({ type: 'input' });
+    // scoped to the pane: the DocumentBar has a composer of its own, and its save button comes first
+    // in document order — a document-wide lookup would press the wrong one.
+    f.doc.querySelector('.tb-pane').querySelector('.tb-save').click();
+    assert.equal(f.core.listComments().length, 1, 'one comment');
+    assert.equal(f.core.listComments()[0].body, 'from the gesture');
+    assert.equal(f.core.listComments()[0].anchor.type, 'block', 'anchored to the block, no selection being made');
+    assert.equal(f.badges().length, 1, 'and a mark on the page');
+  } finally { f.restore(); }
+});
+
+test('panel: the same press, MOVED, is a region instead — one input, two outcomes', () => {
+  // The pair for the test above: if the pane opened on the press, this would be a pane over a
+  // half-drawn rectangle. The threshold is what tells them apart, and it is only known on the way up.
+  const f = mountPanel({ setup: twoBlocks });
+  try {
+    const p = f.doc.querySelector('#b1') || f.root.children[0];
+    const fire = (type, x, y, buttons) =>
+      p.dispatchEvent({ type, button: 2, buttons, clientX: x, clientY: y, pointerId: 9 });
+    // In the order a browser sends them: `contextmenu` arrives on the button going DOWN, before
+    // anything can be known about movement. Opening the pane there is what this design rejects — it
+    // put a pane over a half-drawn rectangle — so the event belongs in this test rather than out of it.
+    p.dispatchEvent({ type: 'contextmenu', button: 2, clientX: 10, clientY: 10, preventDefault() {} });
+    fire('pointerdown', 10, 10, 2);
+    fire('pointermove', 90, 70, 2);
+    assert.equal(f.doc.querySelectorAll('.tb-draw').length, 1, 'a rectangle is being drawn');
+    assert.equal(f.doc.querySelector('.tb-pane'), null, 'and no pane opened on the way');
+  } finally { f.restore(); }
+});
+
+// ---- the console's width, and the room the bar is left with ------------------------------------
+//
+// The console is shrink-to-fit and one of its children is a sentence, so its width used to be the
+// length of that sentence — about twice what its buttons need. Everything to its left pays for that:
+// the document bar reserves the console's measured width, so a wide console is a narrow bar, and on a
+// narrow window the bar stops being wide enough to type into and steps above instead.
+
+test('the console is capped so its hint wraps rather than setting the width', () => {
+  const f = mountPanel({ instrument: true, setup: twoBlocks });
+  try {
+    const css = unreadRule(panelCSS(f), '.tb-console');
+    assert.match(css, /max-width:\s*200px/, 'the box is capped');
+    // and the cap is on the box, not on the hint — the hint has to be allowed to wrap, not be clipped
+    const hint = unreadRule(panelCSS(f), '.tb-console-hint');
+    assert.doesNotMatch(hint, /white-space:\s*nowrap/, 'nothing stops the hint wrapping');
+    assert.doesNotMatch(hint, /overflow:\s*hidden/, 'and it is not cut off either');
+  } finally { f.restore(); }
+});
+
+test('the bar re-places itself when the console changes size, not only when the window does', () => {
+  // The reservation is a measurement, and it was taken on window events alone. A label switching
+  // language, a count reaching two digits or a webfont arriving after mount all change the console's
+  // width with no resize and no scroll — and the bar kept the right edge it had computed for a console
+  // that no longer existed.
+  const observed = [];
+  const savedRO = globalThis.ResizeObserver;
+  globalThis.ResizeObserver = class {
+    constructor(cb) { this.cb = cb; }
+    observe(el) { observed.push({ el, cb: this.cb }); }
+    disconnect() { this.disconnected = true; }
+  };
+  try {
+    const f = mountPanel({ setup: twoBlocks });
+    try {
+      const consoleEl = f.doc.querySelector('.tb-console');
+      const watching = observed.find((o) => o.el === consoleEl);
+      assert.ok(watching, 'the console itself is watched');
+      // firing it must not throw, and must go through the placement path (which sets the reservation)
+      assert.doesNotThrow(() => watching.cb([]), 'a console resize re-places the bar');
+      const lane = f.lane();
+      assert.ok(lane.style.getPropertyValue('--tb-console-reserve'), 'the reservation was written');
+    } finally { f.restore(); }
+  } finally {
+    if (savedRO === undefined) delete globalThis.ResizeObserver; else globalThis.ResizeObserver = savedRO;
+  }
+});

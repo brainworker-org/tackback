@@ -1,7 +1,7 @@
 // node:test — the three customization axes: theming, reactions, i18n (pure logic).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveTheme, buildThemeCSS, LIGHT, DARK, TOKENS, PALETTES } from '../src/panel/theme.js';
+import { resolveTheme, buildThemeCSS, buildUnreadInkCSS, paletteTheme, LIGHT, DARK, TOKENS, PALETTES } from '../src/panel/theme.js';
 import { DEFAULT_REACTIONS, resolveReaction } from '../src/panel/reactions.js';
 import { LocaleRegistry } from '../src/panel/i18n.js';
 
@@ -91,4 +91,54 @@ test('LocaleRegistry: registerLocale adds a custom language', () => {
   assert.equal(r.setLocale('fr'), true);
   assert.equal(r.t('pane.save'), 'Enregistrer');
   assert.equal(r.t('pane.cancel'), 'Cancel');   // missing key → default bundle
+});
+
+// ---- the unread fill, per palette and per base (D-087 / D-088) ---------------------------------
+
+test('every palette names its own unread fill, and the two bases get different values', () => {
+  // Chosen by looking at three marks side by side: unread, and the two speaker colours an
+  // integration supplies (AI and human). Sharing one orange across every palette put the mark too
+  // near one of the other two in some of them.
+  const expected = {
+    ocean: { light: '#1ad411', dark: '#4bf042' },
+    passion: { light: '#11d490', dark: '#42f0b3' },
+    ochre: { light: '#d48511', dark: '#f0a942' },
+  };
+  for (const [key, want] of Object.entries(expected)) {
+    assert.equal(paletteTheme(key, false)['--tb-unread'], want.light, `${key} on the light base`);
+    assert.equal(paletteTheme(key, true)['--tb-unread'], want.dark, `${key} on the dark base`);
+    // the rest of the palette is untouched by this — the fill is added, nothing is replaced
+    for (const [token, value] of Object.entries(PALETTES[key])) {
+      assert.equal(paletteTheme(key, false)[token], value, `${key} keeps ${token}`);
+    }
+  }
+});
+
+test('PALETTES itself stays a flat map of token → value', () => {
+  // The unread fill lives beside it rather than in it, because a palette entry is fed straight to
+  // resolveTheme as a token map and this one token has two values. A nested value here would reach
+  // the CSS as "[object Object]".
+  for (const map of Object.values(PALETTES)) {
+    for (const value of Object.values(map)) assert.equal(typeof value, 'string');
+    assert.equal('--tb-unread' in map, false, 'the two-valued one is not in here');
+  }
+});
+
+test('an unknown palette name applies nothing rather than half of something', () => {
+  assert.equal(paletteTheme('no-such-palette', false), 'auto');
+});
+
+test('the unread ink is black, whatever the base and whatever the palette', () => {
+  const light = buildUnreadInkCSS();
+  assert.match(light, /color:\s*#000000\s*!important/);
+  assert.doesNotMatch(light, /#ffffff/, 'the white it used to emit on the light base is gone');
+  // one rule, naming both places a fill appears
+  assert.match(light, /\.tb-badge\.tb-unread/);
+  assert.match(light, /\.tb-docbar\.tb-unread \.tb-docbar-count/);
+});
+
+test('a caller overriding the unread fill still wins over a palette', () => {
+  // The door F6 opened stays open: a palette is a base to layer on, not a lid.
+  const tokens = resolveTheme({ ...paletteTheme('ocean', false), '--tb-unread': '#123456' }, false);
+  assert.equal(tokens['--tb-unread'], '#123456');
 });
