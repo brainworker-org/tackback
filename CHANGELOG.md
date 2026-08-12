@@ -33,10 +33,9 @@ Nothing renamed, nothing removed, no new options.
   copy. Three are kept per document, oldest dropped first; one document's trouble never evicts
   another's; a new record always sorts after the ones already kept — including past the tenth in one
   millisecond, where a plain decimal suffix would have sorted `-10` before `-2` and thrown the newest
-  away — so two landing in the same instant neither overwrite each other nor push the newer one out;
-  and the copy is
-  written before anything is evicted, so storage refusing the write (a quota, typically) costs you the
-  new record rather than an old one. Whatever the adapter threw is reported as `STORAGE_LOAD_FAILED`
+  away — so two landing in the same instant neither overwrite each other nor push the newer one out; and
+  the copy is written before anything is evicted, so storage refusing the write (a quota, typically)
+  costs you the new record rather than an old one. Whatever the adapter threw is reported as `STORAGE_LOAD_FAILED`
   with the original as `cause` — an adapter's own choice of code does not become a route this library
   says is impossible. Nothing about this is a promise to build on: it is what the default adapter does
   with a record it cannot parse, and the contract remains the error event.
@@ -781,7 +780,8 @@ Initial public-prep release (staging). Standalone extraction of the Tackback lib
 - [PolyForm Shield License 1.0.0](https://polyformproject.org/licenses/shield/1.0.0): free for any use
   including commercial, except to provide a product that competes with Tackback.
 
-[Unreleased]: https://github.com/brainworker-org/tackback/compare/v0.9.8...HEAD
+[Unreleased]: https://github.com/brainworker-org/tackback/compare/v0.9.10...HEAD
+[0.9.10]: https://github.com/brainworker-org/tackback/releases/tag/v0.9.10
 [0.9.9]: https://github.com/brainworker-org/tackback/releases/tag/v0.9.9
 [0.9.8]: https://github.com/brainworker-org/tackback/releases/tag/v0.9.8
 [0.9.7]: https://github.com/brainworker-org/tackback/releases/tag/v0.9.7
