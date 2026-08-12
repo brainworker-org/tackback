@@ -184,7 +184,9 @@ class TackbackInstance {
         // synchronous adapter finishes loading inside the constructor, before the caller has had a
         // chance to subscribe — reporting there would mean the only listeners who could hear about
         // corrupt stored data are the ones who did not exist yet.
-        for (const fault of this._loadFaults.splice(0)) this._fail(fault.code || 'IMPORT_ENTRY_DROPPED', fault.message);
+        // `_failAs`, not `_fail`: a fault may carry the error it came from, and `_fail` would emit THAT
+        // error — putting its code on the wire in place of the one this situation owns.
+        for (const fault of this._loadFaults.splice(0)) this._failAs(fault.code || 'IMPORT_ENTRY_DROPPED', fault.message, fault.cause);
         // One look, armed before `ready` and taken after it: whatever was restored as unread reaches a
         // subscriber as an ordinary report rather than as a special case for starting up.
         this._scheduleVisibility();
@@ -1161,8 +1163,14 @@ class TackbackInstance {
   _unreadable(err) {
     const e = /** @type {any} */ (err);
     this._loadFaults.push({
-      code: e instanceof TackbackError ? e.code : 'STORAGE_LOAD_FAILED',
+      // ALWAYS this code, whatever came back. An adapter is a caller's own object and may throw any
+      // TackbackError it likes — READ_ONLY, ADAPTER_FAILED — and passing that code on would announce
+      // a route this library documents as impossible (READ_ONLY is only ever thrown, at the caller who
+      // asked for a write). What happened here is one thing: the stored document could not be read.
+      // The original survives as `cause`, which is where a caller looks for the detail.
+      code: 'STORAGE_LOAD_FAILED',
       message: e?.message || 'stored document could not be read; starting with nothing',
+      cause: err,
     });
     return null;
   }

@@ -263,3 +263,79 @@ test('D-086: a document that reads fine is never set aside', async () => {
     tb.destroy();
   });
 });
+
+// ---- what an adapter's own failure may and may not put on the wire -----------------------------
+
+test('D-086: an adapter throwing SOME OTHER code is still reported as STORAGE_LOAD_FAILED', async () => {
+  // An adapter is the caller's object and may throw any TackbackError it likes. Passing its code
+  // through would announce a route this library documents as impossible — READ_ONLY is only ever
+  // THROWN, at whoever asked for a write — and a caller branching on the documented routes would be
+  // handed a code that cannot happen. One situation, one code; the original goes in `cause`.
+  const errors = [];
+  const adapter = {
+    load: () => { throw new TackbackError('READ_ONLY', 'this adapter refuses reads today'); },
+    save: () => {},
+  };
+  const tb = Tackback.mount({ document: { id: 'other-code' }, storage: adapter });
+  tb.on('error', (e) => errors.push(e));
+  await tb.ready; await settle();
+  assert.deepEqual(errors.map((e) => e.code), ['STORAGE_LOAD_FAILED'], 'the situation owns the code');
+  assert.equal(/** @type any */ (errors[0].cause)?.code, 'READ_ONLY', 'and the original is kept as cause');
+  assert.deepEqual(tb.listComments(), [], 'still starts fresh');
+  tb.destroy();
+});
+
+test('D-086: a set-aside write that fails loses nothing that was already set aside', async () => {
+  // The eviction used to run BEFORE the write, and the write is exactly what fails when storage is
+  // full: the oldest record was already gone and the new one never arrived. Three became two, and the
+  // two were the wrong two — the loss was permanent and silent.
+  await withLocalStorage(async (items) => {
+    for (let i = 1; i <= 3; i++) items.set(`tackback:broken:full-doc:2026-08-1${i}T00:00:00.000Z`, `{kept ${i}`);
+    items.set('tackback::full-doc', '{not json');
+    const before = asideKeys(items);
+    assert.equal(before.length, 3, 'three are already set aside');
+
+    // storage refuses new keys from here on, the way a quota does
+    const realSet = globalThis.localStorage.setItem;
+    globalThis.localStorage.setItem = () => { throw new Error('QuotaExceededError'); };
+    const errors = [];
+    let tb;
+    try {
+      assert.doesNotThrow(() => { tb = Tackback.mount({ document: { id: 'full-doc' } }); });
+      tb.on('error', (e) => errors.push(e));
+      await tb.ready; await settle();
+    } finally { globalThis.localStorage.setItem = realSet; }
+
+    assert.deepEqual(asideKeys(items), before, 'all three are still there — nothing was evicted for a write that failed');
+    assert.equal(items.get('tackback::full-doc'), '{not json', 'and the live record was not thrown away either');
+    assert.deepEqual(errors.map((e) => e.code), ['STORAGE_LOAD_FAILED'], 'the reader is still told');
+    tb.destroy();
+  });
+});
+
+test('D-086: records set aside within the same millisecond do not overwrite each other', async () => {
+  // The key was the instant, and an instant is not unique: two failures in one tick — or a clock that
+  // does not advance between them — wrote the same key twice and the second replaced the first. Three
+  // unreadable documents, one kept, no sign that two were gone.
+  await withLocalStorage(async (items) => {
+    const RealDate = globalThis.Date;
+    const FROZEN = '2026-08-12T05:00:00.000Z';
+    // @ts-ignore — a clock that never moves, which is the whole point
+    globalThis.Date = class extends RealDate { toISOString() { return FROZEN; } };
+    try {
+      for (let i = 1; i <= 3; i++) {
+        items.set('tackback::tick-doc', `{broken ${i}`);
+        const tb = Tackback.mount({ document: { id: 'tick-doc' } });
+        await tb.ready; await settle(4);
+        tb.destroy();
+      }
+    } finally { globalThis.Date = RealDate; }
+
+    const aside = asideKeys(items);
+    assert.equal(aside.length, 3, `three distinct records were kept, not one (${aside.join(', ')})`);
+    assert.deepEqual(aside.map((k) => items.get(k)).sort(), ['{broken 1', '{broken 2', '{broken 3'],
+      'and each one is its own bytes');
+    // and they still sort oldest-first, which is what the FIFO reads
+    assert.deepEqual([...aside], [...aside].sort(), 'the suffix keeps the order readable');
+  });
+});

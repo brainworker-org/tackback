@@ -97,10 +97,12 @@ import { TackbackError } from './errors.js';
 
 const ASIDE = 'tackback:broken:';
 const ASIDE_KEEP = 3;                       // per document — one document's trouble may not evict another's
-// The stamp is an ISO 8601 instant, which sorts oldest-first as plain text. Taking it OFF is how a key
-// is attributed to a document: an id may itself contain ':' (a caller's own `storageKey` can be
-// anything), so splitting on ':' would put `a:b`'s records in `a`'s group.
-const STAMP = /:\d{4}-\d{2}-\d{2}T[\d:.]+Z$/;
+// The stamp is an ISO 8601 instant, optionally followed by `-<n>` when two records land in the same
+// millisecond. Both sort oldest-first as plain text (`Z` sorts before `Z-`), which is what the FIFO
+// reads. Taking the stamp OFF is how a key is attributed to a document: an id may itself contain ':'
+// (a caller's own `storageKey` can be anything), so splitting on ':' would put `a:b`'s records in
+// `a`'s group.
+const STAMP = /:\d{4}-\d{2}-\d{2}T[\d:.]+Z(?:-\d+)?$/;
 
 /**
  * @param {Storage} ls
@@ -117,18 +119,31 @@ function setAside(ls, key, raw) {
     // Enumeration is how the FIFO stays honest — an index kept alongside can disagree with the keys
     // themselves. An adapter-like object without it (some test doubles) still gets the record set
     // aside; only the trimming is skipped.
-    if (typeof ls.length === 'number' && typeof ls.key === 'function') {
-      const mine = [];
+    const enumerable = typeof ls.length === 'number' && typeof ls.key === 'function';
+    const mine = () => {
+      const out = [];
       for (let i = 0; i < ls.length; i++) {
         const k = ls.key(i);
-        if (k && k.startsWith(ASIDE) && STAMP.test(k) && k.replace(STAMP, '') === group) mine.push(k);
+        if (k && k.startsWith(ASIDE) && STAMP.test(k) && k.replace(STAMP, '') === group) out.push(k);
       }
-      mine.sort();
-      // Down to KEEP-1 BEFORE writing, so the fourth record removes the oldest and the count never
-      // stands at four.
-      while (mine.length >= ASIDE_KEEP) ls.removeItem(/** @type string */(mine.shift()));
+      return out.sort();
+    };
+    // A stamp is only unique if nothing else landed in the same millisecond. Two failures inside one
+    // tick — or any environment whose clock does not advance between them — wrote the same key twice,
+    // and the second silently replaced the first: three unreadable records, one kept.
+    let at = `${group}:${new Date().toISOString()}`;
+    if (enumerable || typeof ls.getItem === 'function') {
+      for (let n = 2; ls.getItem(at) != null; n++) at = `${at.replace(/-\d+$/, '')}-${n}`;
     }
-    ls.setItem(`${group}:${new Date().toISOString()}`, raw);
+    // WRITE FIRST, and only then make room. The other order lost data for real: the eviction had
+    // already happened when the write failed (a quota is exactly when this runs), so the oldest record
+    // was gone and the new one was never stored. Standing at four for an instant is the cheaper fault.
+    ls.setItem(at, raw);
+    if (enumerable) {
+      const kept = mine();
+      while (kept.length > ASIDE_KEEP) ls.removeItem(/** @type string */(kept.shift()));
+    }
+    // Last, because it is the only copy until the line above has succeeded.
     ls.removeItem(key);
   } catch { /* the record stays where it is; the caller is still told it could not be read */ }
 }

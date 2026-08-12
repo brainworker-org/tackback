@@ -31,8 +31,12 @@ Nothing renamed, nothing removed, no new options.
   The unreadable bytes are **kept**. They are moved to `tackback:broken:<document>:<when>` before the
   report, so "cannot be read" does not also mean "gone" and the next save does not write over the only
   copy. Three are kept per document, oldest dropped first; one document's trouble never evicts
-  another's. Nothing about this is a promise to build on — it is what the default adapter does with a
-  record it cannot parse, and the contract remains the error event.
+  another's; two records landing in the same millisecond do not overwrite each other; and the copy is
+  written before anything is evicted, so storage refusing the write (a quota, typically) costs you the
+  new record rather than an old one. Whatever the adapter threw is reported as `STORAGE_LOAD_FAILED`
+  with the original as `cause` — an adapter's own choice of code does not become a route this library
+  says is impossible. Nothing about this is a promise to build on: it is what the default adapter does
+  with a record it cannot parse, and the contract remains the error event.
 
 - **The document bar and the panel no longer crowd each other on a narrow window.** Two things were
   wrong. The panel is shrink-to-fit and one of its children is a sentence, so its width was the length
