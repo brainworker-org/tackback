@@ -1635,8 +1635,14 @@ function el(doc, tag, cls) { const e = doc.createElement(tag); if (cls) e.classN
 function btn(doc, text, cls) { const b = el(doc, 'button', cls); b.textContent = text; return b; }
 /**
  * Give a host element a positioning context so an absolutely-placed overlay lands inside it. The
- * element belongs to the host, so the write is recorded and handed back: restored only if it is still
- * the value we wrote, because the host may have set its own since.
+ * element belongs to the host, so the write is recorded and handed back on teardown.
+ *
+ * What the restore actually guarantees: it puts back the inline value captured before the write, and
+ * only when the inline value is STILL `relative`. A different inline value is left alone. What it does
+ * NOT do is tell whose `relative` it is — a CSS declaration carries no writer — so a host that sets
+ * `position: relative` on this element while Tackback is mounted will find that value cleared on
+ * destroy. Guessing by value cannot fix that; not touching the host's style can, and that is the
+ * direction the fix will take.
  */
 function ensurePositioned(elx, own) {
   const pos = getComputedStyle(elx).position;
