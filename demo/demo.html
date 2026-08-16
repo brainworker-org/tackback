@@ -202,6 +202,39 @@
     window.requestAnimationFrame = (cb) => setTimeout(() => cb(performance.now()), 0);
   }
 
+  // ?zoom-probe — a verification affordance, absent unless asked for. A device pass for anchor
+  // behaviour under pinch is mostly a check that NOTHING happens: the badge stays welded, nothing
+  // flickers, nothing swims. A pinch that turns into a pan produces exactly that reading, and the
+  // run passes without having tested anything. So the probe says, on the glass, whether a zoom has
+  // actually happened yet — red until it has, green with the numbers once it has.
+  //
+  // Zoom is not scale alone: a device can zoom with visualViewport.width moving while scale stays
+  // at 1.0000, and a scale-only detector then tells the person holding the phone that a good
+  // gesture failed. Either moving counts.
+  if (new URLSearchParams(location.search).has('zoom-probe') && window.visualViewport) {
+    const vv = window.visualViewport;
+    const box = document.createElement('div');
+    // fixed on purpose: a pinch does not carry fixed elements, so the readout stays legible while
+    // everything it is describing is being scaled.
+    box.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:2147483647;padding:6px 8px;' +
+      'font:700 13px/1.35 ui-monospace,Menlo,monospace;color:#fff;background:#b00020';
+    box.textContent = `v${Tackback.version} — ZOOM NOT DETECTED, pinch out until this turns green`;
+    document.body.appendChild(box);
+    let sMin = vv.scale, sMax = vv.scale, wMin = vv.width, wMax = vv.width;
+    const update = () => {
+      sMin = Math.min(sMin, vv.scale); sMax = Math.max(sMax, vv.scale);
+      wMin = Math.min(wMin, vv.width); wMax = Math.max(wMax, vv.width);
+      const ds = +(sMax - sMin).toFixed(4), dw = +(wMax - wMin).toFixed(2);
+      if (ds >= 0.01 || dw >= 1) {
+        box.style.background = '#0a7b34';
+        box.textContent = `v${Tackback.version} — zoom OK: scale ${sMin.toFixed(4)}..${sMax.toFixed(4)} | ` +
+          `width ${wMin.toFixed(0)}..${wMax.toFixed(0)}px (now ${vv.scale.toFixed(4)})`;
+      }
+    };
+    vv.addEventListener('resize', update);
+    vv.addEventListener('scroll', update);
+  }
+
   // ── config ────────────────────────────────────────────────────────────────────────────────────
   const PDFJS_VER = '4.0.379';                  // pinned to the version this adapter is validated against
   const CDN = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VER}`;
@@ -241,6 +274,27 @@
     mediaAdapters: pdf ? [pdf] : [],
   });
 
+  // ?seed — a verification affordance, absent unless asked for. A phone cannot right-click or
+  // right-drag, so a device pass that has to CREATE an anchor before it can look at one is a device
+  // pass that cannot start. This plants one of each kind, once, so the page has something to pinch
+  // at. It only fires on an empty document: a second load must not stack a second set.
+  const seedAnchors = () => {
+    if (!new URLSearchParams(location.search).has('seed')) return;
+    if (tb.listComments().length > 0) return;
+    const paras = [...document.querySelectorAll('p')].filter((el) => (el.textContent || '').length > 120);
+    const [pBlock, pRange] = paras;
+    if (!pBlock || !pRange) return;
+    if (!pBlock.id) pBlock.id = 'seed-block';
+    if (!pRange.id) pRange.id = 'seed-range';
+    const phrase = (pRange.textContent || '').trim().split(/\s+/).slice(2, 6).join(' ');
+    const seeds = [
+      { anchor: { type: 'block', elementId: pBlock.id }, body: 'A block anchor, for the device pass.' },
+      { anchor: { type: 'range', elementId: pRange.id, selector: { exact: phrase } }, body: 'A range anchor, for the device pass.' },
+      { anchor: { type: 'region', surfaceId: 'figure-0', rect: { x: 0.15, y: 0.2, width: 0.4, height: 0.5 } }, body: 'A region anchor, for the device pass.' },
+    ];
+    for (const s of seeds) { try { tb.addComment(s); } catch (e) { console.warn('seed skipped', s.anchor.type, e); } }
+  };
+
   // A REPLACEMENT reaction set — deliberately nothing like the built-in one (👍 / 👎 / ❓). The set is
   // yours: its size, its ids, its icons and its per-locale labels. Comments store the `id`, so an
   // integrator can swap icons freely without touching stored data.
@@ -277,6 +331,7 @@
     });
   }
   attach();
+  seedAnchors();   // ?seed only: gives a phone something to look at, since it cannot right-click
 
   // PDF zoom controls + status (only meaningful when the adapter loaded)
   if (pdf) {

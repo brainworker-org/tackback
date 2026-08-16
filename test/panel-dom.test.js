@@ -186,6 +186,8 @@ function instrumentEnv({ noRaf = false } = {}) {
       remove: (t, fn) => m.set(t, (m.get(t) || []).filter((f) => f !== fn)),
       count: () => [...m.values()].reduce((n, a) => n + a.length, 0),
       identity: () => [...m.entries()].flatMap(([t, a]) => a.map((f) => `${t}:${idOf(f)}`)).sort(),
+      // Counting listeners says they were attached; firing one says what happens when it goes off.
+      fire: (t, ev) => (m.get(t) || []).slice().forEach((fn) => fn(ev || { type: t })),
     };
   };
   const env = { frames: new Map(), timers: new Map(), observers: new Set(), ran: [], micro: [], handlerErrors: [] };
@@ -2682,4 +2684,392 @@ test('the bar re-places itself when the console changes size, not only when the 
   } finally {
     if (savedRO === undefined) delete globalThis.ResizeObserver; else globalThis.ResizeObserver = savedRO;
   }
+});
+
+// ---- G-A: badge placement, pinned to the number ------------------------------------------------
+// A characterization fixture. It does not say the coordinates are RIGHT; it says they are what they
+// are today, so a change that moves a badge cannot pass unnoticed. Every input is declared here — no
+// font, no DPR, no real layout — because the thing being pinned is the CALCULATION, and a fixture
+// that depended on a machine could not fail for the right reason.
+const PLACEMENT_GEOMETRY = {
+  root:    { left: 0,   top: 0,   right: 800, bottom: 2000, width: 800, height: 2000 },
+  p1:      { left: 40,  top: 120, right: 560, bottom: 168,  width: 520, height: 48  },
+  p2:      { left: 40,  top: 200, right: 560, bottom: 248,  width: 520, height: 48  },
+  surf:    { left: 40,  top: 300, right: 440, bottom: 600,  width: 400, height: 300 },
+  badge:   { left: 0,   top: 0,   right: 24,  bottom: 16,   width: 24,  height: 16  },
+  range:   { left: 120, top: 204, right: 268, bottom: 236,  width: 148, height: 32  },
+};
+const PLACEMENT_SURFACE_BOX = { clientWidth: 400, clientHeight: 300 };
+const PLACEMENT_REGION_RECT = { x: 0.15, y: 0.2, width: 0.4, height: 0.5 };
+
+// Taken from v0.9.10 on 2026-08-15 with the geometry above. Each row is one of the five coordinate
+// sources the placement code has today; the numbers below are what each of them produces:
+//   c-block   element rect      (index.js:628) -> right/top of p1        = 560/120
+//   c-range   live Range rect   (index.js:644) -> right/top of the range = 268/204
+//   c-drift   element rect      (index.js:650) -> the range no longer resolves, so p2's own box
+//   c-orphan  the orphan spot   (index.js:650) -> nothing left to point at
+//   c-region  normalized x size (index.js:690) -> (0.15+0.4)*400 / (0.2+0.5)*300, INSIDE the surface
+const PLACEMENT_BASELINE_0_9_10 = [
+  { anchor: 'block',  id: 'c-block',  parent: 'root', left: '560px', top: '120px', floating: false },
+  { anchor: 'range',  id: 'c-drift',  parent: 'root', left: '560px', top: '200px', floating: false },
+  { anchor: 'block',  id: 'c-orphan', parent: 'root', left: '8px',   top: '8px',   floating: false },
+  { anchor: 'range',  id: 'c-range',  parent: 'root', left: '268px', top: '204px', floating: false },
+  { anchor: 'region', id: 'c-region', parent: 'surf', left: '220px', top: '210px', floating: true  },
+];
+
+const stampRect = (el, r) => { el.getBoundingClientRect = () => ({ ...r }); };
+
+function placementOptions() {
+  return ({
+    comments: [
+      { ...docComment(), id: 'c-block', anchor: { type: 'block', elementId: 'p1' } },
+      { ...docComment(), id: 'c-range', anchor: { type: 'range', elementId: 'p2', selector: { exact: 'pinned phrase' } } },
+      { ...docComment(), id: 'c-region', anchor: { type: 'region', surfaceId: 's1', rect: { ...PLACEMENT_REGION_RECT } } },
+      // the two remaining coordinate sources: a range whose text has drifted (falls to the ELEMENT's
+      // rect) and an anchor whose element is gone entirely (falls to the fixed orphan spot)
+      { ...docComment(), id: 'c-drift', anchor: { type: 'range', elementId: 'p2', selector: { exact: 'a phrase that is not there' } } },
+      { ...docComment(), id: 'c-orphan', anchor: { type: 'block', elementId: 'no-such-element' } },
+    ],
+    setup: (doc, root) => {
+      // The range path walks text nodes and builds a live Range. The fixture has neither, so both are
+      // supplied here — declared inputs like every other number above. What is being pinned is the
+      // step FROM a range's rect TO a badge's left/top, which is exactly the step 0.9.11 rewrites.
+      doc.createTreeWalker = (from) => {
+        const texts = [];
+        (function walk(n) {
+          for (const c of n.children || []) {
+            if (c.nodeType === 3) texts.push(c); else walk(c);
+          }
+        })(from);
+        if (from.nodeType === 3) texts.push(from);
+        let i = -1;
+        return { nextNode: () => (++i < texts.length ? texts[i] : null) };
+      };
+      doc.createRange = () => ({
+        setStart() {}, setEnd() {},
+        getBoundingClientRect: () => ({ ...PLACEMENT_GEOMETRY.range }),
+      });
+      stampRect(root, PLACEMENT_GEOMETRY.root);
+      const p1 = doc.createElement('p'); p1.id = 'p1'; p1.textContent = 'a block anchor lives here';
+      const p2 = doc.createElement('p'); p2.id = 'p2';
+      // a REAL text child (with nodeValue), so the range path walks and resolves rather than falling
+      // back to the element — the fallback is a different coordinate source and would pin the wrong one
+      const t2 = doc.createTextNode('text with a pinned phrase inside it'); t2.nodeValue = t2.textContent;
+      p2.appendChild(t2);
+      const surf = doc.createElement('div'); surf.id = 'surf'; surf.setAttribute('data-tb-surface', 's1');
+      stampRect(p1, PLACEMENT_GEOMETRY.p1);
+      stampRect(p2, PLACEMENT_GEOMETRY.p2);
+      stampRect(surf, PLACEMENT_GEOMETRY.surf);
+      surf.clientWidth = PLACEMENT_SURFACE_BOX.clientWidth;
+      surf.clientHeight = PLACEMENT_SURFACE_BOX.clientHeight;
+      root.appendChild(p1); root.appendChild(p2); root.appendChild(surf);
+    },
+  });
+}
+function placementFixture() { return mountPanel(placementOptions()); }
+
+/** What a badge IS, for the purpose of pinning where it sits: its place, its parent, its origin. */
+const placementOf = (f) => f.badges().map((b) => ({
+  anchor: b.__tbComments?.[0]?.anchor?.type ?? '(none)',
+  id: b.__tbComments?.[0]?.id ?? '(none)',
+  parent: b.parentNode === f.root ? 'root' : (b.parentNode?.id || b.parentNode?.className || '(?)'),
+  left: b.style.left ?? null,
+  top: b.style.top ?? null,
+  // the origin is carried by the class, not by the coordinate — so it belongs in the pin
+  floating: b.classList.contains('tb-floating'),
+})).sort((a, z) => String(a.id).localeCompare(String(z.id)));
+
+test('G-A: where every badge sits is pinned to the number (characterization, pre-0.9.11)', () => {
+  const f = placementFixture();
+  const actual = placementOf(f);
+  if (process.env.TB_PIN_PLACEMENT) { console.log(JSON.stringify(actual, null, 2)); }
+  assert.deepEqual(actual, PLACEMENT_BASELINE_0_9_10,
+    'a badge moved. If that was intended, the change is a VISIBLE one and needs saying so out loud.');
+  f.restore();
+});
+
+// ---- REQ-109 judgment condition (c): a mark is paint, not an overlay -------------------------
+// Three checks, written before deciding whether they could be written. Two fixture facts came out of
+// writing them rather than out of predicting: the fake DOM's selector engine has no `#id` support, and
+// the panel resolves its window as `doc.defaultView || globalThis` (index.js:194) — with no defaultView
+// on the fixture, that is the real global, so the Highlight API has to be stubbed there.
+let markedEls = null;
+const marksOptions = () => ({
+  comments: [
+    { ...docComment(), id: 'm-block', anchor: { type: 'block', elementId: 'p1' } },
+    { ...docComment(), id: 'm-range', anchor: { type: 'range', elementId: 'p2', selector: { exact: 'pinned phrase' } } },
+  ],
+  setup: (doc, root) => {
+    doc.createTreeWalker = (from) => {
+      const texts = [];
+      (function walk(n) { for (const c of n.children || []) { if (c.nodeType === 3) texts.push(c); else walk(c); } })(from);
+      if (from.nodeType === 3) texts.push(from);
+      let i = -1;
+      return { nextNode: () => (++i < texts.length ? texts[i] : null) };
+    };
+    doc.createRange = () => ({ setStart() {}, setEnd() {}, getBoundingClientRect: () => ({ ...PLACEMENT_GEOMETRY.range }) });
+    stampRect(root, PLACEMENT_GEOMETRY.root);
+    const p1 = doc.createElement('p'); p1.id = 'p1'; p1.textContent = 'a block anchor lives here';
+    const p2 = doc.createElement('p'); p2.id = 'p2';
+    const t2 = doc.createTextNode('text with a pinned phrase inside it'); t2.nodeValue = t2.textContent;
+    p2.appendChild(t2);
+    stampRect(p1, PLACEMENT_GEOMETRY.p1);
+    stampRect(p2, PLACEMENT_GEOMETRY.p2);
+    root.appendChild(p1); root.appendChild(p2);
+    markedEls = { p1, p2 };
+  },
+});
+const marksFixture = () => mountPanel(marksOptions());
+
+test('REQ-109(c)-1: a block mark is a class on the host element, not an overlay node', () => {
+  const f = marksFixture();
+  const { p1 } = markedEls;
+  assert.ok(p1.classList.contains('tb-commentable'), 'the host element carries the mark');
+  assert.equal(p1.children.length, 0, 'the marked element gained no child of any kind');
+  f.restore();
+});
+
+test('REQ-109(c)-2: a range mark goes through the highlight registry and adds no node of its own', () => {
+  // The harness already stands in for the CSS Custom Highlight API (instrumentEnv, :193-195), so this
+  // is a contract check rather than a rendering one: WHICH path the mark takes, and what it leaves in
+  // the DOM. Whether the paint looks right is a real browser's business.
+  const f = mountPanel({ ...marksOptions(), instrument: true });
+  const reg = globalThis.CSS.highlights;
+  assert.ok(reg.has('tb-range'), 'the range was registered under the tackback highlight name');
+  const entry = reg.get('tb-range');
+  assert.ok(entry.ranges.length >= 1, 'the registration carries the resolved range(s)');
+  assert.equal(f.doc.querySelectorAll('mark,.tb-highlight').length, 0, 'no mark-only node exists');
+  const before = f.doc.querySelectorAll('*').length;
+  f.core.recalculateAnchors();
+  assert.equal(f.doc.querySelectorAll('*').length, before, 'painting again adds no element');
+  f.panel.destroy();
+  assert.equal(reg.has('tb-range'), false, 'teardown takes the registration back out');
+  f.restore();
+});
+
+test('REQ-109(c)-2b: without the highlight API the mark still creates no node of its own', () => {
+  // paintHighlights declines when the API is absent and the caller degrades to a per-element badge.
+  // The degraded path must not start inserting mark nodes either — that is the half of the condition
+  // a supported-API test cannot see.
+  const hadCSS = 'CSS' in globalThis, hadH = 'Highlight' in globalThis;
+  const prevCSS = globalThis.CSS, prevH = globalThis.Highlight;
+  delete globalThis.CSS; delete globalThis.Highlight;
+  try {
+    const f = mountPanel(marksOptions());
+    assert.equal(f.doc.querySelectorAll('mark,.tb-highlight').length, 0, 'still no mark-only node');
+    f.restore();
+  } finally {
+    if (hadCSS) globalThis.CSS = prevCSS; if (hadH) globalThis.Highlight = prevH;
+  }
+});
+
+test('REQ-109(c)-3: the mark rule can only paint — no box-model property is in it', () => {
+  // Written first as "compare the rect before and after adding the class", which passed and could not
+  // have failed: the fixture's getBoundingClientRect is a stub that never looks at a class, so a
+  // border or a padding added to the rule by mistake would have sailed through. What is checkable
+  // here is the mechanism — the declaration itself. A rule made only of paint properties cannot
+  // change a box, whoever is doing the layout. (Comparing real rects belongs in a browser.)
+  const f = marksFixture();
+  const css = panelCSS(f);
+  const rule = css.split('\n').find((l) => l.trim().startsWith('.tb-commentable {'));
+  assert.ok(rule, 'the mark rule is in the panel stylesheet');
+  const props = rule.slice(rule.indexOf('{') + 1, rule.lastIndexOf('}'))
+    .split(';').map((d) => d.split(':')[0].trim()).filter(Boolean);
+  assert.deepEqual(props.slice().sort(), ['background', 'outline', 'outline-offset'],
+    'the mark paints and does nothing else');
+  const BOX = /^(width|height|margin|padding|border|display|position|float|inset|top|left|right|bottom|box-sizing|transform)/;
+  assert.deepEqual(props.filter((x) => BOX.test(x)), [], 'no box-model property is in the mark rule');
+  f.restore();
+});
+
+test('REQ-109(b): every overlay node the panel renders is taken out of normal flow by its own rule', () => {
+  // "Out of normal flow" is a computed-style fact, and the fixture has no computed style. The
+  // mechanism behind it is checkable though: each overlay node carries a class whose rule declares
+  // position: absolute or fixed. Tying the RENDERED nodes to the rules — rather than checking the
+  // stylesheet alone — is what makes a newly added overlay class fail this instead of slipping past.
+  const f = placementFixture();
+  const css = panelCSS(f);
+  const positioned = new Set();
+  for (const line of css.split('\n')) {
+    const m = line.match(/^\s*([^{]+)\{([^}]*)\}/);
+    if (!m || !/position:\s*(absolute|fixed)/.test(m[2])) continue;
+    for (const sel of m[1].split(',')) {
+      const cls = sel.trim().match(/^\.([\w-]+)$/);
+      if (cls) positioned.add(cls[1]);
+    }
+  }
+  const overlays = f.doc.querySelectorAll('.tb-badge,.tb-region,.tb-pending,.tb-draw');
+  assert.ok(overlays.length >= 3, 'there are overlays to judge');
+  for (const node of overlays) {
+    const classes = [...node.classList];
+    assert.ok(classes.some((c) => positioned.has(c)),
+      `overlay .${classes.join('.')} has no rule taking it out of flow`);
+  }
+  f.restore();
+});
+
+// ---- P-6a / P-11: one geometry path, and every frame of reference named ------------------------
+// Written before the functions exist, so they fail first for the reason they are meant to catch.
+// Loaded here rather than at the top of the file on purpose: a missing export in a top-level import
+// takes the whole file down, and 450 other tests stop reporting for a reason that has nothing to do
+// with them.
+const geometry = async () => {
+  const dom = await import('../src/panel/dom.js');
+  assert.equal(typeof dom.cornerOf, 'function', 'dom.js exports cornerOf');
+  assert.equal(typeof dom.toParentSpace, 'function', 'dom.js exports toParentSpace');
+  return dom;
+};
+
+/** Recompute a badge's placement from its anchor, through the shared functions only. */
+function expectedPlacement({ cornerOf, toParentSpace }, anchor, hostBox, rootBox) {
+  if (anchor.type === 'region') {
+    const px = {
+      left: anchor.rect.x * PLACEMENT_SURFACE_BOX.clientWidth,
+      top: anchor.rect.y * PLACEMENT_SURFACE_BOX.clientHeight,
+      // x + width, each scaled first — the same order regionToPx uses. Scaling the sum instead gives
+      // 220.00000000000003 for this rect, which is a different number to a deepEqual.
+      right: anchor.rect.x * PLACEMENT_SURFACE_BOX.clientWidth + anchor.rect.width * PLACEMENT_SURFACE_BOX.clientWidth,
+      bottom: anchor.rect.y * PLACEMENT_SURFACE_BOX.clientHeight + anchor.rect.height * PLACEMENT_SURFACE_BOX.clientHeight,
+      frame: 'surface-content',
+    };
+    return toParentSpace(cornerOf(px, 'right-bottom'), { x: 0, y: 0, frame: 'surface-content' });
+  }
+  const box = { ...hostBox, frame: 'client' };
+  return toParentSpace(cornerOf(box, 'right-top'), { x: rootBox.left, y: rootBox.top, frame: 'client' });
+}
+
+test('P-6a: block/range and region go through the same geometry, and it returns today\'s numbers', async () => {
+  const g = await geometry();
+  const root = { ...PLACEMENT_GEOMETRY.root };
+  const block = expectedPlacement(g, { type: 'block' }, PLACEMENT_GEOMETRY.p1, root);
+  assert.deepEqual({ x: block.x, y: block.y }, { x: 560, y: 120 }, 'the block badge lands where it does today');
+  const range = expectedPlacement(g, { type: 'range' }, PLACEMENT_GEOMETRY.range, root);
+  assert.deepEqual({ x: range.x, y: range.y }, { x: 268, y: 204 }, 'and so does the range badge');
+  const region = expectedPlacement(g, { type: 'region', rect: PLACEMENT_REGION_RECT }, null, root);
+  assert.deepEqual({ x: region.x, y: region.y }, { x: 220, y: 210 }, 'and the region badge, by the same route');
+});
+
+test('P-11: a frame of reference is part of the value, and mixing two of them is refused', async () => {
+  const { cornerOf, toParentSpace } = await geometry();
+  const client = cornerOf({ left: 0, top: 0, right: 10, bottom: 4, frame: 'client' }, 'right-top');
+  assert.equal(client.frame, 'client', 'the corner keeps the frame its box was in');
+  assert.throws(
+    () => toParentSpace(client, { x: 0, y: 0, frame: 'surface-content' }),
+    /frame/i,
+    'a point in one frame cannot be resolved against an origin in another',
+  );
+});
+
+test('P-11: every badge on the page sits exactly where the shared geometry puts it', async () => {
+  // Any second placement path would have to agree with this one to the pixel to pass.
+  //
+  // What varies between badges is the SOURCE box — a live Range's rect, the element's own rect when
+  // the range no longer resolves, a normalized region against its surface — not the geometry. So the
+  // source is named per anchor here, and the same two functions are applied to all of them.
+  const g = await geometry();
+  const f = placementFixture();
+  const root = { ...PLACEMENT_GEOMETRY.root };
+  const SOURCE = {
+    'c-block': { anchor: { type: 'block' }, box: PLACEMENT_GEOMETRY.p1 },
+    'c-range': { anchor: { type: 'range' }, box: PLACEMENT_GEOMETRY.range },
+    'c-drift': { anchor: { type: 'range' }, box: PLACEMENT_GEOMETRY.p2 },
+    'c-region': { anchor: { type: 'region', rect: PLACEMENT_REGION_RECT }, box: null },
+  };
+  let checked = 0;
+  for (const badge of f.badges()) {
+    const id = badge.__tbComments?.[0]?.id;
+    const src = SOURCE[id];
+    if (!src) continue;                        // c-orphan sits on the fixed fallback spot, not on a box
+    const want = expectedPlacement(g, src.anchor, src.box, root);
+    assert.equal(badge.style.left, `${want.x}px`, `${id} left`);
+    assert.equal(badge.style.top, `${want.y}px`, `${id} top`);
+    checked += 1;
+  }
+  assert.equal(checked, 4, 'a block, a live range, a drifted range and a region were all checked');
+  f.restore();
+});
+
+// ---- P-1 / P-2: a pinch is not a reason to rebuild anything ------------------------------------
+// Red before the visualViewport wiring changes: today every visual-viewport event reaches
+// recalculateAnchors, which tears every badge out of the document and makes new ones.
+const pinchFixture = () => mountPanel({ ...placementOptions(), instrument: true });
+
+test('P-1: a visual-viewport event leaves the badge DOM alone', () => {
+  const f = pinchFixture();
+  const before = f.badges();
+  const marks = before.map((b) => { b.__pinchWitness = {}; return b.__pinchWitness; });
+  const active = before[0];
+  active.setPointerCapture?.(7);
+  f.env.vv.fire('resize');
+  f.env.vv.fire('scroll');
+  f.env.flush();
+  const after = f.badges();
+  assert.equal(after.length, before.length, 'the same number of badges');
+  // Counting is not enough: a full teardown and rebuild produces the same count. The witness is a
+  // property put on the node itself, which only survives if the node itself survived.
+  assert.deepEqual(after.map((b) => b.__pinchWitness), marks, 'every badge is the node it was');
+  assert.ok(f.doc.captures?.has(7), 'a pointer capture in progress was not dropped');
+  f.restore();
+});
+
+test('P-2: a badge holds its place against its own anchor across a visual-viewport event', () => {
+  const f = pinchFixture();
+  const place = () => f.badges().map((b) => `${b.__tbComments?.[0]?.id}:${b.style.left},${b.style.top}`).sort();
+  const before = place();
+  f.env.vv.fire('resize');
+  f.env.vv.fire('scroll');
+  f.env.flush();
+  assert.deepEqual(place(), before, 'nothing moved, because nothing needed to');
+  f.restore();
+});
+
+// ---- P-3 / P-9 / P-12: things this version must not have broken --------------------------------
+// Unlike the pair above, these should be green the moment they are written. A red one here is a
+// finding, not a step: it would mean the aggregation or the wiring change took something with it.
+
+test('P-3: change and recalculateAnchors still resolve anchors again', () => {
+  const f = pinchFixture();
+  const before = f.badges().length;
+  anchorArrives(f, { type: 'block', elementId: 'p2' }, 'a new anchor');
+  f.env.flush();
+  assert.equal(f.badges().length, before + 1, 'a comment arriving adds its badge');
+  const witness = f.badges().map((b) => { b.__reWitness = {}; return b.__reWitness; });
+  f.core.recalculateAnchors();
+  f.env.flush();
+  assert.notDeepEqual(f.badges().map((b) => b.__reWitness), witness,
+    'the escape hatch resolves again — it is not a repaint');
+  f.restore();
+});
+
+test('P-9: the comments a badge carries are the ones its thread has now', async () => {
+  // The right-click delete menu acts on badge.__tbComments. A stale one deletes somebody else's
+  // thread, which is the kind of wrong that looks like it worked.
+  const { threadKeyOf } = await import('../src/core/model.js');
+  const f = pinchFixture();
+  anchorArrives(f, { type: 'block', elementId: 'p1' }, 'a second voice on the same block');
+  f.env.flush();
+  for (const badge of f.badges()) {
+    const carried = badge.__tbComments || [];
+    assert.ok(carried.length > 0, 'a badge carries at least the comment it is for');
+    const key = threadKeyOf(carried[0]);
+    const live = f.core.listComments().filter((c) => threadKeyOf(c) === key);
+    assert.deepEqual(carried.map((c) => c.id).sort(), live.map((c) => c.id).sort(),
+      'the badge carries exactly the thread that is on the document now');
+  }
+  f.restore();
+});
+
+test('P-12: a corrupted coordinate is repaired by one call to the escape hatch', () => {
+  // Rebuilding everything used to be an accidental error-correcting mechanism: whatever went wrong
+  // with a coordinate, the next visual-viewport event threw the node away and computed it afresh.
+  // That accident is gone now, so the property it provided is stated on the entry point that keeps
+  // it — recalculateAnchors, which the spec already calls the explicit escape hatch.
+  const f = pinchFixture();
+  const good = f.badges().map((b) => `${b.__tbComments?.[0]?.id}:${b.style.left},${b.style.top}`).sort();
+  for (const badge of f.badges()) { badge.style.left = '-9999px'; badge.style.top = '4242px'; }
+  f.core.recalculateAnchors();
+  f.env.flush();
+  const after = f.badges().map((b) => `${b.__tbComments?.[0]?.id}:${b.style.left},${b.style.top}`).sort();
+  assert.deepEqual(after, good, 'one call puts every badge back where it belongs');
+  f.restore();
 });

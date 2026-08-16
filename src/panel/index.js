@@ -6,7 +6,7 @@
 import { resolveTheme, buildThemeCSS, buildUnreadInkCSS, paletteTheme } from './theme.js';
 import { DEFAULT_REACTIONS, resolveReaction } from './reactions.js';
 import { LocaleRegistry } from './i18n.js';
-import { indexAnnotatable, resolveAnchorDom, clampToViewport } from './dom.js';
+import { indexAnnotatable, resolveAnchorDom, clampToViewport, cornerOf, toParentSpace } from './dom.js';
 import { computeCapture, resolveRegionRect } from '../core/resolution.js';
 import { classifyGesture, popupCommit, canCommit, nextSendState, answersSend, applyHandleDrag, resolveLaneLayout } from './interaction.js';
 import { actorColorOf as resolveActorColor, claimedColors, authorKey as tbAuthorKey, lastSpeaker } from './actors.js';
@@ -551,8 +551,14 @@ export function attachPanel(core, options = {}) {
   // place a badge on the document surface overlay (absolute within the positioned root) at the
   // top-right of a target rect — NOT inserted into the DOM, so the page layout never shifts.
   function placeBadge(badge, rect, rootRect) {
-    badge.style.left = (rect.right - rootRect.left) + 'px';
-    badge.style.top = (rect.top - rootRect.top) + 'px';
+    // Client rects, both of them — the frame travels with the numbers, so the two cannot drift apart
+    // without the shared function saying so.
+    const at = toParentSpace(
+      cornerOf({ left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, frame: 'client' }, 'right-top'),
+      { x: rootRect.left, y: rootRect.top, frame: 'client' },
+    );
+    badge.style.left = at.x + 'px';
+    badge.style.top = at.y + 'px';
     root.appendChild(badge);
   }
   // Resolve an author to its display color: the caller-injected category color (author.kind → color)
@@ -581,7 +587,7 @@ export function attachPanel(core, options = {}) {
     const rootRect = root.getBoundingClientRect();
     // a visible fallback spot for an orphan with no live anchor point — top-left of the surface, so an
     // unresolvable anchor is isolated-but-VISIBLE, never silently hidden (REQ-004).
-    const orphanSpot = { right: rootRect.left + 8, top: rootRect.top + 8 };
+    const orphanSpot = { left: rootRect.left, top: rootRect.top + 8, right: rootRect.left + 8, bottom: rootRect.top + 8 };
     const byElement = new Map();   // elementId -> comments[]  (block)
     const byQuote = new Map();     // elementId\0exact\0start -> {anchor, comments[]}  (range)
     const regions = new Map();     // threadId|id -> {anchor, comments[]}
@@ -687,7 +693,13 @@ export function attachPanel(core, options = {}) {
       badge.textContent = '💬' + utteranceCount(group.comments);
       paintAnchor(badge, group.comments);
       badge.__tbComments = group.comments;   // for the right-click delete-anchor menu
-      Object.assign(badge.style, { left: (px.x + px.width) + 'px', top: (px.y + px.height) + 'px' });
+      // The same two steps as every other badge, with the difference stated rather than implied: a
+      // region's box is already in its surface's own space, and its badge hangs from the bottom-right.
+      const at = toParentSpace(
+        cornerOf({ left: px.x, top: px.y, right: px.x + px.width, bottom: px.y + px.height, frame: 'surface-content' }, 'right-bottom'),
+        { x: 0, y: 0, frame: 'surface-content' },
+      );
+      Object.assign(badge.style, { left: at.x + 'px', top: at.y + 'px' });
       // NOTE: opening the thread on a plain icon click is handled in endHandleDrag (a no-move pointerup),
       // not via onclick — a left-down on the badge starts a (possible) move drag, and renderMarks would
       // otherwise destroy this element before its click event fired (the "icon click does nothing" bug).
@@ -1550,7 +1562,16 @@ export function attachPanel(core, options = {}) {
     own(() => { try { consoleRo.disconnect(); } catch { /* ignore */ } });
   }
   if (vv) {
-    for (const [type, fn] of [['resize', queueRecalc], ['scroll', queueRecalc], ['resize', placeLane], ['scroll', placeLane]]) {
+    // The visual viewport is where a pinch shows up, and a pinch changes nothing about layout: the
+    // page's boxes are where they were, and the compositor scales the overlays along with the content
+    // they sit in, because they are absolutely positioned inside it. Recomputing anchors here was
+    // work with no output — 65 rebuilds in a measured gesture, all of them landing the badges back
+    // on the coordinates they already had.
+    //
+    // The bar is the exception, and the reason the wiring stays: it is position:fixed, so a pinch does
+    // NOT carry it, and a software keyboard shrinks the visual viewport underneath it. placeLane has
+    // to hear about both. Anchors do not.
+    for (const [type, fn] of [['resize', placeLane], ['scroll', placeLane]]) {
       vv.addEventListener(type, fn);
       own(() => vv.removeEventListener(type, fn));
     }
@@ -1635,8 +1656,14 @@ function el(doc, tag, cls) { const e = doc.createElement(tag); if (cls) e.classN
 function btn(doc, text, cls) { const b = el(doc, 'button', cls); b.textContent = text; return b; }
 /**
  * Give a host element a positioning context so an absolutely-placed overlay lands inside it. The
- * element belongs to the host, so the write is recorded and handed back: restored only if it is still
- * the value we wrote, because the host may have set its own since.
+ * element belongs to the host, so the write is recorded and handed back on teardown.
+ *
+ * What the restore actually guarantees: it puts back the inline value captured before the write, and
+ * only when the inline value is STILL `relative`. A different inline value is left alone. What it does
+ * NOT do is tell whose `relative` it is — a CSS declaration carries no writer — so a host that sets
+ * `position: relative` on this element while Tackback is mounted will find that value cleared on
+ * destroy. Guessing by value cannot fix that; not touching the host's style can, and that is the
+ * direction the fix will take.
  */
 function ensurePositioned(elx, own) {
   const pos = getComputedStyle(elx).position;

@@ -4,6 +4,55 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
 [Keep a Changelog](https://keepachangelog.com/), and the project uses [SemVer](https://semver.org/)
 (pre-1.0: the public **JavaScript** API may still change before 1.0).
 
+## [0.9.11] — 2026-08-16
+
+**Zoom was never part of how a badge worked out where to sit, and the answer to "which viewport?"
+differed in three places.** Now there is one calculation, and it holds while you pinch. Nothing moved:
+every badge lands exactly where it did before.
+
+### Fixed
+
+- **Badges stay where they belong while you pinch to zoom.** Every visual-viewport event — and a pinch
+  emits a stream of them — used to reach `recalculateAnchors()`, which removed every badge and mark on
+  the page and built them again. A pinch changes no layout: the boxes are where they were, and the
+  browser carries absolutely positioned overlays along with the content they sit in. Measured on a
+  phone, one gesture cost 65 rebuild cycles and moved the badge-to-anchor offset by zero pixels. The
+  work is gone; the position it produced is unchanged.
+
+  The document bar still listens, and that difference is the point: it is `position: fixed`, so a pinch
+  does not carry it, and a software keyboard shrinks the visual viewport underneath it. It needs
+  telling. Anchors do not.
+
+- **A badge that sits past the right edge no longer asks the page to redraw itself.** Overflowing is
+  allowed — an anchor near the edge of a narrow screen is a real place for a badge to be. What was not
+  allowed is what came next: the overflow changed the layer's box, the box woke the observer, and the
+  observer rebuilt the badge that caused it.
+
+### Changed
+
+- **Every badge's position now comes from one calculation.** A block or range badge was placed from the
+  difference of two client rects; a region badge from a normalized rect scaled against its surface.
+  Same property names, different frames of reference, and nothing in the code said which was which.
+  Both now go through the same two steps — which corner of the anchor the badge hangs from, and whose
+  coordinate space the answer is in — and a frame of reference travels with the numbers, so resolving a
+  point against an origin measured against something else raises instead of quietly landing 100px off.
+  **No badge moves**: the numbers are pinned by a characterization test taken from 0.9.10.
+
+- **`REQ-109` says what it always meant about region overlays.** The clause required every anchor visual
+  to be a child of the overlay root, which a region's box and badge have never been — they are children
+  of the surface they are bound to, because a surface may carry its own scale and coordinate system (a
+  PDF page) and the annotation has to follow it. The specification was the part that was wrong. It now
+  describes the three kinds separately, by which element owns the coordinate space, and a mark is
+  correctly no longer described as an overlay at all: it is a class on the host's own element, or a CSS
+  highlight, which is not a node.
+
+### Tests
+
+461, from 450. New: the placement characterization, the two judgment conditions REQ-109 actually
+states, and a properties ledger — `test/PROPERTIES.md` — that names, for each behaviour this library
+is expected to hold, the test that would notice if it stopped. One row in it is marked unheld, with
+the reason, rather than left to look covered.
+
 ## [0.9.10] — 2026-08-12
 
 **Two of these you can see; the rest are things that were already written down and not quite true.**
