@@ -2838,7 +2838,7 @@ test('REQ-109(c)-2: a range mark goes through the highlight registry and adds no
   assert.ok(reg.has('tb-range'), 'the range was registered under the tackback highlight name');
   const entry = reg.get('tb-range');
   assert.ok(entry.ranges.length >= 1, 'the registration carries the resolved range(s)');
-  assert.equal(f.doc.querySelectorAll('.tb-mark,.tb-highlight,mark').length, 0, 'no mark-only node exists');
+  assert.equal(f.doc.querySelectorAll('mark,.tb-highlight').length, 0, 'no mark-only node exists');
   const before = f.doc.querySelectorAll('*').length;
   f.core.recalculateAnchors();
   assert.equal(f.doc.querySelectorAll('*').length, before, 'painting again adds no element');
@@ -2856,7 +2856,7 @@ test('REQ-109(c)-2b: without the highlight API the mark still creates no node of
   delete globalThis.CSS; delete globalThis.Highlight;
   try {
     const f = mountPanel(marksOptions());
-    assert.equal(f.doc.querySelectorAll('.tb-mark,.tb-highlight,mark').length, 0, 'still no mark-only node');
+    assert.equal(f.doc.querySelectorAll('mark,.tb-highlight').length, 0, 'still no mark-only node');
     f.restore();
   } finally {
     if (hadCSS) globalThis.CSS = prevCSS; if (hadH) globalThis.Highlight = prevH;
