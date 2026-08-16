@@ -186,6 +186,8 @@ function instrumentEnv({ noRaf = false } = {}) {
       remove: (t, fn) => m.set(t, (m.get(t) || []).filter((f) => f !== fn)),
       count: () => [...m.values()].reduce((n, a) => n + a.length, 0),
       identity: () => [...m.entries()].flatMap(([t, a]) => a.map((f) => `${t}:${idOf(f)}`)).sort(),
+      // Counting listeners says they were attached; firing one says what happens when it goes off.
+      fire: (t, ev) => (m.get(t) || []).slice().forEach((fn) => fn(ev || { type: t })),
     };
   };
   const env = { frames: new Map(), timers: new Map(), observers: new Set(), ran: [], micro: [], handlerErrors: [] };
@@ -2717,8 +2719,8 @@ const PLACEMENT_BASELINE_0_9_10 = [
 
 const stampRect = (el, r) => { el.getBoundingClientRect = () => ({ ...r }); };
 
-function placementFixture() {
-  return mountPanel({
+function placementOptions() {
+  return ({
     comments: [
       { ...docComment(), id: 'c-block', anchor: { type: 'block', elementId: 'p1' } },
       { ...docComment(), id: 'c-range', anchor: { type: 'range', elementId: 'p2', selector: { exact: 'pinned phrase' } } },
@@ -2764,6 +2766,7 @@ function placementFixture() {
     },
   });
 }
+function placementFixture() { return mountPanel(placementOptions()); }
 
 /** What a badge IS, for the purpose of pinning where it sits: its place, its parent, its origin. */
 const placementOf = (f) => f.badges().map((b) => ({
@@ -2983,5 +2986,39 @@ test('P-11: every badge on the page sits exactly where the shared geometry puts 
     checked += 1;
   }
   assert.equal(checked, 4, 'a block, a live range, a drifted range and a region were all checked');
+  f.restore();
+});
+
+// ---- P-1 / P-2: a pinch is not a reason to rebuild anything ------------------------------------
+// Red before the visualViewport wiring changes: today every visual-viewport event reaches
+// recalculateAnchors, which tears every badge out of the document and makes new ones.
+const pinchFixture = () => mountPanel({ ...placementOptions(), instrument: true });
+
+test('P-1: a visual-viewport event leaves the badge DOM alone', () => {
+  const f = pinchFixture();
+  const before = f.badges();
+  const marks = before.map((b) => { b.__pinchWitness = {}; return b.__pinchWitness; });
+  const active = before[0];
+  active.setPointerCapture?.(7);
+  f.env.vv.fire('resize');
+  f.env.vv.fire('scroll');
+  f.env.flush();
+  const after = f.badges();
+  assert.equal(after.length, before.length, 'the same number of badges');
+  // Counting is not enough: a full teardown and rebuild produces the same count. The witness is a
+  // property put on the node itself, which only survives if the node itself survived.
+  assert.deepEqual(after.map((b) => b.__pinchWitness), marks, 'every badge is the node it was');
+  assert.ok(f.doc.captures?.has(7), 'a pointer capture in progress was not dropped');
+  f.restore();
+});
+
+test('P-2: a badge holds its place against its own anchor across a visual-viewport event', () => {
+  const f = pinchFixture();
+  const place = () => f.badges().map((b) => `${b.__tbComments?.[0]?.id}:${b.style.left},${b.style.top}`).sort();
+  const before = place();
+  f.env.vv.fire('resize');
+  f.env.vv.fire('scroll');
+  f.env.flush();
+  assert.deepEqual(place(), before, 'nothing moved, because nothing needed to');
   f.restore();
 });
