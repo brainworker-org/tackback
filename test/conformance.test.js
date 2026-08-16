@@ -56,7 +56,7 @@ const MATRIX = [
   ['REQ-106', 'TEST-106', 'L1', 'covered', 'engine.test mint id/createdAt + model.test empty body'],
   ['REQ-107', 'TEST-107', 'L2', 'covered', 'engine.test import round-trip + hardening.test atomic replace/conflict'],
   ['REQ-108', 'TEST-108', 'L2', 'covered', 'store.test beginLoad sync seed + engine ready chain'],
-  ['REQ-109', 'TEST-109', 'L3', 'covered', 'region.test resolveRegionRect recompute + panel ResizeObserver/visualViewport wiring (browser-verified, rAF-coalesced); visual frame budget = NFR-009 manual'],
+  ['REQ-109', 'TEST-109', 'L3', 'covered', 'region.test resolveRegionRect recompute; panel-dom REQ-109(b) every overlay node is out of normal flow by its own rule + REQ-109(c)-1/-2/-2b/-3 a mark adds no node and its rule is paint only; panel-dom P-1/P-2 a visual-viewport event neither rebuilds nor moves a badge. Wiring alone was the old evidence and could not see WHAT the listener did. Visual frame budget = NFR-009 manual'],
   ['REQ-110', 'TEST-110', 'L3', 'covered', 'engine.test destroy (core listeners); panel DOM-trace removal browser-verified (phase 5a)'],
   ['REQ-111', 'TEST-111', 'L1', 'covered', 'engine.test readOnly throws on every mutation'],
   // events (REQ-201..205)
