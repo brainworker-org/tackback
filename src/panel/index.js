@@ -1562,7 +1562,16 @@ export function attachPanel(core, options = {}) {
     own(() => { try { consoleRo.disconnect(); } catch { /* ignore */ } });
   }
   if (vv) {
-    for (const [type, fn] of [['resize', queueRecalc], ['scroll', queueRecalc], ['resize', placeLane], ['scroll', placeLane]]) {
+    // The visual viewport is where a pinch shows up, and a pinch changes nothing about layout: the
+    // page's boxes are where they were, and the compositor scales the overlays along with the content
+    // they sit in, because they are absolutely positioned inside it. Recomputing anchors here was
+    // work with no output — 65 rebuilds in a measured gesture, all of them landing the badges back
+    // on the coordinates they already had.
+    //
+    // The bar is the exception, and the reason the wiring stays: it is position:fixed, so a pinch does
+    // NOT carry it, and a software keyboard shrinks the visual viewport underneath it. placeLane has
+    // to hear about both. Anchors do not.
+    for (const [type, fn] of [['resize', placeLane], ['scroll', placeLane]]) {
       vv.addEventListener(type, fn);
       own(() => vv.removeEventListener(type, fn));
     }
