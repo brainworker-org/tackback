@@ -2683,3 +2683,104 @@ test('the bar re-places itself when the console changes size, not only when the 
     if (savedRO === undefined) delete globalThis.ResizeObserver; else globalThis.ResizeObserver = savedRO;
   }
 });
+
+// ---- G-A: badge placement, pinned to the number ------------------------------------------------
+// A characterization fixture. It does not say the coordinates are RIGHT; it says they are what they
+// are today, so a change that moves a badge cannot pass unnoticed. Every input is declared here — no
+// font, no DPR, no real layout — because the thing being pinned is the CALCULATION, and a fixture
+// that depended on a machine could not fail for the right reason.
+const PLACEMENT_GEOMETRY = {
+  root:    { left: 0,   top: 0,   right: 800, bottom: 2000, width: 800, height: 2000 },
+  p1:      { left: 40,  top: 120, right: 560, bottom: 168,  width: 520, height: 48  },
+  p2:      { left: 40,  top: 200, right: 560, bottom: 248,  width: 520, height: 48  },
+  surf:    { left: 40,  top: 300, right: 440, bottom: 600,  width: 400, height: 300 },
+  badge:   { left: 0,   top: 0,   right: 24,  bottom: 16,   width: 24,  height: 16  },
+  range:   { left: 120, top: 204, right: 268, bottom: 236,  width: 148, height: 32  },
+};
+const PLACEMENT_SURFACE_BOX = { clientWidth: 400, clientHeight: 300 };
+const PLACEMENT_REGION_RECT = { x: 0.15, y: 0.2, width: 0.4, height: 0.5 };
+
+// Taken from v0.9.10 on 2026-08-15 with the geometry above. Each row is one of the five coordinate
+// sources the placement code has today; the numbers below are what each of them produces:
+//   c-block   element rect      (index.js:628) -> right/top of p1        = 560/120
+//   c-range   live Range rect   (index.js:644) -> right/top of the range = 268/204
+//   c-drift   element rect      (index.js:650) -> the range no longer resolves, so p2's own box
+//   c-orphan  the orphan spot   (index.js:650) -> nothing left to point at
+//   c-region  normalized x size (index.js:690) -> (0.15+0.4)*400 / (0.2+0.5)*300, INSIDE the surface
+const PLACEMENT_BASELINE_0_9_10 = [
+  { anchor: 'block',  id: 'c-block',  parent: 'root', left: '560px', top: '120px', floating: false },
+  { anchor: 'range',  id: 'c-drift',  parent: 'root', left: '560px', top: '200px', floating: false },
+  { anchor: 'block',  id: 'c-orphan', parent: 'root', left: '8px',   top: '8px',   floating: false },
+  { anchor: 'range',  id: 'c-range',  parent: 'root', left: '268px', top: '204px', floating: false },
+  { anchor: 'region', id: 'c-region', parent: 'surf', left: '220px', top: '210px', floating: true  },
+];
+
+const stampRect = (el, r) => { el.getBoundingClientRect = () => ({ ...r }); };
+
+function placementFixture() {
+  return mountPanel({
+    comments: [
+      { ...docComment(), id: 'c-block', anchor: { type: 'block', elementId: 'p1' } },
+      { ...docComment(), id: 'c-range', anchor: { type: 'range', elementId: 'p2', selector: { exact: 'pinned phrase' } } },
+      { ...docComment(), id: 'c-region', anchor: { type: 'region', surfaceId: 's1', rect: { ...PLACEMENT_REGION_RECT } } },
+      // the two remaining coordinate sources: a range whose text has drifted (falls to the ELEMENT's
+      // rect) and an anchor whose element is gone entirely (falls to the fixed orphan spot)
+      { ...docComment(), id: 'c-drift', anchor: { type: 'range', elementId: 'p2', selector: { exact: 'a phrase that is not there' } } },
+      { ...docComment(), id: 'c-orphan', anchor: { type: 'block', elementId: 'no-such-element' } },
+    ],
+    setup: (doc, root) => {
+      // The range path walks text nodes and builds a live Range. The fixture has neither, so both are
+      // supplied here — declared inputs like every other number above. What is being pinned is the
+      // step FROM a range's rect TO a badge's left/top, which is exactly the step 0.9.11 rewrites.
+      doc.createTreeWalker = (from) => {
+        const texts = [];
+        (function walk(n) {
+          for (const c of n.children || []) {
+            if (c.nodeType === 3) texts.push(c); else walk(c);
+          }
+        })(from);
+        if (from.nodeType === 3) texts.push(from);
+        let i = -1;
+        return { nextNode: () => (++i < texts.length ? texts[i] : null) };
+      };
+      doc.createRange = () => ({
+        setStart() {}, setEnd() {},
+        getBoundingClientRect: () => ({ ...PLACEMENT_GEOMETRY.range }),
+      });
+      stampRect(root, PLACEMENT_GEOMETRY.root);
+      const p1 = doc.createElement('p'); p1.id = 'p1'; p1.textContent = 'a block anchor lives here';
+      const p2 = doc.createElement('p'); p2.id = 'p2';
+      // a REAL text child (with nodeValue), so the range path walks and resolves rather than falling
+      // back to the element — the fallback is a different coordinate source and would pin the wrong one
+      const t2 = doc.createTextNode('text with a pinned phrase inside it'); t2.nodeValue = t2.textContent;
+      p2.appendChild(t2);
+      const surf = doc.createElement('div'); surf.id = 'surf'; surf.setAttribute('data-tb-surface', 's1');
+      stampRect(p1, PLACEMENT_GEOMETRY.p1);
+      stampRect(p2, PLACEMENT_GEOMETRY.p2);
+      stampRect(surf, PLACEMENT_GEOMETRY.surf);
+      surf.clientWidth = PLACEMENT_SURFACE_BOX.clientWidth;
+      surf.clientHeight = PLACEMENT_SURFACE_BOX.clientHeight;
+      root.appendChild(p1); root.appendChild(p2); root.appendChild(surf);
+    },
+  });
+}
+
+/** What a badge IS, for the purpose of pinning where it sits: its place, its parent, its origin. */
+const placementOf = (f) => f.badges().map((b) => ({
+  anchor: b.__tbComments?.[0]?.anchor?.type ?? '(none)',
+  id: b.__tbComments?.[0]?.id ?? '(none)',
+  parent: b.parentNode === f.root ? 'root' : (b.parentNode?.id || b.parentNode?.className || '(?)'),
+  left: b.style.left ?? null,
+  top: b.style.top ?? null,
+  // the origin is carried by the class, not by the coordinate — so it belongs in the pin
+  floating: b.classList.contains('tb-floating'),
+})).sort((a, z) => String(a.id).localeCompare(String(z.id)));
+
+test('G-A: where every badge sits is pinned to the number (characterization, pre-0.9.11)', () => {
+  const f = placementFixture();
+  const actual = placementOf(f);
+  if (process.env.TB_PIN_PLACEMENT) { console.log(JSON.stringify(actual, null, 2)); }
+  assert.deepEqual(actual, PLACEMENT_BASELINE_0_9_10,
+    'a badge moved. If that was intended, the change is a VISIBLE one and needs saying so out loud.');
+  f.restore();
+});
