@@ -3022,3 +3022,54 @@ test('P-2: a badge holds its place against its own anchor across a visual-viewpo
   assert.deepEqual(place(), before, 'nothing moved, because nothing needed to');
   f.restore();
 });
+
+// ---- P-3 / P-9 / P-12: things this version must not have broken --------------------------------
+// Unlike the pair above, these should be green the moment they are written. A red one here is a
+// finding, not a step: it would mean the aggregation or the wiring change took something with it.
+
+test('P-3: change and recalculateAnchors still resolve anchors again', () => {
+  const f = pinchFixture();
+  const before = f.badges().length;
+  anchorArrives(f, { type: 'block', elementId: 'p2' }, 'a new anchor');
+  f.env.flush();
+  assert.equal(f.badges().length, before + 1, 'a comment arriving adds its badge');
+  const witness = f.badges().map((b) => { b.__reWitness = {}; return b.__reWitness; });
+  f.core.recalculateAnchors();
+  f.env.flush();
+  assert.notDeepEqual(f.badges().map((b) => b.__reWitness), witness,
+    'the escape hatch resolves again — it is not a repaint');
+  f.restore();
+});
+
+test('P-9: the comments a badge carries are the ones its thread has now', async () => {
+  // The right-click delete menu acts on badge.__tbComments. A stale one deletes somebody else's
+  // thread, which is the kind of wrong that looks like it worked.
+  const { threadKeyOf } = await import('../src/core/model.js');
+  const f = pinchFixture();
+  anchorArrives(f, { type: 'block', elementId: 'p1' }, 'a second voice on the same block');
+  f.env.flush();
+  for (const badge of f.badges()) {
+    const carried = badge.__tbComments || [];
+    assert.ok(carried.length > 0, 'a badge carries at least the comment it is for');
+    const key = threadKeyOf(carried[0]);
+    const live = f.core.listComments().filter((c) => threadKeyOf(c) === key);
+    assert.deepEqual(carried.map((c) => c.id).sort(), live.map((c) => c.id).sort(),
+      'the badge carries exactly the thread that is on the document now');
+  }
+  f.restore();
+});
+
+test('P-12: a corrupted coordinate is repaired by one call to the escape hatch', () => {
+  // Rebuilding everything used to be an accidental error-correcting mechanism: whatever went wrong
+  // with a coordinate, the next visual-viewport event threw the node away and computed it afresh.
+  // That accident is gone now, so the property it provided is stated on the entry point that keeps
+  // it — recalculateAnchors, which the spec already calls the explicit escape hatch.
+  const f = pinchFixture();
+  const good = f.badges().map((b) => `${b.__tbComments?.[0]?.id}:${b.style.left},${b.style.top}`).sort();
+  for (const badge of f.badges()) { badge.style.left = '-9999px'; badge.style.top = '4242px'; }
+  f.core.recalculateAnchors();
+  f.env.flush();
+  const after = f.badges().map((b) => `${b.__tbComments?.[0]?.id}:${b.style.left},${b.style.top}`).sort();
+  assert.deepEqual(after, good, 'one call puts every badge back where it belongs');
+  f.restore();
+});
