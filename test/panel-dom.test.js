@@ -2904,3 +2904,74 @@ test('REQ-109(b): every overlay node the panel renders is taken out of normal fl
   }
   f.restore();
 });
+
+// ---- P-6a / P-11: one geometry path, and every frame of reference named ------------------------
+// Written before the functions exist, so they fail first for the reason they are meant to catch.
+// Loaded here rather than at the top of the file on purpose: a missing export in a top-level import
+// takes the whole file down, and 450 other tests stop reporting for a reason that has nothing to do
+// with them.
+const geometry = async () => {
+  const dom = await import('../src/panel/dom.js');
+  assert.equal(typeof dom.cornerOf, 'function', 'dom.js exports cornerOf');
+  assert.equal(typeof dom.toParentSpace, 'function', 'dom.js exports toParentSpace');
+  return dom;
+};
+
+/** Recompute a badge's placement from its anchor, through the shared functions only. */
+function expectedPlacement({ cornerOf, toParentSpace }, anchor, hostBox, rootBox) {
+  if (anchor.type === 'region') {
+    const px = {
+      left: anchor.rect.x * PLACEMENT_SURFACE_BOX.clientWidth,
+      top: anchor.rect.y * PLACEMENT_SURFACE_BOX.clientHeight,
+      right: (anchor.rect.x + anchor.rect.width) * PLACEMENT_SURFACE_BOX.clientWidth,
+      bottom: (anchor.rect.y + anchor.rect.height) * PLACEMENT_SURFACE_BOX.clientHeight,
+      frame: 'surface-content',
+    };
+    return toParentSpace(cornerOf(px, 'right-bottom'), { x: 0, y: 0, frame: 'surface-content' });
+  }
+  const box = { ...hostBox, frame: 'client' };
+  return toParentSpace(cornerOf(box, 'right-top'), { x: rootBox.left, y: rootBox.top, frame: 'client' });
+}
+
+test('P-6a: block/range and region go through the same geometry, and it returns today\'s numbers', async () => {
+  const g = await geometry();
+  const root = { ...PLACEMENT_GEOMETRY.root };
+  const block = expectedPlacement(g, { type: 'block' }, PLACEMENT_GEOMETRY.p1, root);
+  assert.deepEqual({ x: block.x, y: block.y }, { x: 560, y: 120 }, 'the block badge lands where it does today');
+  const range = expectedPlacement(g, { type: 'range' }, PLACEMENT_GEOMETRY.range, root);
+  assert.deepEqual({ x: range.x, y: range.y }, { x: 268, y: 204 }, 'and so does the range badge');
+  const region = expectedPlacement(g, { type: 'region', rect: PLACEMENT_REGION_RECT }, null, root);
+  assert.deepEqual({ x: region.x, y: region.y }, { x: 220, y: 210 }, 'and the region badge, by the same route');
+});
+
+test('P-11: a frame of reference is part of the value, and mixing two of them is refused', async () => {
+  const { cornerOf, toParentSpace } = await geometry();
+  const client = cornerOf({ left: 0, top: 0, right: 10, bottom: 4, frame: 'client' }, 'right-top');
+  assert.equal(client.frame, 'client', 'the corner keeps the frame its box was in');
+  assert.throws(
+    () => toParentSpace(client, { x: 0, y: 0, frame: 'surface-content' }),
+    /frame/i,
+    'a point in one frame cannot be resolved against an origin in another',
+  );
+});
+
+test('P-11: every badge on the page sits exactly where the shared geometry puts it', async () => {
+  // Any second placement path would have to agree with this one to the pixel to pass.
+  const g = await geometry();
+  const f = placementFixture();
+  const root = { ...PLACEMENT_GEOMETRY.root };
+  const hostFor = { p1: PLACEMENT_GEOMETRY.p1, p2: PLACEMENT_GEOMETRY.range };
+  let checked = 0;
+  for (const badge of f.badges()) {
+    const anchor = badge.__tbComments?.[0]?.anchor;
+    if (!anchor || anchor.type === 'block' && anchor.elementId === 'no-such-element') continue;
+    const host = anchor.type === 'range' ? hostFor.p2 : hostFor[anchor.elementId];
+    if (!host && anchor.type !== 'region') continue;
+    const want = expectedPlacement(g, anchor, host, root);
+    assert.equal(badge.style.left, `${want.x}px`, `${anchor.type} badge left`);
+    assert.equal(badge.style.top, `${want.y}px`, `${anchor.type} badge top`);
+    checked += 1;
+  }
+  assert.ok(checked >= 3, 'at least one badge of each kind was checked');
+  f.restore();
+});
