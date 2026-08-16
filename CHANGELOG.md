@@ -4,7 +4,7 @@ All notable changes to `@brainworker/tackback` are documented here. The format f
 [Keep a Changelog](https://keepachangelog.com/), and the project uses [SemVer](https://semver.org/)
 (pre-1.0: the public **JavaScript** API may still change before 1.0).
 
-## [0.9.11] — unreleased
+## [0.9.11] — 2026-08-16
 
 **Zoom was never part of how a badge worked out where to sit, and the answer to "which viewport?"
 differed in three places.** Now there is one calculation, and it holds while you pinch. Nothing moved:
