@@ -2923,8 +2923,10 @@ function expectedPlacement({ cornerOf, toParentSpace }, anchor, hostBox, rootBox
     const px = {
       left: anchor.rect.x * PLACEMENT_SURFACE_BOX.clientWidth,
       top: anchor.rect.y * PLACEMENT_SURFACE_BOX.clientHeight,
-      right: (anchor.rect.x + anchor.rect.width) * PLACEMENT_SURFACE_BOX.clientWidth,
-      bottom: (anchor.rect.y + anchor.rect.height) * PLACEMENT_SURFACE_BOX.clientHeight,
+      // x + width, each scaled first — the same order regionToPx uses. Scaling the sum instead gives
+      // 220.00000000000003 for this rect, which is a different number to a deepEqual.
+      right: anchor.rect.x * PLACEMENT_SURFACE_BOX.clientWidth + anchor.rect.width * PLACEMENT_SURFACE_BOX.clientWidth,
+      bottom: anchor.rect.y * PLACEMENT_SURFACE_BOX.clientHeight + anchor.rect.height * PLACEMENT_SURFACE_BOX.clientHeight,
       frame: 'surface-content',
     };
     return toParentSpace(cornerOf(px, 'right-bottom'), { x: 0, y: 0, frame: 'surface-content' });
@@ -2957,21 +2959,29 @@ test('P-11: a frame of reference is part of the value, and mixing two of them is
 
 test('P-11: every badge on the page sits exactly where the shared geometry puts it', async () => {
   // Any second placement path would have to agree with this one to the pixel to pass.
+  //
+  // What varies between badges is the SOURCE box — a live Range's rect, the element's own rect when
+  // the range no longer resolves, a normalized region against its surface — not the geometry. So the
+  // source is named per anchor here, and the same two functions are applied to all of them.
   const g = await geometry();
   const f = placementFixture();
   const root = { ...PLACEMENT_GEOMETRY.root };
-  const hostFor = { p1: PLACEMENT_GEOMETRY.p1, p2: PLACEMENT_GEOMETRY.range };
+  const SOURCE = {
+    'c-block': { anchor: { type: 'block' }, box: PLACEMENT_GEOMETRY.p1 },
+    'c-range': { anchor: { type: 'range' }, box: PLACEMENT_GEOMETRY.range },
+    'c-drift': { anchor: { type: 'range' }, box: PLACEMENT_GEOMETRY.p2 },
+    'c-region': { anchor: { type: 'region', rect: PLACEMENT_REGION_RECT }, box: null },
+  };
   let checked = 0;
   for (const badge of f.badges()) {
-    const anchor = badge.__tbComments?.[0]?.anchor;
-    if (!anchor || anchor.type === 'block' && anchor.elementId === 'no-such-element') continue;
-    const host = anchor.type === 'range' ? hostFor.p2 : hostFor[anchor.elementId];
-    if (!host && anchor.type !== 'region') continue;
-    const want = expectedPlacement(g, anchor, host, root);
-    assert.equal(badge.style.left, `${want.x}px`, `${anchor.type} badge left`);
-    assert.equal(badge.style.top, `${want.y}px`, `${anchor.type} badge top`);
+    const id = badge.__tbComments?.[0]?.id;
+    const src = SOURCE[id];
+    if (!src) continue;                        // c-orphan sits on the fixed fallback spot, not on a box
+    const want = expectedPlacement(g, src.anchor, src.box, root);
+    assert.equal(badge.style.left, `${want.x}px`, `${id} left`);
+    assert.equal(badge.style.top, `${want.y}px`, `${id} top`);
     checked += 1;
   }
-  assert.ok(checked >= 3, 'at least one badge of each kind was checked');
+  assert.equal(checked, 4, 'a block, a live range, a drifted range and a region were all checked');
   f.restore();
 });
