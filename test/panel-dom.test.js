@@ -2784,3 +2784,123 @@ test('G-A: where every badge sits is pinned to the number (characterization, pre
     'a badge moved. If that was intended, the change is a VISIBLE one and needs saying so out loud.');
   f.restore();
 });
+
+// ---- REQ-109 judgment condition (c): a mark is paint, not an overlay -------------------------
+// Three checks, written before deciding whether they could be written. Two fixture facts came out of
+// writing them rather than out of predicting: the fake DOM's selector engine has no `#id` support, and
+// the panel resolves its window as `doc.defaultView || globalThis` (index.js:194) — with no defaultView
+// on the fixture, that is the real global, so the Highlight API has to be stubbed there.
+let markedEls = null;
+const marksOptions = () => ({
+  comments: [
+    { ...docComment(), id: 'm-block', anchor: { type: 'block', elementId: 'p1' } },
+    { ...docComment(), id: 'm-range', anchor: { type: 'range', elementId: 'p2', selector: { exact: 'pinned phrase' } } },
+  ],
+  setup: (doc, root) => {
+    doc.createTreeWalker = (from) => {
+      const texts = [];
+      (function walk(n) { for (const c of n.children || []) { if (c.nodeType === 3) texts.push(c); else walk(c); } })(from);
+      if (from.nodeType === 3) texts.push(from);
+      let i = -1;
+      return { nextNode: () => (++i < texts.length ? texts[i] : null) };
+    };
+    doc.createRange = () => ({ setStart() {}, setEnd() {}, getBoundingClientRect: () => ({ ...PLACEMENT_GEOMETRY.range }) });
+    stampRect(root, PLACEMENT_GEOMETRY.root);
+    const p1 = doc.createElement('p'); p1.id = 'p1'; p1.textContent = 'a block anchor lives here';
+    const p2 = doc.createElement('p'); p2.id = 'p2';
+    const t2 = doc.createTextNode('text with a pinned phrase inside it'); t2.nodeValue = t2.textContent;
+    p2.appendChild(t2);
+    stampRect(p1, PLACEMENT_GEOMETRY.p1);
+    stampRect(p2, PLACEMENT_GEOMETRY.p2);
+    root.appendChild(p1); root.appendChild(p2);
+    markedEls = { p1, p2 };
+  },
+});
+const marksFixture = () => mountPanel(marksOptions());
+
+test('REQ-109(c)-1: a block mark is a class on the host element, not an overlay node', () => {
+  const f = marksFixture();
+  const { p1 } = markedEls;
+  assert.ok(p1.classList.contains('tb-commentable'), 'the host element carries the mark');
+  assert.equal(p1.children.length, 0, 'the marked element gained no child of any kind');
+  f.restore();
+});
+
+test('REQ-109(c)-2: a range mark goes through the highlight registry and adds no node of its own', () => {
+  // The harness already stands in for the CSS Custom Highlight API (instrumentEnv, :193-195), so this
+  // is a contract check rather than a rendering one: WHICH path the mark takes, and what it leaves in
+  // the DOM. Whether the paint looks right is a real browser's business.
+  const f = mountPanel({ ...marksOptions(), instrument: true });
+  const reg = globalThis.CSS.highlights;
+  assert.ok(reg.has('tb-range'), 'the range was registered under the tackback highlight name');
+  const entry = reg.get('tb-range');
+  assert.ok(entry.ranges.length >= 1, 'the registration carries the resolved range(s)');
+  assert.equal(f.doc.querySelectorAll('.tb-mark,.tb-highlight,mark').length, 0, 'no mark-only node exists');
+  const before = f.doc.querySelectorAll('*').length;
+  f.core.recalculateAnchors();
+  assert.equal(f.doc.querySelectorAll('*').length, before, 'painting again adds no element');
+  f.panel.destroy();
+  assert.equal(reg.has('tb-range'), false, 'teardown takes the registration back out');
+  f.restore();
+});
+
+test('REQ-109(c)-2b: without the highlight API the mark still creates no node of its own', () => {
+  // paintHighlights declines when the API is absent and the caller degrades to a per-element badge.
+  // The degraded path must not start inserting mark nodes either — that is the half of the condition
+  // a supported-API test cannot see.
+  const hadCSS = 'CSS' in globalThis, hadH = 'Highlight' in globalThis;
+  const prevCSS = globalThis.CSS, prevH = globalThis.Highlight;
+  delete globalThis.CSS; delete globalThis.Highlight;
+  try {
+    const f = mountPanel(marksOptions());
+    assert.equal(f.doc.querySelectorAll('.tb-mark,.tb-highlight,mark').length, 0, 'still no mark-only node');
+    f.restore();
+  } finally {
+    if (hadCSS) globalThis.CSS = prevCSS; if (hadH) globalThis.Highlight = prevH;
+  }
+});
+
+test('REQ-109(c)-3: the mark rule can only paint — no box-model property is in it', () => {
+  // Written first as "compare the rect before and after adding the class", which passed and could not
+  // have failed: the fixture's getBoundingClientRect is a stub that never looks at a class, so a
+  // border or a padding added to the rule by mistake would have sailed through. What is checkable
+  // here is the mechanism — the declaration itself. A rule made only of paint properties cannot
+  // change a box, whoever is doing the layout. (Comparing real rects belongs in a browser.)
+  const f = marksFixture();
+  const css = panelCSS(f);
+  const rule = css.split('\n').find((l) => l.trim().startsWith('.tb-commentable {'));
+  assert.ok(rule, 'the mark rule is in the panel stylesheet');
+  const props = rule.slice(rule.indexOf('{') + 1, rule.lastIndexOf('}'))
+    .split(';').map((d) => d.split(':')[0].trim()).filter(Boolean);
+  assert.deepEqual(props.slice().sort(), ['background', 'outline', 'outline-offset'],
+    'the mark paints and does nothing else');
+  const BOX = /^(width|height|margin|padding|border|display|position|float|inset|top|left|right|bottom|box-sizing|transform)/;
+  assert.deepEqual(props.filter((x) => BOX.test(x)), [], 'no box-model property is in the mark rule');
+  f.restore();
+});
+
+test('REQ-109(b): every overlay node the panel renders is taken out of normal flow by its own rule', () => {
+  // "Out of normal flow" is a computed-style fact, and the fixture has no computed style. The
+  // mechanism behind it is checkable though: each overlay node carries a class whose rule declares
+  // position: absolute or fixed. Tying the RENDERED nodes to the rules — rather than checking the
+  // stylesheet alone — is what makes a newly added overlay class fail this instead of slipping past.
+  const f = placementFixture();
+  const css = panelCSS(f);
+  const positioned = new Set();
+  for (const line of css.split('\n')) {
+    const m = line.match(/^\s*([^{]+)\{([^}]*)\}/);
+    if (!m || !/position:\s*(absolute|fixed)/.test(m[2])) continue;
+    for (const sel of m[1].split(',')) {
+      const cls = sel.trim().match(/^\.([\w-]+)$/);
+      if (cls) positioned.add(cls[1]);
+    }
+  }
+  const overlays = f.doc.querySelectorAll('.tb-badge,.tb-region,.tb-pending,.tb-draw');
+  assert.ok(overlays.length >= 3, 'there are overlays to judge');
+  for (const node of overlays) {
+    const classes = [...node.classList];
+    assert.ok(classes.some((c) => positioned.has(c)),
+      `overlay .${classes.join('.')} has no rule taking it out of flow`);
+  }
+  f.restore();
+});
